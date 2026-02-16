@@ -35,7 +35,7 @@ def get_transcript(video_url: str) -> str:
     except Exception as e:
         return None, str(e)
 
-def analyze_style(transcript_text: str) -> str:
+def analyze_style(transcript_text: str, api_key: str = None) -> str:
     """Analyzes the transcript to extract a style guide."""
     if not transcript_text:
         return "No transcript available."
@@ -71,4 +71,4 @@ TONE: [Keywords]
 PACING: [Instructions]
 ---
 """
-    return generate_content(prompt, model_name="gemini-2.5-flash")
+    return generate_content(prompt, model_name="gemini-2.5-flash", api_key=api_key)

@@ -1212,6 +1212,167 @@ audio::-webkit-media-controls-panel {
 }
 
 
+/* ═══════════════════════════════════════════════════════════
+   AUTH UI (Login, API Key Modal, User Info)
+   ═══════════════════════════════════════════════════════════ */
+
+/* Login Screen */
+.login-screen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: var(--bg-color);
+}
+
+.login-card {
+    text-align: center;
+    padding: 3rem 2.5rem;
+    background: var(--card-bg);
+    border-radius: 16px;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+    max-width: 400px;
+    width: 90%;
+}
+
+.login-card h1 {
+    font-size: 2.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.login-card > p {
+    color: #888;
+    margin-bottom: 2rem;
+}
+
+.google-signin-btn {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 12px;
+    padding: 0.85rem 2rem !important;
+    background: #fff !important;
+    color: #333 !important;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.3s;
+    border: none;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    width: auto !important;
+}
+
+.google-signin-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    background: #f5f5f5 !important;
+}
+
+.login-hint {
+    font-size: 0.8rem;
+    color: #555;
+    margin-top: 1.5rem;
+}
+
+/* Modal Overlay */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    backdrop-filter: blur(4px);
+}
+
+.modal-card {
+    background: var(--card-bg);
+    border-radius: 16px;
+    padding: 2.5rem;
+    max-width: 460px;
+    width: 90%;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+}
+
+.modal-card h2 {
+    margin: 0 0 0.75rem;
+    font-size: 1.5rem;
+}
+
+.modal-card > p {
+    color: #aaa;
+    font-size: 0.9rem;
+    line-height: 1.6;
+    margin-bottom: 0.5rem;
+}
+
+.modal-hint {
+    margin-bottom: 1.5rem !important;
+}
+
+.modal-hint a {
+    color: var(--accent-color);
+    text-decoration: none;
+}
+
+.modal-hint a:hover {
+    text-decoration: underline;
+}
+
+.modal-card .style-input {
+    margin-bottom: 1rem;
+}
+
+.modal-card .error-message {
+    margin-bottom: 1rem;
+}
+
+/* Header User Info */
+.header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.header-row > div:first-child {
+    text-align: left;
+}
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+.user-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 2px solid #333;
+    object-fit: cover;
+}
+
+.user-name {
+    font-size: 0.85rem;
+    color: #aaa;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.signout-btn {
+    padding: 6px 12px !important;
+    font-size: 0.8rem !important;
+    min-width: auto !important;
+}
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
     .param-row {
@@ -1235,6 +1396,15 @@ audio::-webkit-media-controls-panel {
 
     h1 {
         font-size: 2.2rem;
+    }
+
+    .header-row {
+        flex-direction: column;
+        text-align: center;
+    }
+
+    .user-info {
+        justify-content: center;
     }
 
     .tts-controls {

@@ -71,7 +71,8 @@ def _parse_json_response(raw_response: str) -> dict:
 
 def generate_narration(topic: str, template_id: str, research_dossier: str,
                        duration_minutes: int = 10, audience: str = "General",
-                       tone: str = "", focus: str = "", style_guide: str = None) -> dict:
+                       tone: str = "", focus: str = "", style_guide: str = None,
+                       api_key: str = None) -> dict:
     """
     PHASE 1: Generate a flowing narration script using Gemini.
 
@@ -92,7 +93,7 @@ def generate_narration(topic: str, template_id: str, research_dossier: str,
         style_guide=style_guide,
     )
 
-    raw_response = generate_content(prompt, model_name="gemini-2.5-flash")
+    raw_response = generate_content(prompt, model_name="gemini-2.5-flash", api_key=api_key)
 
     if raw_response.startswith("Error:"):
         return {"error": raw_response}
@@ -112,7 +113,8 @@ def generate_narration(topic: str, template_id: str, research_dossier: str,
 
 
 def breakdown_narration(narration_json: dict, duration_minutes: int = 10,
-                        template_id: str = "educational_explainer") -> dict:
+                        template_id: str = "educational_explainer",
+                        api_key: str = None) -> dict:
     """
     PHASE 2: Break a flowing narration into timed scene rows.
 
@@ -128,7 +130,7 @@ def breakdown_narration(narration_json: dict, duration_minutes: int = 10,
         template_id=template_id,
     )
 
-    raw_response = generate_content(prompt, model_name="gemini-2.5-flash")
+    raw_response = generate_content(prompt, model_name="gemini-2.5-flash", api_key=api_key)
 
     if raw_response.startswith("Error:"):
         return {"error": raw_response}
@@ -160,7 +162,8 @@ def breakdown_narration(narration_json: dict, duration_minutes: int = 10,
 
 def generate_full_script(topic: str, template_id: str, research_dossier: str,
                          duration_minutes: int = 10, audience: str = "General",
-                         tone: str = "", focus: str = "", style_guide: str = None) -> dict:
+                         tone: str = "", focus: str = "", style_guide: str = None,
+                         api_key: str = None) -> dict:
     """
     Full two-phase pipeline: Narration → Scene Breakdown.
 
@@ -181,6 +184,7 @@ def generate_full_script(topic: str, template_id: str, research_dossier: str,
         tone=tone,
         focus=focus,
         style_guide=style_guide,
+        api_key=api_key,
     )
 
     if "error" in phase1:
@@ -207,6 +211,7 @@ def generate_full_script(topic: str, template_id: str, research_dossier: str,
         narration_json=narration_json,
         duration_minutes=duration_minutes,
         template_id=template_id,
+        api_key=api_key,
     )
 
     if "error" in phase2:
@@ -227,7 +232,8 @@ def generate_full_script(topic: str, template_id: str, research_dossier: str,
 
 def generate_production_table(scene_breakdown_json: dict,
                               style_config: dict = None,
-                              style_analysis: str = None) -> dict:
+                              style_analysis: str = None,
+                              api_key: str = None) -> dict:
     """
     PHASE 3: Generate production-ready prompts from a scene breakdown.
 
@@ -260,7 +266,7 @@ def generate_production_table(scene_breakdown_json: dict,
 
     # Small scripts: single call
     if total_scenes <= BATCH_SIZE + 2:
-        return _generate_single_batch(scene_breakdown_json, style_config, style_analysis=style_analysis)
+        return _generate_single_batch(scene_breakdown_json, style_config, style_analysis=style_analysis, api_key=api_key)
 
     # Large scripts: batch processing WITH PARALLELIZATION
     MAX_CONCURRENT_BATCHES = 3  # Process 3 batches at a time
@@ -297,6 +303,7 @@ def generate_production_table(scene_breakdown_json: dict,
 
         result = _generate_single_batch(batch_breakdown, style_config,
                                         style_analysis=style_analysis,
+                                        api_key=api_key,
                                         batch_label=f"batch {batch_idx}/{len(batches)}")
 
         if "error" in result:
@@ -380,6 +387,7 @@ def generate_production_table(scene_breakdown_json: dict,
 def _generate_single_batch(scene_breakdown_json: dict,
                            style_config: dict = None,
                            style_analysis: str = None,
+                           api_key: str = None,
                            batch_label: str = "") -> dict:
     """Generate production table for a single batch of scenes."""
     prompt = build_production_prompt(
@@ -391,7 +399,7 @@ def _generate_single_batch(scene_breakdown_json: dict,
     label = f" ({batch_label})" if batch_label else ""
     print(f"[Phase 3] Generating production table{label}...")
     # Use temperature=0.1 for maximum preservation of input narration
-    raw_response = generate_content(prompt, model_name="gemini-2.5-pro", temperature=0.1)
+    raw_response = generate_content(prompt, model_name="gemini-2.5-pro", temperature=0.1, api_key=api_key)
 
     if raw_response.startswith("Error:"):
         return {"error": raw_response}
@@ -444,7 +452,8 @@ def _generate_single_batch(scene_breakdown_json: dict,
 # ── Legacy alias for backward compatibility ──
 def generate_script(topic: str, template_id: str, research_dossier: str,
                     duration_minutes: int = 10, audience: str = "General",
-                    tone: str = "", focus: str = "", style_guide: str = None) -> dict:
+                    tone: str = "", focus: str = "", style_guide: str = None,
+                    api_key: str = None) -> dict:
     """Legacy wrapper — calls the full two-phase pipeline."""
     return generate_full_script(
         topic=topic,
@@ -455,6 +464,7 @@ def generate_script(topic: str, template_id: str, research_dossier: str,
         tone=tone,
         focus=focus,
         style_guide=style_guide,
+        api_key=api_key,
     )
 
 

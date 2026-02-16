@@ -1,8 +1,11 @@
 import os
 import sys
 import json
-from flask import Flask, render_template, request, jsonify, send_from_directory
+from functools import wraps
+from flask import Flask, render_template, request, jsonify, send_from_directory, g
 import traceback
+import firebase_admin
+from firebase_admin import credentials, auth, firestore
 
 # Ensure the execution directory is in the Python path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -19,7 +22,49 @@ GENERATED_DIR = os.path.join(PROJECT_DIR, "generated_images")
 AUDIO_DIR = os.path.join(PROJECT_DIR, "generated_audio")
 TMP_DIR = os.path.join(PROJECT_DIR, ".tmp")
 
+# ── Firebase Initialization ──
+SERVICE_ACCOUNT_PATH = os.path.join(PROJECT_DIR, "firebase-service-account.json")
+if os.path.exists(SERVICE_ACCOUNT_PATH):
+    cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
+    firebase_admin.initialize_app(cred)
+else:
+    # Fall back to default credentials (e.g., on Cloud Run with GOOGLE_APPLICATION_CREDENTIALS)
+    firebase_admin.initialize_app()
+
+db = firestore.client()
+
 app = Flask(__name__, static_url_path='', static_folder=UI_DIR, template_folder=UI_DIR)
+
+
+# ── Auth Decorator ──
+def require_auth(f):
+    """Verify Firebase ID token and load user's Gemini API key from Firestore."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({'error': 'Missing or invalid Authorization header'}), 401
+
+        id_token = auth_header.split('Bearer ')[1]
+        try:
+            decoded_token = auth.verify_id_token(id_token)
+            g.uid = decoded_token['uid']
+        except Exception as e:
+            return jsonify({'error': f'Invalid auth token: {str(e)}'}), 401
+
+        # Fetch user's Gemini API key from Firestore
+        user_doc = db.collection('users').document(g.uid).get()
+        if user_doc.exists:
+            g.api_key = user_doc.to_dict().get('gemini_api_key')
+        else:
+            g.api_key = None
+
+        # Fall back to server-side key if user hasn't set one
+        if not g.api_key:
+            g.api_key = os.getenv("GEMINI_API_KEY")
+
+        return f(*args, **kwargs)
+    return decorated
 
 
 @app.route('/')
@@ -28,10 +73,44 @@ def index():
 
 
 # ────────────────────────────────────────────────────────────────
+#  API KEY MANAGEMENT
+# ────────────────────────────────────────────────────────────────
+
+@app.route('/api/save-api-key', methods=['POST'])
+@require_auth
+def save_api_key():
+    """Save or update the user's Gemini API key in Firestore."""
+    try:
+        data = request.json
+        api_key = data.get('api_key', '').strip()
+
+        if not api_key:
+            return jsonify({'error': 'API key is required'}), 400
+
+        db.collection('users').document(g.uid).set(
+            {'gemini_api_key': api_key}, merge=True
+        )
+
+        return jsonify({'success': True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/check-api-key', methods=['GET'])
+@require_auth
+def check_api_key():
+    """Check if the authenticated user has a Gemini API key saved."""
+    has_key = bool(g.api_key)
+    return jsonify({'has_key': has_key})
+
+
+# ────────────────────────────────────────────────────────────────
 #  IMAGE GENERATION
 # ────────────────────────────────────────────────────────────────
 
 @app.route('/api/generate-image', methods=['POST'])
+@require_auth
 def generate_image_route():
     try:
         data = request.json
@@ -40,7 +119,7 @@ def generate_image_route():
             return jsonify({'error': 'Prompt is required'}), 400
 
         print(f"Generating image for prompt: {prompt}")
-        image_path = generate_image_content(prompt)
+        image_path = generate_image_content(prompt, api_key=g.api_key)
 
         if image_path.startswith("Error"):
             return jsonify({'error': image_path}), 500
@@ -62,6 +141,7 @@ def serve_generated_file(filename):
 # ────────────────────────────────────────────────────────────────
 
 @app.route('/api/generate-tts', methods=['POST'])
+@require_auth
 def generate_tts_route():
     try:
         data = request.json
@@ -73,7 +153,7 @@ def generate_tts_route():
             return jsonify({'error': 'Text is required'}), 400
 
         print(f"Generating TTS for text ({len(text)} chars), voice={voice}")
-        audio_path = generate_tts(text, voice_name=voice, style_instructions=style_instructions)
+        audio_path = generate_tts(text, voice_name=voice, style_instructions=style_instructions, api_key=g.api_key)
 
         if audio_path.startswith("Error"):
             return jsonify({'error': audio_path}), 500
@@ -95,6 +175,7 @@ def serve_audio_file(filename):
 # ────────────────────────────────────────────────────────────────
 
 @app.route('/api/analyze-style-images', methods=['POST'])
+@require_auth
 def analyze_style_images_route():
     """
     Analyze visual style from 1-4 uploaded images using Gemini Vision.
@@ -112,7 +193,7 @@ def analyze_style_images_route():
             return jsonify({'error': 'Maximum 4 images allowed'}), 400
 
         print(f"[Style Analysis] Analyzing {len(images)} images...")
-        style_analysis = analyze_style_from_images(images)
+        style_analysis = analyze_style_from_images(images, api_key=g.api_key)
 
         if style_analysis.startswith("Error"):
             return jsonify({'error': style_analysis}), 500
@@ -133,12 +214,14 @@ def analyze_style_images_route():
 # ────────────────────────────────────────────────────────────────
 
 @app.route('/api/templates', methods=['GET'])
+@require_auth
 def list_templates():
     """Return all available research/script templates."""
     return jsonify({'templates': get_all_templates_metadata()})
 
 
 @app.route('/api/research', methods=['POST'])
+@require_auth
 def run_research():
     """
     Conduct research using Gemini as the research engine.
@@ -214,7 +297,7 @@ Be as specific as possible — include names, dates, amounts, percentages. No va
 Return ONLY the JSON."""
 
         print(f"[Research] Sending research prompt to Gemini...")
-        raw = generate_content(research_prompt, model_name=model_name, use_search=use_search)
+        raw = generate_content(research_prompt, model_name=model_name, use_search=use_search, api_key=g.api_key)
 
         if raw.startswith("Error:"):
             return jsonify({'error': raw}), 500
@@ -267,6 +350,7 @@ Return ONLY the JSON."""
 
 
 @app.route('/api/generate-script', methods=['POST'])
+@require_auth
 def generate_script_route():
     """
     Generate a production-ready script from research results.
@@ -300,7 +384,7 @@ def generate_script_route():
                 return jsonify({'error': f"Failed to fetch YouTube transcript: {error}"}), 400
             
             print(f"[Script] Transcript fetched ({len(transcript)} chars). Analyzing style...")
-            style_guide = analyze_style(transcript)
+            style_guide = analyze_style(transcript, api_key=g.api_key)
             print(f"[Script] Style analysis complete.")
 
         print(f"[Script] Starting 2-phase pipeline for '{topic}' ({template_id}, {duration}min)")
@@ -314,6 +398,7 @@ def generate_script_route():
             tone=tone,
             focus=focus,
             style_guide=style_guide,
+            api_key=g.api_key,
         )
 
         if "error" in result:
@@ -335,6 +420,7 @@ def generate_script_route():
 
 
 @app.route('/api/breakdown-script', methods=['POST'])
+@require_auth
 def breakdown_script_route():
     """
     PHASE 2 (Manual): Break down raw text into a timed scene table.
@@ -381,6 +467,7 @@ def breakdown_script_route():
         phase2 = breakdown_narration(
             narration_json=narration_json,
             duration_minutes=duration,
+            api_key=g.api_key,
         )
 
         if "error" in phase2:
@@ -403,6 +490,7 @@ def breakdown_script_route():
 
 
 @app.route('/api/generate-production-table', methods=['POST'])
+@require_auth
 def generate_production_table_route():
     """
     PHASE 3: Generate production-ready prompts from a scene breakdown.
@@ -447,6 +535,7 @@ def generate_production_table_route():
             scene_breakdown_json=scene_breakdown,
             style_config=style_config if style_config else None,
             style_analysis=style_analysis,
+            api_key=g.api_key,
         )
 
         if "error" in result:

@@ -2,3 +2,5 @@ flask
 google-genai
 python-dotenv
 youtube-transcript-api
+gunicorn
+firebase-admin

@@ -1,0 +1,28 @@
+.gcloudignore
+.git
+.gitignore
+.docker
+**/.docker
+.venv
+__pycache__
+*.pyc
+# Secrets
+.env
+credentials.json
+token.json
+firebase-service-account.json
+# Editor/Agent configs
+.agent
+IDE_*.md
+SKILL_*.md
+AGENTS.md
+GEMINI.md
+.claude
+.DS_Store
+# Project specific exclusions
+.tmp
+generated_images
+generated_audio
+n8n-mcp-server
+directives
+*.log

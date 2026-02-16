@@ -10,17 +10,17 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 
-def get_client():
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY not found in environment variables.")
-    return genai.Client(api_key=api_key)
+def get_client(api_key=None):
+    key = api_key or os.getenv("GEMINI_API_KEY")
+    if not key:
+        raise ValueError("GEMINI_API_KEY not found. Please provide an API key.")
+    return genai.Client(api_key=key)
 
 
-def generate_content(prompt, model_name="gemini-2.0-flash", use_search=False, temperature=None):
+def generate_content(prompt, model_name="gemini-2.0-flash", use_search=False, temperature=None, api_key=None):
     """Generate text content using Gemini, optionally with Google Search."""
     try:
-        client = get_client()
+        client = get_client(api_key)
 
         # Configure tools if search is requested
         config = None
@@ -41,14 +41,14 @@ def generate_content(prompt, model_name="gemini-2.0-flash", use_search=False, te
         return f"Error: {str(e)}"
 
 
-def generate_image_content(prompt):
+def generate_image_content(prompt, api_key=None):
     """
     Generate an image using Gemini's native image generation.
-    Uses gemini-2.0-flash-exp-image-generation which supports people, 
+    Uses gemini-2.0-flash-exp-image-generation which supports people,
     unlike Imagen which blocks real person prompts.
     Falls back to imagen-4.0-generate-001 if the first model fails.
     """
-    client = get_client()
+    client = get_client(api_key)
     os.makedirs(os.path.join(os.path.dirname(__file__), '..', 'generated_images'), exist_ok=True)
     timestamp = int(time.time())
 
@@ -113,19 +113,20 @@ def generate_image_content(prompt):
         return f"Error: {str(e)}"
 
 
-def analyze_style_from_images(image_data_list):
+def analyze_style_from_images(image_data_list, api_key=None):
     """
     Analyze visual style from 1-4 base64-encoded images using Gemini Vision.
     Returns a comprehensive style description string.
 
     Args:
         image_data_list: List of base64 data URIs (e.g., "data:image/jpeg;base64,/9j/4AAQ...")
+        api_key: Optional Gemini API key (falls back to env var)
 
     Returns:
         String describing the extracted visual style, or error string starting with "Error:"
     """
     try:
-        client = get_client()
+        client = get_client(api_key)
 
         # Build multimodal prompt with images + text
         parts = []
@@ -170,14 +171,14 @@ def analyze_style_from_images(image_data_list):
         return f"Error: {str(e)}"
 
 
-def generate_tts(text, voice_name="Kore", style_instructions=""):
+def generate_tts(text, voice_name="Kore", style_instructions="", api_key=None):
     """
     Generate speech audio from text using Gemini TTS.
     Returns the path to the saved WAV file, or an error string.
     """
     import wave
 
-    client = get_client()
+    client = get_client(api_key)
     os.makedirs(os.path.join(os.path.dirname(__file__), '..', 'generated_audio'), exist_ok=True)
     timestamp = int(time.time())
 

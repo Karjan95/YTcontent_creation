@@ -1,0 +1,29 @@
+# Secrets — never bake into Docker image
+.env
+firebase-service-account.json
+credentials.json
+token.json
+
+# System & dev files
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+.git/
+.github/
+.claude/
+.agent/
+.tmp/
+
+# Generated content (not needed in image)
+generated_images/
+generated_audio/
+n8n-mcp-server/
+directives/
+
+# IDE & tool configs
+IDE_*.md
+SKILL_*.md
+AGENTS.md
+GEMINI.md
+*.log
