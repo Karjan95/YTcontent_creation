@@ -39,9 +39,12 @@ def test_search_generation():
         config.tools = [types.Tool(google_search=types.GoogleSearch())]
         
         print("Calling generate_content with search...")
+        # Simulate the actual prompt structure somewhat
+        long_prompt = "Research the topic: influencer marketing in 2026.\n" * 10 
+        
         response = client.models.generate_content(
-            model="gemini-2.0-flash", # Using flash for speed, but behaves same for tools usually
-            contents="What is the latest news about Gemini AI?",
+            model="gemini-2.5-pro", 
+            contents=long_prompt,
             config=config
         )
         print("Success!")
