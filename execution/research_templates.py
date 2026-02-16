@@ -12,6 +12,100 @@ import json
 TEMPLATES = {
 
     # ─────────────────────────────────────────────────────────────
+    # 0. GENERAL DEEP DIVE (New Default for Deep Research)
+    # ─────────────────────────────────────────────────────────────
+    "general_deep_dive": {
+        "metadata": {
+            "name": "General Deep Dive",
+            "icon": "🌐",
+            "description": "Comprehensive, fact-based research on any topic. Neutral, detailed, and exhaustive.",
+            "best_for": "Deep research on any subject without a specific angle",
+            "example_topics": [
+                "The history of coffee",
+                "SpaceX Starship development",
+                "Causes of the French Revolution"
+            ]
+        },
+        "research_config": {
+            "mode": "deep",
+            "search_layers": [
+                {"name": "Overview & History", "query_template": "{topic} history background overview origin timeline key facts"},
+                {"name": "How It Works / Details", "query_template": "{topic} detailed explanation mechanism process specifics technical details"},
+                {"name": "Impact & Significance", "query_template": "{topic} impact importance significance why it matters statistics data"},
+                {"name": "Key Perspectives", "query_template": "{topic} expert opinions different viewpoints controversy debate analysis"},
+                {"name": "Future Outlook", "query_template": "{topic} future trends predictions next steps upcoming developments"}
+            ],
+            "min_sources": 12,
+            "source_types": {
+                "encyclopedic": 2,
+                "news_reports": 4,
+                "expert_analysis": 3,
+                "official_documents": 3
+            },
+            "analysis_questions": [
+                "What is the comprehensive definition and history of this topic?",
+                "Who are the key figures, organizations, or entities involved?",
+                "What are the most important facts, dates, and statistics?",
+                "How does this work, or what is the detailed mechanism/process?",
+                "What is the global or local impact of this topic?",
+                "What are the main arguments or perspectives surrounding this?"
+            ]
+        },
+        "script_config": {
+            "system_prompt": (
+                "You are a skilled documentary writer and researcher. "
+                "Create a comprehensive, balanced, and engaging script about this topic.\n\n"
+                "CRITICAL RULES:\n"
+                "- Focus on accuracy, clarity, and depth\n"
+                "- Quote specific facts and sources\n"
+                "- Maintain a neutral but engaging tone\n"
+                "- Each row = 3-5 sec of screen time\n"
+            ),
+            "story_structure": {
+                "acts": [
+                    {
+                        "name": "INTRODUCTION",
+                        "percentage": 15,
+                        "beats": ["The Hook", "Topic Definition", "Significance Statement", "Roadmap of the Video"]
+                    },
+                    {
+                        "name": "BACKGROUND & CONTEXT",
+                        "percentage": 25,
+                        "beats": ["Origins/History", "Key Context", "The 'Before' State", "Turning Point"]
+                    },
+                    {
+                        "name": "CORE ANALYSIS",
+                        "percentage": 40,
+                        "beats": [
+                            "Key Mechanism/Event 1", "Detailed Explanation",
+                            "Key Mechanism/Event 2", "Evidence/Data Point",
+                            "Expert Perspective", "Counter-Perspective or Complication"
+                        ]
+                    },
+                    {
+                        "name": "CONCLUSION & FUTURE",
+                        "percentage": 20,
+                        "beats": ["Summary of Main Points", "Current Status", "Future Outlook", "Final Thought/Question"]
+                    }
+                ],
+                "hook_types": ["Did You Know?", "Direct Question", "Bold Statement", "Story Anecdote", "Statistic"],
+                "emotional_beats": {
+                    "curiosity": 3,
+                    "clarity": 3,
+                    "awe": 1,
+                    "reflection": 1
+                }
+            },
+            "pacing_guide": {
+                5: 70,
+                10: 140,
+                15: 210,
+                20: 280
+            }
+        }
+    },
+
+    # ─────────────────────────────────────────────────────────────
     # 1. INVESTIGATIVE EXPOSÉ
     # ─────────────────────────────────────────────────────────────
     "investigative_expose": {
