@@ -1,0 +1,27 @@
+# System & Environment
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+.env
+credentials.json
+token.json
+
+# Tool & Agent Configs
+.agent/
+IDE_*.md
+SKILL_*.md
+AGENTS.md
+GEMINI.md
+.claude/
+
+# Project Specific
+.tmp/
+generated_images/
+generated_audio/
+n8n-mcp-server/
+directives/
+
+# Logs
+*.log
+ui/## Multi-speaker TTS

@@ -1,0 +1,1444 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Studio</title>
+    <link rel="stylesheet" href="/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Gemini <span class="accent">Studio</span></h1>
+            <p>Create images, voiceovers & scripts with Google's AI</p>
+        </header>
+
+        <!-- Tab Bar -->
+        <nav class="tab-bar">
+            <button class="tab active" data-tab="image" onclick="switchTab('image')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <path d="m21 15-5-5L5 21" />
+                </svg>
+                Image
+            </button>
+            <button class="tab" data-tab="voiceover" onclick="switchTab('voiceover')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <line x1="12" x2="12" y1="19" y2="22" />
+                </svg>
+                Voiceover
+            </button>
+            <button class="tab" data-tab="research" onclick="switchTab('research')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+                    <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+                </svg>
+                Research & Script
+            </button>
+        </nav>
+
+        <!-- ============ IMAGE TAB ============ -->
+        <main id="tab-image" class="tab-content active">
+            <div class="input-group">
+                <textarea id="promptInput"
+                    placeholder="Describe the image you want to create... e.g., A cyberpunk city in neon rain"></textarea>
+                <div class="controls">
+                    <button id="generateBtn" onclick="generateImage()">
+                        <span id="btnText">Generate</span>
+                        <div class="spinner" id="loadingSpinner"></div>
+                    </button>
+                </div>
+            </div>
+
+            <div class="result-area" id="resultArea">
+                <div class="placeholder-text" id="placeholderApp">
+                    Your creation will appear here
+                </div>
+                <img id="generatedImage" src="" alt="Generated Image" style="display: none;">
+            </div>
+
+            <div id="errorMessage" class="error-message" style="display: none;"></div>
+        </main>
+
+        <!-- ============ VOICEOVER TAB ============ -->
+        <main id="tab-voiceover" class="tab-content">
+            <div class="input-group">
+                <label class="input-label">Style instructions</label>
+                <input type="text" id="styleInput" class="style-input"
+                    placeholder="Read aloud in a warm and friendly tone">
+
+                <label class="input-label">Text</label>
+                <textarea id="ttsTextInput" placeholder="Start writing or paste text here to generate speech..."
+                    rows="8"></textarea>
+
+                <div class="controls tts-controls">
+                    <div class="voice-selector">
+                        <label class="input-label" for="voiceSelect">Voice</label>
+                        <select id="voiceSelect">
+                            <option value="Zephyr">Zephyr — Bright, Higher pitch</option>
+                            <option value="Puck">Puck — Upbeat, Middle pitch</option>
+                            <option value="Charon">Charon — Informative, Lower pitch</option>
+                            <option value="Kore" selected>Kore — Firm, Middle pitch</option>
+                            <option value="Fenrir">Fenrir — Excitable, Lower middle</option>
+                            <option value="Aoede">Aoede — Breezy, Higher pitch</option>
+                            <option value="Leda">Leda — Youthful, Higher pitch</option>
+                            <option value="Orus">Orus — Firm, Lower pitch</option>
+                            <option value="Perseus">Perseus — Casual, Lower pitch</option>
+                            <option value="Schedar">Schedar — Even keeled, Lower pitch</option>
+                            <option value="Achernar">Achernar — Soft, Higher pitch</option>
+                            <option value="Gacrux">Gacrux — Mature, Lower pitch</option>
+                            <option value="Pulcherrima">Pulcherrima — Forward, Higher pitch</option>
+                            <option value="Vindemiatrix">Vindemiatrix — Gentle, Lower pitch</option>
+                            <option value="Sadachbia">Sadachbia — Lively, Higher pitch</option>
+                            <option value="Sadaltager">Sadaltager — Knowledgeable, Lower pitch</option>
+                            <option value="Sulafat">Sulafat — Warm, Middle pitch</option>
+                            <option value="Laomedeia">Laomedeia — Upbeat, Higher pitch</option>
+                            <option value="Callirrhoe">Callirrhoe — Easy-going, Middle pitch</option>
+                            <option value="Autonoe">Autonoe — Bright, Higher pitch</option>
+                            <option value="Enceladus">Enceladus — Breathy, Middle pitch</option>
+                            <option value="Iapetus">Iapetus — Clear, Middle pitch</option>
+                            <option value="Umbriel">Umbriel — Easy-going, Middle pitch</option>
+                            <option value="Algieba">Algieba — Smooth, Lower pitch</option>
+                            <option value="Despina">Despina — Smooth, Higher pitch</option>
+                            <option value="Erinome">Erinome — Clear, Higher pitch</option>
+                            <option value="Algenib">Algenib — Gravelly, Lower pitch</option>
+                            <option value="Rasalgethi">Rasalgethi — Informative, Middle pitch</option>
+                            <option value="Hyperion">Hyperion — Deliberate, Lower pitch</option>
+                            <option value="Mimas">Mimas — Flat, Lower pitch</option>
+                        </select>
+                    </div>
+                    <button id="ttsGenerateBtn" onclick="generateTTS()">
+                        <span id="ttsBtnText">Generate</span>
+                        <div class="spinner" id="ttsLoadingSpinner"></div>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Audio Result -->
+            <div class="result-area audio-result-area" id="ttsResultArea">
+                <div class="placeholder-text" id="ttsPlaceholder">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#444" stroke-width="1.5">
+                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                        <line x1="12" x2="12" y1="19" y2="22" />
+                    </svg>
+                    <span>Your voiceover will appear here</span>
+                </div>
+                <div id="audioPlayerWrap" class="audio-player-wrap" style="display: none;">
+                    <audio id="audioPlayer" controls></audio>
+                    <a id="downloadBtn" class="download-btn" download="voiceover.wav">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" x2="12" y1="15" y2="3" />
+                        </svg>
+                        Download WAV
+                    </a>
+                </div>
+            </div>
+
+            <div id="ttsErrorMessage" class="error-message" style="display: none;"></div>
+        </main>
+
+        <!-- ============ RESEARCH & SCRIPT TAB ============ -->
+        <main id="tab-research" class="tab-content">
+
+            <!-- ═══════════════════════════════════
+                 PHASE 1: RESEARCH
+                 ═══════════════════════════════════ -->
+            <div class="phase-card" id="phase1Card">
+                <div class="phase-header">
+                    <div class="phase-number">1</div>
+                    <div class="phase-title-group">
+                        <h3 class="phase-title">📚 Research</h3>
+                        <p class="phase-subtitle">Gather facts, sources, and context on any topic</p>
+                    </div>
+                    <div class="phase-status" id="phase1Status">Not started</div>
+                </div>
+
+                <div class="phase-body" id="phase1Body">
+                    <!-- Template Selection -->
+                    <div id="templateSection">
+                        <label class="input-label">Choose a Template</label>
+                        <div class="template-grid" id="templateGrid">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Research Parameters (shown after template selection) -->
+                    <div id="researchParams" style="display: none;">
+                        <div class="selected-template-badge" id="selectedBadge"></div>
+
+                        <label class="input-label">Topic / Idea</label>
+                        <textarea id="researchTopic" rows="3"
+                            placeholder="e.g., How the fast fashion industry exploits workers in developing countries"></textarea>
+
+                        <div class="param-row">
+                            <div class="param-field">
+                                <label class="input-label" for="researchModelSelect">Research Depth</label>
+                                <select id="researchModelSelect">
+                                    <option value="fast">⚡ Fast (Gemini Flash)</option>
+                                    <option value="deep" selected>🧠 Deep (Gemini Pro + Search)</option>
+                                </select>
+                            </div>
+                            <div class="param-field">
+                                <label class="input-label" for="durationSelect">Video Length</label>
+                                <select id="durationSelect">
+                                    <option value="5">5 minutes</option>
+                                    <option value="10" selected>10 minutes</option>
+                                    <option value="15">15 minutes</option>
+                                    <option value="20">20 minutes</option>
+                                </select>
+                            </div>
+                            <div class="param-field">
+                                <label class="input-label" for="audienceSelect">Audience</label>
+                                <select id="audienceSelect">
+                                    <option value="General" selected>General</option>
+                                    <option value="Young Adults (18-25)">Young Adults (18-25)</option>
+                                    <option value="Professionals">Professionals</option>
+                                    <option value="Expert">Expert</option>
+                                </select>
+                            </div>
+                            <div class="param-field">
+                                <label class="input-label" for="toneSelect">Tone</label>
+                                <select id="toneSelect">
+                                    <option value="">Auto (from template)</option>
+                                    <option value="Investigative">Investigative</option>
+                                    <option value="Conversational">Conversational</option>
+                                    <option value="Confrontational">Confrontational</option>
+                                    <option value="Neutral">Neutral</option>
+                                    <option value="Educational">Educational</option>
+                                    <option value="Entertaining">Entertaining</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <label class="input-label">Focus angle <span style="color:#555">(optional)</span></label>
+                        <input type="text" id="focusInput" class="style-input"
+                            placeholder="e.g., Focus on the environmental impact specifically">
+
+                        <div class="controls">
+                            <button class="btn-secondary" onclick="resetTemplate()">← Back</button>
+                            <button id="researchBtn" onclick="startResearch()">
+                                <span id="researchBtnText">🔍 Start Research</span>
+                                <div class="spinner" id="researchSpinner"></div>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Research Results (shown after research completes) -->
+                    <div id="researchResults" style="display: none;">
+                        <div class="section-header" onclick="toggleCollapse('researchBody')">
+                            <label class="input-label">📄 Research Dossier</label>
+                            <span class="collapse-icon" id="researchBody-icon">▼</span>
+                        </div>
+                        <div id="researchBody" class="collapsible">
+                            <div class="research-summary" id="researchSummary"></div>
+                            <div class="key-facts" id="keyFacts"></div>
+                            <div class="sources-list" id="sourcesList"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="phase1Error" class="error-message" style="display: none;"></div>
+            </div>
+
+            <!-- ═══════════════════════════════════
+                 PHASE 2: SCRIPT WRITING
+                 ═══════════════════════════════════ -->
+            <div class="phase-card" id="phase2Card">
+                <div class="phase-header">
+                    <div class="phase-number">2</div>
+                    <div class="phase-title-group">
+                        <h3 class="phase-title">✍️ Script Writing</h3>
+                        <p class="phase-subtitle">Generate a scene-by-scene script with narration and visuals</p>
+                    </div>
+                    <div class="phase-status" id="phase2Status">Waiting for input</div>
+                </div>
+
+                <div class="phase-body" id="phase2Body">
+                    <!-- Input Mode Toggle -->
+                    <div class="input-mode-toggle">
+                        <button class="mode-btn active" id="scriptModeAuto" onclick="setScriptInputMode('auto')">
+                            🔗 Use Research from Phase 1
+                        </button>
+                        <button class="mode-btn" id="scriptModeManual" onclick="setScriptInputMode('manual')">
+                            📋 Paste Your Own Script
+                        </button>
+                    </div>
+
+                    <!-- Auto mode: uses research dossier -->
+                    <div id="scriptAutoInput">
+                        <div class="source-badge" id="scriptSourceBadge">
+                            <span class="source-dot idle"></span>
+                            No research loaded yet — complete Phase 1 or switch to manual mode
+                        </div>
+
+                        <!-- Script Style Selection -->
+                        <div style="margin-top: 12px;">
+                            <label class="input-label">Script Style</label>
+                            <div class="style-toggle">
+                                <label>
+                                    <input type="radio" name="styleMode" value="template" checked
+                                        onclick="toggleStyleInput()">
+                                    <span>Use Template Default</span>
+                                </label>
+                                <label>
+                                    <input type="radio" name="styleMode" value="youtube" onclick="toggleStyleInput()">
+                                    <span>Mimic YouTube Video</span>
+                                </label>
+                            </div>
+                            <div id="youtubeStyleInput" style="display: none; margin-top: 10px;">
+                                <input type="text" id="styleUrl" class="style-input"
+                                    placeholder="Paste YouTube URL to copy style (e.g., https://youtube.com/watch?v=...)">
+                                <small style="color: #888; display: block; margin-top: 5px;">
+                                    We'll analyze this video's pacing, tone, and structure to write YOUR script.
+                                </small>
+                            </div>
+                        </div>
+
+                        <div class="controls" style="margin-top: 12px;">
+                            <button id="scriptBtn" onclick="generateScriptFromResearch()">
+                                <span id="scriptBtnText">✍️ Generate Script</span>
+                                <div class="spinner" id="scriptSpinner"></div>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Manual mode: paste plain text or JSON -->
+                    <div id="scriptManualInput" style="display: none;">
+                        <label class="input-label">Paste Your Script</label>
+                        <p class="paste-hint">
+                            ✅ <strong>Paste your plain text script</strong> — the system will automatically break it down into scenes<br>
+                            <small style="color: #666;">Or paste structured JSON: <code>{ "script": [ { "scene": 1, ... } ] }</code></small>
+                        </p>
+                        <textarea id="scriptPasteArea" rows="8" class="paste-area"
+                            placeholder="Paste your script here as plain text...
+
+The system will automatically:
+• Break it down into timed scenes
+• Extract visual descriptions
+• Prepare it for production (Phase 3)
+
+No formatting needed — just paste your narration!"
+                        ></textarea>
+                        <div class="controls" style="margin-top: 12px;">
+                            <button onclick="importScript()">
+                                <span>📋 Import & Breakdown Script</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Script Results -->
+                    <div id="scriptResults" style="display: none;">
+                        <div class="script-header">
+                            <h3 id="scriptTitle" class="script-title"></h3>
+                            <div class="script-meta" id="scriptMeta"></div>
+                        </div>
+                        <div class="script-table-wrap">
+                            <table class="script-table" id="scriptTable">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Time</th>
+                                        <th>Act / Beat</th>
+                                        <th>Narration</th>
+                                        <th>Visual</th>
+                                        <th>Emotion</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="scriptTableBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="controls script-actions">
+                            <button class="btn-secondary" onclick="copyScript()">📋 Copy Script</button>
+                            <button class="btn-secondary" onclick="downloadScript()">💾 Download JSON</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="phase2Error" class="error-message" style="display: none;"></div>
+            </div>
+
+            <!-- ═══════════════════════════════════
+                 PHASE 3: PRODUCTION TABLE
+                 ═══════════════════════════════════ -->
+            <div class="phase-card" id="phase3Card">
+                <div class="phase-header">
+                    <div class="phase-number">3</div>
+                    <div class="phase-title-group">
+                        <h3 class="phase-title">🎬 Production Table</h3>
+                        <p class="phase-subtitle">Generate AI-ready video prompts for every shot (Veo 3.1)</p>
+                    </div>
+                    <div class="phase-status" id="phase3Status">Waiting for input</div>
+                </div>
+
+                <div class="phase-body" id="phase3Body">
+                    <!-- Input Mode Toggle -->
+                    <div class="input-mode-toggle">
+                        <button class="mode-btn active" id="prodModeAuto" onclick="setProdInputMode('auto')">
+                            🔗 Use Script from Phase 2
+                        </button>
+                        <button class="mode-btn" id="prodModeManual" onclick="setProdInputMode('manual')">
+                            📋 Paste Your Own Scene Breakdown
+                        </button>
+                    </div>
+
+                    <!-- Auto mode: uses script data -->
+                    <div id="prodAutoInput">
+                        <div class="source-badge" id="prodSourceBadge">
+                            <span class="source-dot idle"></span>
+                            No script loaded yet — complete Phase 2 or switch to manual mode
+                        </div>
+                    </div>
+
+                    <!-- Manual mode: paste JSON -->
+                    <div id="prodManualInput" style="display: none;">
+                        <label class="input-label">Paste Scene Breakdown JSON</label>
+                        <p class="paste-hint">Paste a JSON object with a <code>"script"</code> array. Each entry should
+                            have: <code>scene</code>, <code>narration</code>, <code>visual</code>, <code>emotion</code>,
+                            etc.</p>
+                        <textarea id="prodPasteArea" rows="8" class="paste-area"
+                            placeholder='{ "title": "My Video", "script": [ { "scene": 1, "narration": "...", "visual": "...", "emotion": "..." } ] }'></textarea>
+                        <div class="controls" style="margin-top: 12px;">
+                            <button onclick="importSceneBreakdown()">
+                                <span>📋 Import Scene Breakdown</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Style Reference Images -->
+                    <div class="style-images-section" id="styleImagesSection">
+                        <label class="input-label">🖼️ Style Reference Images (Optional)</label>
+                        <p class="paste-hint">
+                            Upload 1-4 images to define a <strong>custom visual style</strong> (color palette, lighting, mood, etc.). The AI will extract the <em>aesthetic qualities</em> and apply them to all prompts. This replaces the manual dropdown settings below.
+                        </p>
+                        <div class="image-upload-area">
+                            <input type="file" id="styleImageInput" accept="image/*" multiple style="display: none;" onchange="handleStyleImageUpload(event)">
+                            <button class="btn-secondary" onclick="document.getElementById('styleImageInput').click()">
+                                📁 Upload Images (Max 4)
+                            </button>
+                            <button class="btn-secondary" onclick="clearStyleImages()" id="clearImagesBtn" style="display: none;">
+                                🗑️ Clear Images
+                            </button>
+                        </div>
+                        <div id="styleImagePreviews" class="image-previews"></div>
+                        <div id="styleAnalysisResult" class="style-analysis-result" style="display: none;"></div>
+                    </div>
+
+                    <!-- Visual Style Options -->
+                    <div class="style-section" id="styleSection">
+                        <div class="section-header" onclick="toggleCollapse('styleBody')">
+                            <label class="input-label">🎨 Visual Style (Manual Settings)</label>
+                            <span class="collapse-icon" id="styleBody-icon">▼</span>
+                        </div>
+                        <div id="styleBody" class="collapsible">
+                            <div class="param-row">
+                                <div class="param-field">
+                                    <label class="input-label" for="genreSelect">Genre / Tone</label>
+                                    <select id="genreSelect">
+                                        <option value="Cinematic Drama" selected>Cinematic Drama</option>
+                                        <option value="Documentary Realism">Documentary Realism</option>
+                                        <option value="Noir / Thriller">Noir / Thriller</option>
+                                        <option value="Corporate / Commercial">Corporate / Commercial</option>
+                                        <option value="Investigative / Exposé">Investigative / Exposé</option>
+                                        <option value="Human Interest / Warm">Human Interest / Warm</option>
+                                        <option value="Epic / Grand">Epic / Grand</option>
+                                        <option value="Experimental / Artistic">Experimental / Artistic</option>
+                                    </select>
+                                </div>
+                                <div class="param-field">
+                                    <label class="input-label" for="colorWorldSelect">Color World</label>
+                                    <select id="colorWorldSelect">
+                                        <option value="Neutral" selected>Neutral</option>
+                                        <option value="Warm">Warm (ambers, oranges)</option>
+                                        <option value="Cool">Cool (teals, blues)</option>
+                                        <option value="High Contrast">High Contrast</option>
+                                        <option value="Desaturated / Muted">Desaturated / Muted</option>
+                                        <option value="Vibrant / Saturated">Vibrant / Saturated</option>
+                                    </select>
+                                </div>
+                                <div class="param-field">
+                                    <label class="input-label" for="lightingSelect">Lighting</label>
+                                    <select id="lightingSelect">
+                                        <option value="Natural / Available Light" selected>Natural / Available</option>
+                                        <option value="Dramatic / Chiaroscuro">Dramatic / Chiaroscuro</option>
+                                        <option value="Soft / Diffused">Soft / Diffused</option>
+                                        <option value="Hard / Direct">Hard / Direct</option>
+                                        <option value="Mixed Practical">Mixed Practical</option>
+                                        <option value="Stylized / Colored">Stylized / Colored</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="param-row">
+                                <div class="param-field">
+                                    <label class="input-label" for="cameraSelect">Camera Personality</label>
+                                    <select id="cameraSelect">
+                                        <option value="Authoritative" selected>Authoritative</option>
+                                        <option value="Observational">Observational</option>
+                                        <option value="Intimate">Intimate</option>
+                                        <option value="Nervous / Urgent">Nervous / Urgent</option>
+                                        <option value="Graceful">Graceful</option>
+                                        <option value="Dynamic">Dynamic</option>
+                                    </select>
+                                </div>
+                                <div class="param-field">
+                                    <label class="input-label" for="movementSelect">Movement Style</label>
+                                    <select id="movementSelect">
+                                        <option value="Subtle Movement" selected>Subtle Movement</option>
+                                        <option value="Mostly Static">Mostly Static</option>
+                                        <option value="Motivated Movement">Motivated Movement</option>
+                                        <option value="Expressive Movement">Expressive Movement</option>
+                                    </select>
+                                </div>
+                                <div class="param-field">
+                                    <label class="input-label" for="aspectRatioSelect">Aspect Ratio</label>
+                                    <select id="aspectRatioSelect">
+                                        <option value="16:9" selected>16:9 Landscape</option>
+                                        <option value="9:16">9:16 Portrait</option>
+                                    </select>
+                                </div>
+                                <div class="param-field">
+                                    <label class="input-label" for="imageModelSelect">Image Model</label>
+                                    <select id="imageModelSelect">
+                                        <option value="Generic" selected>Generic</option>
+                                        <option value="Midjourney V7">Midjourney V7</option>
+                                        <option value="FLUX Pro">FLUX Pro</option>
+                                        <option value="Stable Diffusion XL">SDXL</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="controls" style="margin-top: 16px;">
+                        <button id="productionBtn" onclick="generateProductionTable()">
+                            <span id="productionBtnText">🎬 Generate Production Table</span>
+                            <div class="spinner" id="productionSpinner"></div>
+                        </button>
+                    </div>
+
+                    <!-- Production Table Results -->
+                    <div id="productionResults" style="display: none;">
+                        <div class="production-header">
+                            <h3 class="script-title">Production Shots</h3>
+                            <div class="script-meta" id="productionMeta"></div>
+                        </div>
+                        <div class="production-table-wrap">
+                            <table class="production-table" id="productionTable">
+                                <thead>
+                                    <tr>
+                                        <th>Shot</th>
+                                        <th>Script / Beat</th>
+                                        <th>Dur</th>
+                                        <th>Director's Intent</th>
+                                        <th>First Frame Prompt</th>
+                                        <th>Last Frame Prompt</th>
+                                        <th>Veo 3.1 Prompt</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="productionTableBody"></tbody>
+                            </table>
+                        </div>
+
+                        <!-- Continuity Notes -->
+                        <div id="continuityNotes" style="display:none; margin-top:16px;">
+                            <div class="section-header" onclick="toggleCollapse('continuityBody')">
+                                <label class="input-label">🔗 Continuity Notes</label>
+                                <span class="collapse-icon" id="continuityBody-icon">▼</span>
+                            </div>
+                            <div id="continuityBody" class="collapsible">
+                                <div id="continuityContent"></div>
+                            </div>
+                        </div>
+
+                        <div class="controls script-actions">
+                            <button class="btn-secondary" onclick="copyFirstFramePrompts()">🖼️ Copy All First Frame Prompts</button>
+                            <button class="btn-secondary" onclick="copyLastFramePrompts()">🖼️ Copy All Last Frame Prompts</button>
+                            <button class="btn-secondary" onclick="copyVeoPrompts()">🎬 Copy All Veo Prompts</button>
+                            <button class="btn-secondary" onclick="copyAllPrompts()">📋 Copy All Prompts</button>
+                            <button class="btn-secondary" onclick="downloadProductionTable()">💾 Download JSON</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="phase3Error" class="error-message" style="display: none;"></div>
+            </div>
+
+        </main>
+    </div>
+
+    <script>
+        /* ══════════════════════════════════════
+           GLOBAL STATE
+           ══════════════════════════════════════ */
+        let selectedTemplate = null;
+        let currentDossier = '';
+        let currentScriptData = null;
+        let currentProductionData = null;
+        let styleReferenceImages = []; // Array of base64 image data
+        let styleAnalysis = null; // AI-analyzed style from images
+
+        /* ── Tab Switching ── */
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+            document.getElementById(`tab-${tabName}`).classList.add('active');
+
+            // Load templates when switching to research tab
+            if (tabName === 'research' && !document.getElementById('templateGrid').children.length) {
+                loadTemplates();
+            }
+        }
+
+        /* ══════════════════════════════════════
+           IMAGE GENERATION
+           ══════════════════════════════════════ */
+        async function generateImage() {
+            const prompt = document.getElementById('promptInput').value;
+            const btn = document.getElementById('generateBtn');
+            const btnText = document.getElementById('btnText');
+            const spinner = document.getElementById('loadingSpinner');
+            const img = document.getElementById('generatedImage');
+            const placeholder = document.getElementById('placeholderApp');
+            const errorDiv = document.getElementById('errorMessage');
+
+            if (!prompt) return;
+
+            btn.disabled = true;
+            btnText.style.display = 'none';
+            spinner.style.display = 'block';
+            errorDiv.style.display = 'none';
+            img.style.display = 'none';
+            placeholder.style.display = 'block';
+            placeholder.innerText = "Dreaming...";
+
+            try {
+                const response = await fetch('/api/generate-image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt }),
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    img.src = data.image_url;
+                    img.style.display = 'block';
+                    placeholder.style.display = 'none';
+                } else {
+                    throw new Error(data.error || 'Failed to generate image');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                errorDiv.innerText = error.message;
+                errorDiv.style.display = 'block';
+                placeholder.innerText = "Error occurred";
+            } finally {
+                btn.disabled = false;
+                btnText.style.display = 'inline';
+                spinner.style.display = 'none';
+            }
+        }
+
+        /* ══════════════════════════════════════
+           TTS GENERATION
+           ══════════════════════════════════════ */
+        async function generateTTS() {
+            const text = document.getElementById('ttsTextInput').value;
+            const voice = document.getElementById('voiceSelect').value;
+            const style = document.getElementById('styleInput').value;
+            const btn = document.getElementById('ttsGenerateBtn');
+            const btnText = document.getElementById('ttsBtnText');
+            const spinner = document.getElementById('ttsLoadingSpinner');
+            const placeholder = document.getElementById('ttsPlaceholder');
+            const playerWrap = document.getElementById('audioPlayerWrap');
+            const audioPlayer = document.getElementById('audioPlayer');
+            const downloadBtn = document.getElementById('downloadBtn');
+            const errorDiv = document.getElementById('ttsErrorMessage');
+
+            if (!text.trim()) return;
+
+            btn.disabled = true;
+            btnText.style.display = 'none';
+            spinner.style.display = 'block';
+            errorDiv.style.display = 'none';
+            playerWrap.style.display = 'none';
+            placeholder.style.display = 'flex';
+            placeholder.querySelector('span').textContent = "Generating voiceover...";
+
+            try {
+                const response = await fetch('/api/generate-tts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text, voice, style_instructions: style }),
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    audioPlayer.src = data.audio_url;
+                    downloadBtn.href = data.audio_url;
+                    playerWrap.style.display = 'flex';
+                    placeholder.style.display = 'none';
+                    audioPlayer.play();
+                } else {
+                    throw new Error(data.error || 'Failed to generate TTS');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                errorDiv.innerText = error.message;
+                errorDiv.style.display = 'block';
+                placeholder.querySelector('span').textContent = "Error occurred";
+            } finally {
+                btn.disabled = false;
+                btnText.style.display = 'inline';
+                spinner.style.display = 'none';
+            }
+        }
+
+        /* ══════════════════════════════════════
+           RESEARCH & SCRIPT WRITING (3-Phase)
+           ══════════════════════════════════════ */
+
+        /* ── Phase Status Helper ── */
+        function updatePhaseStatus(phaseNum, status, type) {
+            // type: 'idle' | 'running' | 'complete' | 'error'
+            const el = document.getElementById(`phase${phaseNum}Status`);
+            el.textContent = status;
+            el.className = 'phase-status';
+            if (type) el.classList.add(`status-${type}`);
+        }
+
+        /* ── Input Mode Toggles ── */
+        function setScriptInputMode(mode) {
+            const autoBtn = document.getElementById('scriptModeAuto');
+            const manualBtn = document.getElementById('scriptModeManual');
+            const autoInput = document.getElementById('scriptAutoInput');
+            const manualInput = document.getElementById('scriptManualInput');
+
+            if (mode === 'auto') {
+                autoBtn.classList.add('active');
+                manualBtn.classList.remove('active');
+                autoInput.style.display = 'block';
+                manualInput.style.display = 'none';
+            } else {
+                autoBtn.classList.remove('active');
+                manualBtn.classList.add('active');
+                autoInput.style.display = 'none';
+                manualInput.style.display = 'block';
+            }
+        }
+
+        function setProdInputMode(mode) {
+            const autoBtn = document.getElementById('prodModeAuto');
+            const manualBtn = document.getElementById('prodModeManual');
+            const autoInput = document.getElementById('prodAutoInput');
+            const manualInput = document.getElementById('prodManualInput');
+
+            if (mode === 'auto') {
+                autoBtn.classList.add('active');
+                manualBtn.classList.remove('active');
+                autoInput.style.display = 'block';
+                manualInput.style.display = 'none';
+            } else {
+                autoBtn.classList.remove('active');
+                manualBtn.classList.add('active');
+                autoInput.style.display = 'none';
+                manualInput.style.display = 'block';
+            }
+        }
+
+        /* ── Source Badge Updates ── */
+        function updateScriptSourceBadge() {
+            const badge = document.getElementById('scriptSourceBadge');
+            if (currentDossier) {
+                badge.innerHTML = '<span class="source-dot ready"></span> ✅ Research loaded — ready to generate script';
+            } else {
+                badge.innerHTML = '<span class="source-dot idle"></span> No research loaded yet — complete Phase 1 or switch to manual mode';
+            }
+        }
+
+        function updateProdSourceBadge() {
+            const badge = document.getElementById('prodSourceBadge');
+            if (currentScriptData?.script) {
+                const s = currentScriptData.script;
+                let processedText = "";
+
+                if (s.script && Array.isArray(s.script) && s.script.length > 0) {
+                    const count = s.total_scenes || s.script.length;
+                    processedText = `(${count} scenes)`;
+                } else if (s.raw_text) {
+                    processedText = "(Plain Text)";
+                } else {
+                    processedText = "(Unknown format)";
+                }
+
+                badge.innerHTML = `<span class="source-dot ready"></span> ✅ Script loaded ${processedText} — ready to generate production table`;
+            } else {
+                badge.innerHTML = '<span class="source-dot idle"></span> No script loaded yet — complete Phase 2 or switch to manual mode';
+            }
+        }
+
+        /* ── Templates ── */
+        async function loadTemplates() {
+            const grid = document.getElementById('templateGrid');
+            try {
+                const response = await fetch('/api/templates');
+                const data = await response.json();
+                grid.innerHTML = data.templates.map(t => `
+                    <button class="template-card" onclick="selectTemplate('${t.id}', this)" data-id="${t.id}">
+                        <span class="template-icon">${t.icon}</span>
+                        <span class="template-name">${t.name}</span>
+                        <span class="template-desc">${t.description}</span>
+                        <span class="template-examples">${t.example_topics.map(e => `<em>${e}</em>`).join(' · ')}</span>
+                    </button>
+                `).join('');
+            } catch (e) {
+                grid.innerHTML = '<p style="color:#ff6b6b">Failed to load templates. Is the server running?</p>';
+            }
+        }
+
+        function selectTemplate(templateId, el) {
+            selectedTemplate = templateId;
+            document.querySelectorAll('.template-card').forEach(c => c.classList.remove('selected'));
+            el.classList.add('selected');
+
+            const badge = document.getElementById('selectedBadge');
+            badge.textContent = `${el.querySelector('.template-icon').textContent} ${el.querySelector('.template-name').textContent}`;
+            document.getElementById('researchParams').style.display = 'flex';
+            document.getElementById('templateSection').style.display = 'none';
+        }
+
+        function resetTemplate() {
+            selectedTemplate = null;
+            document.getElementById('templateSection').style.display = 'flex';
+            document.getElementById('researchParams').style.display = 'none';
+            document.getElementById('researchResults').style.display = 'none';
+            document.querySelectorAll('.template-card').forEach(c => c.classList.remove('selected'));
+        }
+
+        /* ── Phase 1: Research ── */
+        async function startResearch() {
+            const topic = document.getElementById('researchTopic').value.trim();
+            if (!topic) return alert('Please enter a topic.');
+            if (!selectedTemplate) return alert('Please select a template first.');
+
+            const btn = document.getElementById('researchBtn');
+            const btnText = document.getElementById('researchBtnText');
+            const spinner = document.getElementById('researchSpinner');
+            const errorDiv = document.getElementById('phase1Error');
+
+            btn.disabled = true;
+            btnText.style.display = 'none';
+            spinner.style.display = 'block';
+            errorDiv.style.display = 'none';
+            document.getElementById('researchResults').style.display = 'none';
+
+            updatePhaseStatus(1, 'Researching…', 'running');
+
+            try {
+                const response = await fetch('/api/research', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        topic,
+                        template_id: selectedTemplate,
+                        research_model: document.getElementById('researchModelSelect').value
+                    }),
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Research failed');
+
+                currentDossier = data.dossier;
+
+                // Display results
+                document.getElementById('researchSummary').innerHTML =
+                    `<h4>Summary</h4><p>${escapeHtml(data.summary)}</p>`;
+
+                if (data.key_facts && data.key_facts.length) {
+                    document.getElementById('keyFacts').innerHTML =
+                        `<h4>Key Facts</h4><ul>${data.key_facts.map(f => `<li>${escapeHtml(f)}</li>`).join('')}</ul>`;
+                }
+
+                if (data.sources && data.sources.length) {
+                    document.getElementById('sourcesList').innerHTML =
+                        `<h4>Sources Referenced</h4><ul class="sources">${data.sources.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`;
+                }
+
+                document.getElementById('researchResults').style.display = 'block';
+
+                const factCount = data.key_facts?.length || 0;
+                updatePhaseStatus(1, `✅ Complete — ${factCount} facts found`, 'complete');
+
+                // Auto-update downstream Phase 2 source badge
+                updateScriptSourceBadge();
+
+            } catch (error) {
+                errorDiv.innerText = error.message;
+                errorDiv.style.display = 'block';
+                updatePhaseStatus(1, '❌ Error', 'error');
+            } finally {
+                btn.disabled = false;
+                btnText.style.display = 'inline';
+                spinner.style.display = 'none';
+            }
+        }
+
+        /* ── Phase 2: Script Writing ── */
+        function toggleStyleInput() {
+            const isYoutube = document.querySelector('input[name="styleMode"][value="youtube"]').checked;
+            document.getElementById('youtubeStyleInput').style.display = isYoutube ? 'block' : 'none';
+        }
+
+        async function generateScriptFromResearch() {
+            if (!currentDossier) return alert('No research data. Run research first, or switch to manual mode.');
+
+            const topic = document.getElementById('researchTopic').value.trim();
+            const btn = document.getElementById('scriptBtn');
+            const btnText = document.getElementById('scriptBtnText');
+            const spinner = document.getElementById('scriptSpinner');
+            const errorDiv = document.getElementById('phase2Error');
+
+            const styleMode = document.querySelector('input[name="styleMode"]:checked').value;
+            const styleUrl = document.getElementById('styleUrl').value.trim();
+
+            if (styleMode === 'youtube' && !styleUrl) {
+                return alert('Please enter a YouTube URL to mimic.');
+            }
+
+            btn.disabled = true;
+            btnText.style.display = 'none';
+            spinner.style.display = 'block';
+            errorDiv.style.display = 'none';
+
+            updatePhaseStatus(2, 'Writing script…', 'running');
+
+            try {
+                const response = await fetch('/api/generate-script', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        topic,
+                        template_id: selectedTemplate,
+                        dossier: currentDossier,
+                        duration_minutes: document.getElementById('durationSelect').value,
+                        audience: document.getElementById('audienceSelect').value,
+                        tone: document.getElementById('toneSelect').value,
+                        focus: document.getElementById('focusInput').value,
+                        style_mode: styleMode,
+                        style_url: styleUrl
+                    }),
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Script generation failed');
+
+                currentScriptData = data;
+                renderScriptTable(data.script);
+
+                const sceneCount = data.script.total_scenes || data.script.script?.length || '?';
+                updatePhaseStatus(2, `✅ Complete — ${sceneCount} scenes`, 'complete');
+
+                // Auto-update downstream Phase 3 source badge
+                updateProdSourceBadge();
+
+            } catch (error) {
+                errorDiv.innerText = error.message;
+                errorDiv.style.display = 'block';
+                updatePhaseStatus(2, '❌ Error', 'error');
+            } finally {
+                btn.disabled = false;
+                btnText.style.display = 'inline';
+                spinner.style.display = 'none';
+            }
+        }
+
+        async function importScript() {
+            const textarea = document.getElementById('scriptPasteArea');
+            const errorDiv = document.getElementById('phase2Error');
+            errorDiv.style.display = 'none';
+            const rawValue = textarea.value.trim();
+
+            if (!rawValue) return;
+
+            try {
+                // Try parsing as JSON first
+                const parsed = JSON.parse(rawValue);
+                if (!parsed.script || !Array.isArray(parsed.script)) {
+                    throw new Error('Invalid JSON: must contain a "script" array.');
+                }
+
+                currentScriptData = { script: parsed };
+                renderScriptTable(parsed);
+
+                const sceneCount = parsed.total_scenes || parsed.script.length;
+                updatePhaseStatus(2, `✅ Imported — ${sceneCount} scenes`, 'complete');
+
+                // Auto-update downstream Phase 3 source badge
+                updateProdSourceBadge();
+
+            } catch (error) {
+                // FALLBACK: Treat as plain text and break it down
+                console.log("JSON parse failed, breaking down as plain text:", error.message);
+
+                updatePhaseStatus(2, 'Breaking down text…', 'running');
+
+                try {
+                    const response = await fetch('/api/breakdown-script', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            script_text: rawValue,
+                            duration_minutes: 10  // Default duration
+                        }),
+                    });
+
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || 'Breakdown failed');
+
+                    currentScriptData = { script: data };
+                    renderScriptTable(data);
+
+                    const sceneCount = data.total_scenes || data.script?.length || '?';
+                    updatePhaseStatus(2, `✅ Complete — ${sceneCount} scenes`, 'complete');
+
+                    // Auto-update downstream Phase 3 source badge
+                    updateProdSourceBadge();
+
+                } catch (breakdownError) {
+                    errorDiv.innerText = `Breakdown error: ${breakdownError.message}`;
+                    errorDiv.style.display = 'block';
+                    updatePhaseStatus(2, '❌ Error', 'error');
+                }
+            }
+        }
+
+        function renderScriptTable(script) {
+            document.getElementById('scriptTitle').textContent = script.title || 'Imported Script';
+            document.getElementById('scriptMeta').innerHTML = [
+                script.hook_type ? `<span class="meta-tag">Hook: ${script.hook_type}</span>` : '',
+                script.duration_minutes ? `<span class="meta-tag">${script.duration_minutes} min</span>` : '',
+                script.total_scenes ? `<span class="meta-tag">${script.total_scenes} scenes</span>` : '',
+            ].join('');
+
+            const tbody = document.getElementById('scriptTableBody');
+            if (script.script && Array.isArray(script.script)) {
+                tbody.innerHTML = script.script.map(row => `
+                    <tr>
+                        <td class="cell-num">${row.scene || ''}</td>
+                        <td class="cell-time">${row.timestamp || ''}</td>
+                        <td class="cell-act"><strong>${row.act || ''}</strong><br><em>${row.beat || ''}</em></td>
+                        <td class="cell-narration">${escapeHtml(row.narration || '')}</td>
+                        <td class="cell-visual">${escapeHtml(row.visual || '')}</td>
+                        <td class="cell-emotion"><span class="emotion-tag">${row.emotion || ''}</span></td>
+                    </tr>
+                `).join('');
+            } else if (script.raw_text) {
+                tbody.innerHTML = `<tr><td colspan="6" style="white-space:pre-wrap">${escapeHtml(script.raw_text)}</td></tr>`;
+            }
+
+            document.getElementById('scriptResults').style.display = 'block';
+        }
+
+
+        /* ══════════════════════════════════════
+           PHASE 3: PRODUCTION TABLE
+           ══════════════════════════════════════ */
+
+        function importSceneBreakdown() {
+            const textarea = document.getElementById('prodPasteArea');
+            const errorDiv = document.getElementById('phase3Error');
+            errorDiv.style.display = 'none';
+
+            try {
+                const parsed = JSON.parse(textarea.value.trim());
+                if (!parsed.script || !Array.isArray(parsed.script)) {
+                    throw new Error('Invalid JSON: must contain a "script" array.');
+                }
+
+                // Store as currentScriptData so generateProductionTable can use it
+                currentScriptData = { script: parsed };
+
+                const sceneCount = parsed.total_scenes || parsed.script.length;
+                updatePhaseStatus(3, `✅ Imported ${sceneCount} scenes — ready to generate`, 'complete');
+
+                // Update badge
+                updateProdSourceBadge();
+
+            } catch (error) {
+                errorDiv.innerText = `Import error: ${error.message}`;
+                errorDiv.style.display = 'block';
+                updatePhaseStatus(3, '❌ Import failed', 'error');
+            }
+        }
+
+        async function generateProductionTable() {
+            if (!currentScriptData?.script) return alert('No script data. Generate or import a script first.');
+
+            const btn = document.getElementById('productionBtn');
+            const btnText = document.getElementById('productionBtnText');
+            const spinner = document.getElementById('productionSpinner');
+            const errorDiv = document.getElementById('phase3Error');
+
+            btn.disabled = true;
+            btnText.style.display = 'none';
+            spinner.style.display = 'block';
+            errorDiv.style.display = 'none';
+            document.getElementById('productionResults').style.display = 'none';
+
+            updatePhaseStatus(3, 'Generating prompts…', 'running');
+
+            try {
+                // Build request body - use style analysis from images if available
+                const requestBody = {
+                    scene_breakdown: currentScriptData.script,
+                };
+
+                if (styleAnalysis) {
+                    // Use image-derived style analysis
+                    requestBody.style_analysis = styleAnalysis;
+                    console.log('[Production] Using image-derived style analysis');
+                } else {
+                    // Use manual style settings
+                    requestBody.genre = document.getElementById('genreSelect').value;
+                    requestBody.color_world = document.getElementById('colorWorldSelect').value;
+                    requestBody.lighting = document.getElementById('lightingSelect').value;
+                    requestBody.camera_personality = document.getElementById('cameraSelect').value;
+                    requestBody.movement_style = document.getElementById('movementSelect').value;
+                    requestBody.aspect_ratio = document.getElementById('aspectRatioSelect').value;
+                    requestBody.image_model = document.getElementById('imageModelSelect').value;
+                    console.log('[Production] Using manual style settings');
+                }
+
+                const response = await fetch('/api/generate-production-table', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody),
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Production table generation failed');
+
+                currentProductionData = data;
+                renderProductionTable(data.production_table);
+
+                const shotCount = data.production_table?.total_shots || data.production_table?.shots?.length || '?';
+                updatePhaseStatus(3, `✅ Complete — ${shotCount} shots`, 'complete');
+
+            } catch (error) {
+                errorDiv.innerText = error.message;
+                errorDiv.style.display = 'block';
+                updatePhaseStatus(3, '❌ Error', 'error');
+            } finally {
+                btn.disabled = false;
+                btnText.style.display = 'inline';
+                spinner.style.display = 'none';
+            }
+        }
+
+        function renderProductionTable(pt) {
+            document.getElementById('productionMeta').innerHTML = [
+                pt.aspect_ratio ? `<span class="meta-tag">${pt.aspect_ratio}</span>` : '',
+                pt.total_shots ? `<span class="meta-tag">${pt.total_shots} shots</span>` : '',
+                pt.style_summary ? `<span class="meta-tag" title="${escapeHtml(pt.style_summary)}">${escapeHtml(pt.style_summary.substring(0, 40))}${pt.style_summary.length > 40 ? '…' : ''}</span>` : '',
+            ].join('');
+
+            const tbody = document.getElementById('productionTableBody');
+            if (pt.shots && Array.isArray(pt.shots)) {
+                tbody.innerHTML = pt.shots.map(shot => `
+                    <tr>
+                        <td class="cell-num">${escapeHtml(shot.shot_number || '')}</td>
+                        <td class="cell-beat">${escapeHtml(shot.script_beat || '')}</td>
+                        <td class="cell-dur">${escapeHtml(shot.duration || '')}</td>
+                        <td class="cell-intent">${escapeHtml(shot.directors_intent || '')}</td>
+                        <td class="cell-prompt"><pre class="prompt-cell">${escapeHtml(shot.first_frame_prompt || '')}</pre></td>
+                        <td class="cell-prompt"><pre class="prompt-cell">${escapeHtml(shot.last_frame_prompt || '')}</pre></td>
+                        <td class="cell-prompt"><pre class="prompt-cell">${escapeHtml(shot.veo_prompt || '')}</pre></td>
+                    </tr>
+                `).join('');
+            } else if (pt.raw_text) {
+                tbody.innerHTML = `<tr><td colspan="7" style="white-space:pre-wrap">${escapeHtml(pt.raw_text)}</td></tr>`;
+            }
+
+            if (pt.continuity_notes && pt.continuity_notes.length > 0) {
+                const notesEl = document.getElementById('continuityContent');
+                notesEl.innerHTML = pt.continuity_notes.map(n => `
+                    <div class="continuity-note">
+                        <strong>${escapeHtml(n.from_shot)} → ${escapeHtml(n.to_shot)}</strong>
+                        <div>Visual: ${escapeHtml(n.visual_bridge || '')}</div>
+                        <div>Audio: ${escapeHtml(n.audio_bridge || '')}</div>
+                        ${n.potential_issue ? `<div class="note-warning">⚠️ ${escapeHtml(n.potential_issue)}</div>` : ''}
+                    </div>
+                `).join('');
+                document.getElementById('continuityNotes').style.display = 'block';
+            }
+
+            document.getElementById('productionResults').style.display = 'block';
+        }
+
+        function copyFirstFramePrompts() {
+            if (!currentProductionData?.production_table?.shots) return;
+            const prompts = currentProductionData.production_table.shots.map((s, idx) =>
+                `=== SHOT ${s.shot_number} - FIRST FRAME ===\n${s.first_frame_prompt}`
+            );
+            navigator.clipboard.writeText(prompts.join('\n\n' + '='.repeat(50) + '\n\n'));
+            alert(`✅ Copied ${prompts.length} First Frame Prompts to clipboard!`);
+        }
+
+        function copyLastFramePrompts() {
+            if (!currentProductionData?.production_table?.shots) return;
+            const prompts = currentProductionData.production_table.shots.map((s, idx) =>
+                `=== SHOT ${s.shot_number} - LAST FRAME ===\n${s.last_frame_prompt}`
+            );
+            navigator.clipboard.writeText(prompts.join('\n\n' + '='.repeat(50) + '\n\n'));
+            alert(`✅ Copied ${prompts.length} Last Frame Prompts to clipboard!`);
+        }
+
+        function copyVeoPrompts() {
+            if (!currentProductionData?.production_table?.shots) return;
+            const prompts = currentProductionData.production_table.shots.map((s, idx) =>
+                `=== SHOT ${s.shot_number} (${s.duration}) - VEO 3.1 ===\n${s.veo_prompt}`
+            );
+            navigator.clipboard.writeText(prompts.join('\n\n' + '='.repeat(50) + '\n\n'));
+            alert(`✅ Copied ${prompts.length} Veo 3.1 Prompts to clipboard!`);
+        }
+
+        function copyAllPrompts() {
+            if (!currentProductionData?.production_table?.shots) return;
+            const lines = currentProductionData.production_table.shots.map(s =>
+                `=== SHOT ${s.shot_number} (${s.duration}) ===\n` +
+                `SCRIPT: ${s.script_beat}\n\n` +
+                `FIRST FRAME:\n${s.first_frame_prompt}\n\n` +
+                `LAST FRAME:\n${s.last_frame_prompt}\n\n` +
+                `VEO 3.1:\n${s.veo_prompt}\n`
+            );
+            navigator.clipboard.writeText(lines.join('\n\n'));
+            alert('✅ All prompts copied to clipboard!');
+        }
+
+        function downloadProductionTable() {
+            if (!currentProductionData) return;
+            const blob = new Blob([JSON.stringify(currentProductionData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `production_table_${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        /* ══════════════════════════════════════
+           STYLE REFERENCE IMAGES
+           ══════════════════════════════════════ */
+
+        async function handleStyleImageUpload(event) {
+            const files = Array.from(event.target.files);
+            if (files.length === 0) return;
+
+            // Limit to 4 images
+            const maxImages = 4;
+            const remainingSlots = maxImages - styleReferenceImages.length;
+            const filesToProcess = files.slice(0, remainingSlots);
+
+            if (files.length > remainingSlots) {
+                alert(`Maximum 4 images allowed. Adding first ${remainingSlots} images.`);
+            }
+
+            // Convert images to base64
+            for (const file of filesToProcess) {
+                if (!file.type.startsWith('image/')) continue;
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    styleReferenceImages.push({
+                        name: file.name,
+                        data: e.target.result
+                    });
+                    renderStyleImagePreviews();
+
+                    // Auto-analyze when all images are loaded
+                    if (styleReferenceImages.length === filesToProcess.length) {
+                        analyzeStyleImages();
+                    }
+                };
+                reader.readAsDataURL(file);
+            }
+
+            // Reset input
+            event.target.value = '';
+        }
+
+        function renderStyleImagePreviews() {
+            const container = document.getElementById('styleImagePreviews');
+            const clearBtn = document.getElementById('clearImagesBtn');
+
+            if (styleReferenceImages.length === 0) {
+                container.innerHTML = '';
+                clearBtn.style.display = 'none';
+                return;
+            }
+
+            clearBtn.style.display = 'inline-block';
+
+            container.innerHTML = styleReferenceImages.map((img, idx) => `
+                <div class="image-preview">
+                    <img src="${img.data}" alt="${img.name}">
+                    <button class="image-preview-remove" onclick="removeStyleImage(${idx})">✕</button>
+                </div>
+            `).join('');
+        }
+
+        function removeStyleImage(index) {
+            styleReferenceImages.splice(index, 1);
+            renderStyleImagePreviews();
+
+            if (styleReferenceImages.length === 0) {
+                styleAnalysis = null;
+                document.getElementById('styleAnalysisResult').style.display = 'none';
+            } else {
+                analyzeStyleImages();
+            }
+        }
+
+        function clearStyleImages() {
+            styleReferenceImages = [];
+            styleAnalysis = null;
+            renderStyleImagePreviews();
+            document.getElementById('styleAnalysisResult').style.display = 'none';
+        }
+
+        async function analyzeStyleImages() {
+            if (styleReferenceImages.length === 0) return;
+
+            const resultDiv = document.getElementById('styleAnalysisResult');
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '<h4>🔍 Analyzing style...</h4><p>Using Gemini Vision to extract visual style from your images...</p>';
+
+            try {
+                const response = await fetch('/api/analyze-style-images', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        images: styleReferenceImages.map(img => img.data)
+                    }),
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Style analysis failed');
+
+                styleAnalysis = data.style_analysis;
+                resultDiv.innerHTML = `
+                    <h4>✅ Custom Style Extracted</h4>
+                    <p><strong>Your Style Guide:</strong> ${escapeHtml(styleAnalysis)}</p>
+                    <small style="color: #888;">This custom aesthetic will be applied to all First Frame, Last Frame, and Veo prompts. Manual dropdown settings will be ignored.</small>
+                `;
+
+            } catch (error) {
+                console.error('Style analysis error:', error);
+                resultDiv.innerHTML = `
+                    <h4>❌ Analysis Failed</h4>
+                    <p style="color: #ff6b6b;">${escapeHtml(error.message)}</p>
+                    <small>You can still use manual style settings below.</small>
+                `;
+                styleAnalysis = null;
+            }
+        }
+
+        /* ── Utility ── */
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function toggleCollapse(id) {
+            const el = document.getElementById(id);
+            const icon = document.getElementById(id + '-icon');
+            el.classList.toggle('collapsed');
+            icon.textContent = el.classList.contains('collapsed') ? '▶' : '▼';
+        }
+
+        function copyScript() {
+            if (!currentScriptData?.script?.script) return;
+            const text = currentScriptData.script.script.map(r =>
+                `[${r.timestamp}] ${r.narration}`
+            ).join('\n\n');
+            navigator.clipboard.writeText(text);
+            alert('Script copied to clipboard!');
+        }
+
+        function downloadScript() {
+            if (!currentScriptData) return;
+            const blob = new Blob([JSON.stringify(currentScriptData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `script_${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function startOver() {
+            currentDossier = '';
+            currentScriptData = null;
+            currentProductionData = null;
+            document.getElementById('researchTopic').value = '';
+            document.getElementById('focusInput').value = '';
+            document.getElementById('researchResults').style.display = 'none';
+            document.getElementById('scriptResults').style.display = 'none';
+            document.getElementById('productionResults').style.display = 'none';
+            document.getElementById('continuityNotes').style.display = 'none';
+            document.getElementById('scriptPasteArea').value = '';
+            document.getElementById('prodPasteArea').value = '';
+            resetTemplate();
+
+            // Reset phase statuses
+            updatePhaseStatus(1, 'Not started', 'idle');
+            updatePhaseStatus(2, 'Waiting for input', 'idle');
+            updatePhaseStatus(3, 'Waiting for input', 'idle');
+
+            // Reset source badges
+            updateScriptSourceBadge();
+            updateProdSourceBadge();
+
+            // Reset input modes to auto
+            setScriptInputMode('auto');
+            setProdInputMode('auto');
+
+            // Re-bind model select listener
+            const modelSelect = document.getElementById('researchModelSelect');
+            if (modelSelect) {
+                modelSelect.addEventListener('change', function () {
+                    const btnText = document.getElementById('researchBtnText');
+                    btnText.textContent = this.value === 'deep' ? '🔍 Start Deep Research' : '⚡ Start Fast Research';
+                });
+                const btnText = document.getElementById('researchBtnText');
+                btnText.textContent = modelSelect.value === 'deep' ? '🔍 Start Deep Research' : '⚡ Start Fast Research';
+            }
+        }
+
+        // Run once on load
+        document.addEventListener('DOMContentLoaded', () => {
+            const modelSelect = document.getElementById('researchModelSelect');
+            if (modelSelect) {
+                modelSelect.addEventListener('change', function () {
+                    const btnText = document.getElementById('researchBtnText');
+                    btnText.textContent = this.value === 'deep' ? '🔍 Start Deep Research' : '⚡ Start Fast Research';
+                });
+                const btnText = document.getElementById('researchBtnText');
+                btnText.textContent = modelSelect.value === 'deep' ? '🔍 Start Deep Research' : '⚡ Start Fast Research';
+            }
+        });
+    </script>
+</body>
+
+</html>
