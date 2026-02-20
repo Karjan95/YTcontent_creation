@@ -20,7 +20,7 @@ def test_simple_generation():
     try:
         client = get_client()
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3-flash-preview",
             contents="Say hello"
         )
         print("Success:", response.text)
@@ -43,7 +43,7 @@ def test_search_generation():
         long_prompt = "Research the topic: influencer marketing in 2026.\n" * 10 
         
         response = client.models.generate_content(
-            model="gemini-2.5-pro", 
+            model="gemini-3.1-pro-preview", 
             contents=long_prompt,
             config=config
         )

@@ -15,7 +15,7 @@ from research_templates import get_template, build_research_queries
 template_id = 'educational_explainer'
 topic = 'why it is suck to be an influancer in 2026'
 use_search = True
-model_name = "gemini-2.5-pro"
+model_name = "gemini-3.1-pro-preview"
 
 # Build the prompt exactly as the server does
 queries = build_research_queries(template_id, topic)

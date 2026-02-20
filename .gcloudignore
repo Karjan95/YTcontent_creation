@@ -1,4 +1,4 @@
-.gcloudignore
+2.gcloudignore
 .git
 .gitignore
 .docker

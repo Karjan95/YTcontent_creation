@@ -1,5 +1,7 @@
+import os
 import re
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import GenericProxyConfig
 from gemini_client import generate_content
 
 def extract_youtube_id(url: str) -> str:
@@ -10,36 +12,60 @@ def extract_youtube_id(url: str) -> str:
         return match.group(1)
     return None
 
-def get_transcript(video_url: str) -> str:
-    """Fetches the transcript of a YouTube video."""
+def get_transcript(video_url: str) -> tuple:
+    """Fetches the transcript of a YouTube video.
+
+    Supports proxy configuration via YOUTUBE_PROXY_URL environment variable
+    to work around YouTube IP blocking on cloud providers (AWS, GCP, Azure).
+
+    Example: YOUTUBE_PROXY_URL=http://user:pass@proxy-host:port
+    """
     video_id = extract_youtube_id(video_url)
     if not video_id:
         return None, "Invalid YouTube URL"
+
+    # Check for proxy configuration
+    # Supports single proxy or comma-separated list for rotation
+    proxy_env = os.getenv("YOUTUBE_PROXY_URL")
+    proxies = [p.strip() for p in proxy_env.split(",")] if proxy_env else []
     
-    try:
-        # Try standard static method (v0.6.x)
-        if hasattr(YouTubeTranscriptApi, 'get_transcript'):
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-            # Standard version returns dicts
-            full_text = " ".join([item['text'] for item in transcript_list])
-            return full_text, None
-            
-        # Try instance fetch method (v1.x found in environment)
-        else:
-            api = YouTubeTranscriptApi()
+    # If no proxies, try direct connection once
+    if not proxies:
+        proxies = [None]
+
+    last_error = None
+    
+    for i, proxy_url in enumerate(proxies):
+        try:
+            if proxy_url:
+                print(f"[YouTube] Attempt {i+1}/{len(proxies)} using proxy: ...{proxy_url[-10:]}")
+                proxy_config = GenericProxyConfig(https_url=proxy_url)
+                api = YouTubeTranscriptApi(proxy_config=proxy_config)
+            else:
+                print(f"[YouTube] Attempting direct connection (no proxy)...")
+                api = YouTubeTranscriptApi()
+
             transcript = api.fetch(video_id)
-            # This version returns objects with .text attribute
-            full_text = " ".join([item.text for item in transcript])
+            full_text = " ".join([snippet.text for snippet in transcript])
             return full_text, None
 
-    except Exception as e:
-        return None, str(e)
+        except Exception as e:
+            last_error = str(e)
+            print(f"[YouTube] Attempt {i+1} failed: {last_error}")
+            continue
+
+    # If all attempts failed
+    return None, (
+        f"Failed to fetch transcript after trying {len(proxies)} configuration(s). "
+        f"Last error: {last_error}. "
+        f"Please check your YOUTUBE_PROXY_URL environment variable."
+    )
 
 def analyze_style(transcript_text: str, api_key: str = None) -> str:
     """Analyzes the transcript to extract a style guide."""
     if not transcript_text:
         return "No transcript available."
-    
+
     # Truncate if too long (Gemini 1.5 Pro/Flash handles long context well, but limit to save tokens/time if overkill)
     # 20k chars is plenty for style analysis (~3-4k words, 20-30 min video)
     truncated_text = transcript_text[:25000]
@@ -71,4 +97,4 @@ TONE: [Keywords]
 PACING: [Instructions]
 ---
 """
-    return generate_content(prompt, model_name="gemini-2.5-flash", api_key=api_key)
+    return generate_content(prompt, model_name="gemini-3-flash-preview", api_key=api_key)

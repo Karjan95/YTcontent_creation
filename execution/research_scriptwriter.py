@@ -1,9 +1,9 @@
 """
 Research & Script Writer
 ========================
-Orchestrates the 2-phase script pipeline:
-  Phase 1: Gemini writes a flowing narration (organized by acts/beats)
-  Phase 2: Gemini breaks that narration into timed scene rows
+Orchestrates the script pipeline:
+  Narration: Gemini writes a flowing narration (organized by acts/beats)
+  Production: Gemini splits narration into timed shots and generates prompts
 
 This module provides helper functions that server.py calls.
 """
@@ -19,9 +19,10 @@ from research_templates import (
     get_all_templates_metadata,
     build_research_queries,
     build_script_prompt,
-    build_breakdown_prompt,
     build_production_prompt,
-    DEFAULT_STYLE_CONFIG,
+    build_title_suggestions_prompt,
+    build_tone_suggestion_prompt,
+    build_beat_regeneration_prompt,
 )
 from gemini_client import generate_content
 
@@ -62,6 +63,8 @@ def build_research_dossier(topic: str, template_id: str,
 
 def _parse_json_response(raw_response: str) -> dict:
     """Parse JSON from a Gemini response, handling markdown code fences."""
+    if not raw_response:
+        raise ValueError("Empty response from Gemini")
     text = raw_response.strip()
     if text.startswith("```"):
         lines = text.split("\n")
@@ -72,12 +75,12 @@ def _parse_json_response(raw_response: str) -> dict:
 def generate_narration(topic: str, template_id: str, research_dossier: str,
                        duration_minutes: int = 10, audience: str = "General",
                        tone: str = "", focus: str = "", style_guide: str = None,
-                       api_key: str = None) -> dict:
+                       selected_title: str = None, api_key: str = None) -> dict:
     """
     PHASE 1: Generate a flowing narration script using Gemini.
 
     Returns the narration organized by acts/beats — no timestamps or scene table.
-    This output feeds into Phase 2 (breakdown_narration).
+    This output feeds into production (generate_production_table).
 
     Returns:
         Dict with 'success' and 'narration' (the parsed JSON), or 'error'
@@ -91,12 +94,13 @@ def generate_narration(topic: str, template_id: str, research_dossier: str,
         tone=tone,
         focus=focus,
         style_guide=style_guide,
+        selected_title=selected_title,
     )
 
-    raw_response = generate_content(prompt, model_name="gemini-2.5-flash", api_key=api_key)
+    raw_response = generate_content(prompt, model_name="gemini-3-flash-preview", api_key=api_key)
 
-    if raw_response.startswith("Error:"):
-        return {"error": raw_response}
+    if not raw_response or raw_response.startswith("Error:"):
+        return {"error": raw_response or "Gemini returned an empty response for narration."}
 
     try:
         narration_data = _parse_json_response(raw_response)
@@ -112,207 +116,168 @@ def generate_narration(topic: str, template_id: str, research_dossier: str,
         }
 
 
-def breakdown_narration(narration_json: dict, duration_minutes: int = 10,
-                        template_id: str = "educational_explainer",
-                        api_key: str = None) -> dict:
-    """
-    PHASE 2: Break a flowing narration into timed scene rows.
-
-    Takes the Phase 1 narration output and produces the final scene table
-    with accurate timestamps based on speech pacing (2.5 words/sec).
-
-    Returns:
-        Dict with 'success' and 'script' (the scene table), or 'error'
-    """
-    prompt = build_breakdown_prompt(
-        narration_json=narration_json,
-        duration_minutes=duration_minutes,
+def auto_suggest_tone(template_id: str, selected_title: str,
+                      audience: str = "General", api_key: str = None) -> dict:
+    """Auto-suggest the best tone for a title + audience combination."""
+    prompt = build_tone_suggestion_prompt(
         template_id=template_id,
-    )
-
-    raw_response = generate_content(prompt, model_name="gemini-2.5-flash", api_key=api_key)
-
-    if raw_response.startswith("Error:"):
-        return {"error": raw_response}
-
-    try:
-        script_data = _parse_json_response(raw_response)
-
-        # VALIDATION: Check if script has scenes
-        if "script" not in script_data or not script_data["script"]:
-            print(f"[Phase 2 ERROR] Gemini returned no scenes!")
-            print(f"[Phase 2 ERROR] Raw response (first 500 chars): {raw_response[:500]}")
-            return {
-                "error": "Phase 2 breakdown produced no scenes. Gemini may have failed to parse the narration. Check the raw response in logs."
-            }
-
-        return {"success": True, "script": script_data}
-    except json.JSONDecodeError as e:
-        print(f"[Phase 2 ERROR] JSON parse failed: {e}")
-        print(f"[Phase 2 ERROR] Raw response (first 1000 chars): {raw_response[:1000]}")
-        return {
-            "success": True,
-            "script": {
-                "title": narration_json.get("title", "Untitled"),
-                "raw_text": raw_response,
-                "parse_error": "Could not parse Phase 2 breakdown as JSON."
-            }
-        }
-
-
-def generate_full_script(topic: str, template_id: str, research_dossier: str,
-                         duration_minutes: int = 10, audience: str = "General",
-                         tone: str = "", focus: str = "", style_guide: str = None,
-                         api_key: str = None) -> dict:
-    """
-    Full two-phase pipeline: Narration → Scene Breakdown.
-
-    Phase 1: Write a compelling flowing narration
-    Phase 2: Break it into timed scene rows
-
-    Returns:
-        Dict with 'success' and 'script' (final scene table), or 'error'
-    """
-    # ── Phase 1: Generate narration ──
-    print("[Phase 1] Writing narration...")
-    phase1 = generate_narration(
-        topic=topic,
-        template_id=template_id,
-        research_dossier=research_dossier,
-        duration_minutes=duration_minutes,
+        selected_title=selected_title,
         audience=audience,
-        tone=tone,
-        focus=focus,
-        style_guide=style_guide,
-        api_key=api_key,
     )
-
-    if "error" in phase1:
-        return {"error": f"Phase 1 failed: {phase1['error']}"}
-
-    narration_json = phase1["narration"]
-
-    # Check if Phase 1 returned raw text instead of structured JSON
-    if "raw_text" in narration_json:
-        print("[Phase 1] Warning: got raw text instead of structured JSON")
-        return {
-            "success": True,
-            "script": narration_json  # Pass through raw text
-        }
-
-    narration_beats = narration_json.get("narration", [])
-    total_words = sum(len(b.get("text", "").split()) for b in narration_beats)
-    print(f"[Phase 1] Complete: '{narration_json.get('title', 'Untitled')}' — "
-          f"{len(narration_beats)} beats, {total_words} words")
-
-    # ── Phase 2: Break down into scenes ──
-    print("[Phase 2] Breaking narration into timed scenes...")
-    phase2 = breakdown_narration(
-        narration_json=narration_json,
-        duration_minutes=duration_minutes,
-        template_id=template_id,
-        api_key=api_key,
-    )
-
-    if "error" in phase2:
-        return {"error": f"Phase 2 failed: {phase2['error']}"}
-
-    script_data = phase2["script"]
-
-    # Correctly access the scenes array (nested inside script_data)
-    if isinstance(script_data, dict) and "script" in script_data:
-        scene_count = len(script_data.get("script", []))
-    else:
-        scene_count = 0
-
-    print(f"[Phase 2] Complete: {scene_count} scenes generated")
-
-    return {"success": True, "script": script_data}
+    raw_response = generate_content(prompt, model_name="gemini-3-flash-preview", api_key=api_key)
+    if not raw_response or raw_response.startswith("Error:"):
+        return {"suggested_tone": "Conversational", "reasoning": "Default (auto-suggest unavailable)"}
+    try:
+        return _parse_json_response(raw_response)
+    except json.JSONDecodeError:
+        return {"suggested_tone": "Conversational", "reasoning": "Default (parse error)"}
 
 
-def generate_production_table(scene_breakdown_json: dict,
-                              style_config: dict = None,
-                              style_analysis: str = None,
-                              api_key: str = None) -> dict:
+def regenerate_beats(topic: str, template_id: str, research_dossier: str,
+                     full_narration: dict, target_act: str = None,
+                     target_beat_indices: list = None, mode: str = "restyle",
+                     audience: str = "General", tone: str = "",
+                     duration_minutes: int = 10, api_key: str = None) -> dict:
     """
-    PHASE 3: Generate production-ready prompts from a scene breakdown.
-
-    Takes the Phase 2 scene breakdown and produces first-frame prompts,
-    last-frame prompts, and Veo 3.1 video prompts for each shot.
-
-    For large scripts (>12 scenes), processes in batches of 10 to avoid
-    hitting Gemini's output token limit.
+    Regenerate specific beats or an entire act within a narration.
 
     Args:
-        scene_breakdown_json: The Phase 2 output (with 'script' array)
-        style_config: Optional visual style preferences dict
+        topic: Video topic
+        template_id: Template being used
+        research_dossier: Full research dossier text
+        full_narration: Complete narration JSON {title, narration: [...]}
+        target_act: If set, regenerate all beats in this act
+        target_beat_indices: List of 0-based beat indices to regenerate
+        mode: 'restyle' or 'reimagine'
+        audience, tone, duration_minutes: Context for the prompt
+        api_key: Gemini API key
 
     Returns:
-        Dict with 'success' and 'production_table', or 'error'
+        Dict with 'success' and 'beats' (list of regenerated beats), or 'error'
     """
-    # DEBUG: Print what we received
-    print(f"[Phase 3 DEBUG] scene_breakdown_json keys: {scene_breakdown_json.keys()}")
-    print(f"[Phase 3 DEBUG] scene_breakdown_json type: {type(scene_breakdown_json)}")
+    prompt = build_beat_regeneration_prompt(
+        template_id=template_id,
+        topic=topic,
+        research_dossier=research_dossier,
+        full_narration=full_narration,
+        target_beat_indices=target_beat_indices or [],
+        target_act=target_act,
+        mode=mode,
+        audience=audience,
+        tone=tone,
+        duration_minutes=duration_minutes,
+    )
 
-    scenes = scene_breakdown_json.get("script", [])
+    if prompt.startswith("Error:"):
+        return {"error": prompt}
 
-    # VALIDATION: Ensure scenes exist
-    if not scenes or len(scenes) == 0:
-        print(f"[Phase 3 ERROR] No scenes found in scene_breakdown_json!")
-        print(f"[Phase 3 ERROR] Received data: {scene_breakdown_json}")
-        return {"error": "No scenes found in the scene breakdown. Make sure Phase 2 completed successfully and generated a script with scenes."}
-    total_scenes = len(scenes)
-    BATCH_SIZE = 10
+    raw_response = generate_content(prompt, model_name="gemini-3-flash-preview", api_key=api_key)
 
-    # Small scripts: single call
-    if total_scenes <= BATCH_SIZE + 2:
-        return _generate_single_batch(scene_breakdown_json, style_config, style_analysis=style_analysis, api_key=api_key)
+    if not raw_response or raw_response.startswith("Error:"):
+        return {"error": raw_response or "Gemini returned an empty response for beat regeneration."}
 
-    # Large scripts: batch processing WITH PARALLELIZATION
-    MAX_CONCURRENT_BATCHES = 3  # Process 3 batches at a time
-    print(f"[Phase 3] Large script detected ({total_scenes} scenes). "
-          f"Processing in batches of {BATCH_SIZE} with {MAX_CONCURRENT_BATCHES} concurrent workers...")
+    try:
+        regenerated = _parse_json_response(raw_response)
+        if isinstance(regenerated, dict):
+            regenerated = regenerated.get("beats", [regenerated])
+        if not isinstance(regenerated, list):
+            regenerated = [regenerated]
+        return {"success": True, "beats": regenerated}
+    except json.JSONDecodeError:
+        return {"error": f"Could not parse regenerated beats as JSON: {raw_response[:200]}"}
+
+
+def generate_production_table(narration_json: dict, duration_minutes: int = 10,
+                              style_analysis: dict = None,
+                              aspect_ratio: str = "16:9",
+                              api_key: str = None) -> dict:
+    """
+    Generate production-ready prompts from narration beats.
+
+    Takes narration (acts/beats with flowing text) and produces:
+    - Creatively split shots with editorial rationale
+    - Visual direction per shot
+    - First-frame, last-frame, and Veo 3.1 prompts using dynamic schema
+
+    Args:
+        narration_json: Narration object {title, narration: [{act, beat, text}, ...]}
+        duration_minutes: Target video length
+        style_analysis: Structured style dict {style_summary, style_intent, prompt_schema}
+        aspect_ratio: Video aspect ratio (Veo hardware constraint)
+        api_key: Gemini API key
+
+    For large narrations (>8 beats), processes in batches by act.
+    """
+    beats = narration_json.get("narration", [])
+
+    if not beats:
+        return {"error": "No narration beats found. Generate narration first."}
+
+    title = narration_json.get("title", "Untitled")
+    BEATS_PER_BATCH = 8
+
+    # Small narrations: single call
+    if len(beats) <= BEATS_PER_BATCH + 2:
+        return _generate_single_batch(narration_json, duration_minutes,
+                                      style_analysis=style_analysis,
+                                      aspect_ratio=aspect_ratio,
+                                      api_key=api_key)
+
+    # Large narrations: batch by act
+    MAX_CONCURRENT_BATCHES = 3
+    print(f"[Production] Large narration ({len(beats)} beats). Batching by act...")
+
+    # Group beats by act
+    acts = {}
+    for beat in beats:
+        act_name = beat.get("act", "Unknown")
+        if act_name not in acts:
+            acts[act_name] = []
+        acts[act_name].append(beat)
+
+    # Build batches from acts (split large acts into sub-batches)
+    batches = []
+    for act_name, act_beats in acts.items():
+        if len(act_beats) > BEATS_PER_BATCH:
+            for i in range(0, len(act_beats), BEATS_PER_BATCH):
+                batches.append(act_beats[i:i + BEATS_PER_BATCH])
+        else:
+            batches.append(act_beats)
 
     all_shots = []
     all_continuity = []
     all_challenging = []
     style_summary = ""
-    title = scene_breakdown_json.get("title", "Untitled")
-    aspect_ratio = (style_config or {}).get("aspect_ratio",
-                    DEFAULT_STYLE_CONFIG["aspect_ratio"])
 
-    # Split scenes into batches
-    batches = []
-    for i in range(0, total_scenes, BATCH_SIZE):
-        batches.append(scenes[i:i + BATCH_SIZE])
+    # Calculate total words for proportional duration splitting
+    total_words = sum(len(b.get("text", b.get("narration", "")).split()) for b in beats)
 
-    # Helper function to process a single batch (for parallel execution)
-    def process_batch(batch_idx, batch_scenes):
-        batch_start = batch_scenes[0].get("scene", "?")
-        batch_end = batch_scenes[-1].get("scene", "?")
-        print(f"[Phase 3] Batch {batch_idx}/{len(batches)}: "
-              f"scenes {batch_start}-{batch_end} "
-              f"({len(batch_scenes)} scenes) - STARTED")
+    def process_batch(batch_idx, batch_beats):
+        batch_words = sum(len(b.get("text", b.get("narration", "")).split()) for b in batch_beats)
+        batch_duration = max(1, round(duration_minutes * batch_words / total_words)) if total_words > 0 else duration_minutes
 
-        # Build a mini-breakdown for this batch
-        batch_breakdown = {
+        batch_narration = {
             "title": title,
-            "duration_minutes": scene_breakdown_json.get("duration_minutes", 10),
-            "script": batch_scenes,
+            "hook_type": narration_json.get("hook_type", ""),
+            "narration": batch_beats,
         }
 
-        result = _generate_single_batch(batch_breakdown, style_config,
+        print(f"[Production] Batch {batch_idx}/{len(batches)}: "
+              f"{len(batch_beats)} beats, ~{batch_words} words, ~{batch_duration}min - STARTED")
+
+        result = _generate_single_batch(batch_narration, batch_duration,
                                         style_analysis=style_analysis,
+                                        aspect_ratio=aspect_ratio,
                                         api_key=api_key,
                                         batch_label=f"batch {batch_idx}/{len(batches)}")
 
         if "error" in result:
-            print(f"[Phase 3] Batch {batch_idx} FAILED: {result['error']}")
+            print(f"[Production] Batch {batch_idx} FAILED: {result['error']}")
             return {"batch_idx": batch_idx, "error": result["error"]}
 
         pt = result.get("production_table", {})
         batch_shots = pt.get("shots", [])
-        print(f"[Phase 3] Batch {batch_idx} COMPLETE: got {len(batch_shots)} shots")
+        print(f"[Production] Batch {batch_idx} COMPLETE: {len(batch_shots)} shots")
 
         return {
             "batch_idx": batch_idx,
@@ -322,49 +287,36 @@ def generate_production_table(scene_breakdown_json: dict,
             "style_summary": pt.get("style_summary", ""),
         }
 
-    # Process batches in parallel with ThreadPoolExecutor
+    # Process batches in parallel
     batch_results = {}
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_BATCHES) as executor:
-        # Submit all batch jobs
         future_to_batch = {
-            executor.submit(process_batch, idx + 1, batch_scenes): idx + 1
-            for idx, batch_scenes in enumerate(batches)
+            executor.submit(process_batch, idx + 1, batch_beats): idx + 1
+            for idx, batch_beats in enumerate(batches)
         }
-
-        # Collect results as they complete
         for future in as_completed(future_to_batch):
             batch_idx = future_to_batch[future]
             try:
                 result = future.result()
                 batch_results[result["batch_idx"]] = result
             except Exception as e:
-                print(f"[Phase 3] Batch {batch_idx} raised exception: {e}")
+                print(f"[Production] Batch {batch_idx} exception: {e}")
                 batch_results[batch_idx] = {"batch_idx": batch_idx, "error": str(e)}
 
-    # Reconstruct results in order (by batch_idx)
+    # Reconstruct in order
     for batch_idx in sorted(batch_results.keys()):
         result = batch_results[batch_idx]
-
         if "error" in result:
             continue
-
-        # Collect shots
         all_shots.extend(result.get("shots", []))
-
-        # Collect continuity notes
         all_continuity.extend(result.get("continuity_notes", []))
-
-        # Collect production notes
         all_challenging.extend(result.get("challenging_shots", []))
-
-        # Grab style summary from first batch
         if batch_idx == 1:
             style_summary = result.get("style_summary", "")
 
     if not all_shots:
         return {"error": "All batches failed to produce shots."}
 
-    # Merge into final production table
     merged = {
         "title": title,
         "aspect_ratio": aspect_ratio,
@@ -379,93 +331,140 @@ def generate_production_table(scene_breakdown_json: dict,
         },
     }
 
-    print(f"[Phase 3] Complete: {len(all_shots)} total shots from "
-          f"{len(batches)} batches")
+    print(f"[Production] Complete: {len(all_shots)} total shots from {len(batches)} batches")
     return {"success": True, "production_table": merged}
 
 
-def _generate_single_batch(scene_breakdown_json: dict,
-                           style_config: dict = None,
-                           style_analysis: str = None,
+def _generate_single_batch(narration_json: dict, duration_minutes: int = 10,
+                           style_analysis: dict = None,
+                           aspect_ratio: str = "16:9",
                            api_key: str = None,
                            batch_label: str = "") -> dict:
-    """Generate production table for a single batch of scenes."""
+    """Generate production table for a single batch of narration beats."""
     prompt = build_production_prompt(
-        scene_breakdown_json=scene_breakdown_json,
-        style_config=style_config,
+        narration_json=narration_json,
+        duration_minutes=duration_minutes,
         style_analysis=style_analysis,
+        aspect_ratio=aspect_ratio,
     )
 
     label = f" ({batch_label})" if batch_label else ""
-    print(f"[Phase 3] Generating production table{label}...")
-    # Use temperature=0.1 for maximum preservation of input narration
-    raw_response = generate_content(prompt, model_name="gemini-2.5-pro", temperature=0.1, api_key=api_key)
+    print(f"[Production] Generating production table{label}...")
+    raw_response = generate_content(prompt, model_name="gemini-3.1-pro-preview", temperature=0.1, api_key=api_key)
 
-    if raw_response.startswith("Error:"):
-        return {"error": raw_response}
+    if not raw_response or raw_response.startswith("Error:"):
+        return {"error": raw_response or "Gemini returned an empty response for production table."}
 
     try:
         production_data = _parse_json_response(raw_response)
-
-        # PROGRAMMATICALLY preserve narration from input scenes
-        # Build a lookup map: scene_number -> narration text
-        scenes = scene_breakdown_json.get("script", [])
-        scene_narration_map = {}
-        for scene in scenes:
-            scene_num = scene.get("scene")
-            narration = scene.get("narration", "")
-            beat = scene.get("beat", "")
-            act = scene.get("act", "")
-            if scene_num:
-                scene_narration_map[scene_num] = {
-                    "narration": narration,
-                    "beat": beat,
-                    "act": act
-                }
-
-        # For each shot, replace script_beat with EXACT narration from input
-        for shot in production_data.get("shots", []):
-            scene_refs = shot.get("scene_refs", [])
-            if scene_refs and len(scene_refs) > 0:
-                # Use the first referenced scene's narration
-                first_scene = scene_refs[0]
-                if first_scene in scene_narration_map:
-                    scene_data = scene_narration_map[first_scene]
-                    # GUARANTEED exact preservation - no AI involved
-                    shot["script_beat"] = f"{scene_data['narration']} | {scene_data['beat']}"
-                    shot["act"] = scene_data["act"]
-
         shot_count = len(production_data.get("shots", []))
-        print(f"[Phase 3] Got {shot_count} shots{label} - narration preserved programmatically")
+        print(f"[Production] Got {shot_count} shots{label}")
         return {"success": True, "production_table": production_data}
     except json.JSONDecodeError:
         return {
             "success": True,
             "production_table": {
-                "title": scene_breakdown_json.get("title", "Untitled"),
+                "title": narration_json.get("title", "Untitled"),
                 "raw_text": raw_response,
-                "parse_error": f"Could not parse Phase 3 JSON{label}."
+                "parse_error": f"Could not parse production JSON{label}."
             }
         }
 
 
-# ── Legacy alias for backward compatibility ──
-def generate_script(topic: str, template_id: str, research_dossier: str,
-                    duration_minutes: int = 10, audience: str = "General",
-                    tone: str = "", focus: str = "", style_guide: str = None,
-                    api_key: str = None) -> dict:
-    """Legacy wrapper — calls the full two-phase pipeline."""
-    return generate_full_script(
-        topic=topic,
-        template_id=template_id,
-        research_dossier=research_dossier,
-        duration_minutes=duration_minutes,
-        audience=audience,
-        tone=tone,
-        focus=focus,
-        style_guide=style_guide,
-        api_key=api_key,
-    )
+def start_deep_research(topic: str, template_id: str, api_key: str = None) -> dict:
+    """
+    Start an async deep research session using the Deep Research Agent.
+
+    Uses the Interactions API with background=True. Returns immediately
+    with an interaction_id that can be polled for results.
+
+    Returns:
+        Dict with 'interaction_id' and 'status', or 'error'
+    """
+    from google import genai
+
+    template = get_template(template_id)
+    template_name = template['metadata']['name'] if template else template_id
+    analysis_questions = template['research_config']['analysis_questions'] if template else [
+        f"Provide a comprehensive analysis of {topic}"
+    ]
+
+    questions_text = "\n".join(f"- {q}" for q in analysis_questions)
+
+    research_input = f"""Conduct deep, comprehensive research on the following topic.
+
+TOPIC: {topic}
+RESEARCH TEMPLATE: {template_name}
+
+Answer each of these analysis questions with specific facts, names, numbers, and dates:
+{questions_text}
+
+Provide a thorough research report with:
+- Detailed answers to each question above
+- Specific facts, statistics, and data points
+- Named sources for key claims
+- A summary of all findings"""
+
+    try:
+        key = api_key or os.environ.get("GEMINI_API_KEY")
+        client = genai.Client(api_key=key)
+
+        interaction = client.interactions.create(
+            input=research_input,
+            agent='deep-research-pro-preview-12-2025',
+            background=True
+        )
+
+        print(f"[Deep Research] Started interaction: {interaction.id}")
+        return {
+            "interaction_id": interaction.id,
+            "status": "in_progress",
+        }
+
+    except Exception as e:
+        print(f"[Deep Research] Failed to start: {e}")
+        return {"error": f"Deep Research failed to start: {str(e)}"}
+
+
+def poll_deep_research(interaction_id: str, api_key: str = None) -> dict:
+    """
+    Poll a running deep research interaction for results.
+
+    Returns:
+        Dict with 'status' ('in_progress', 'completed', 'failed')
+        and 'result' (the research text) when completed.
+    """
+    from google import genai
+
+    try:
+        key = api_key or os.environ.get("GEMINI_API_KEY")
+        client = genai.Client(api_key=key)
+
+        interaction = client.interactions.get(interaction_id)
+
+        if interaction.status == "completed":
+            result_text = interaction.outputs[-1].text if interaction.outputs else ""
+            print(f"[Deep Research] Completed: {len(result_text)} chars")
+            return {
+                "status": "completed",
+                "result": result_text,
+            }
+        elif interaction.status == "failed":
+            error_msg = str(getattr(interaction, 'error', 'Unknown error'))
+            print(f"[Deep Research] Failed: {error_msg}")
+            return {
+                "status": "failed",
+                "error": error_msg,
+            }
+        else:
+            print(f"[Deep Research] Status: {interaction.status}")
+            return {
+                "status": "in_progress",
+            }
+
+    except Exception as e:
+        print(f"[Deep Research] Poll error: {e}")
+        return {"status": "failed", "error": str(e)}
 
 
 if __name__ == "__main__":

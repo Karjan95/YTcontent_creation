@@ -9,11 +9,11 @@ fi
 set -e
 
 PROJECT_ID="gen-lang-client-0854991687"
-SERVICE_NAME="content-creation-app"
+SERVICE_NAME="content-creation-app-staging"  # Changed to staging service
 REGION="us-central1"
 
 echo "========================================================"
-echo "Deploying $SERVICE_NAME to Project $PROJECT_ID"
+echo "STAGING DEPLOYMENT: $SERVICE_NAME to Project $PROJECT_ID"
 echo "Region: $REGION"
 echo "========================================================"
 
@@ -42,14 +42,15 @@ echo "Setting project to $PROJECT_ID..."
 gcloud config set project $PROJECT_ID
 
 # Deploy to Cloud Run
-echo "Deploying to Cloud Run..."
+echo "Deploying to Cloud Run (Staging)..."
 gcloud run deploy $SERVICE_NAME \
     --source . \
     --region $REGION \
     --allow-unauthenticated \
-    --timeout 3600 \
-    --set-env-vars GOOGLE_CLOUD_PROJECT=$PROJECT_ID
+    --set-env-vars GOOGLE_CLOUD_PROJECT=$PROJECT_ID \
+    --set-env-vars ENVIRONMENT=staging
 
 echo "========================================================"
-echo "Deployment Complete!"
+echo "Staging Deployment Complete!"
+echo "You can now test your changes at the URL provided above."
 echo "========================================================"

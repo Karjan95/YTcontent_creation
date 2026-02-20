@@ -22,10 +22,14 @@
             <p>Create images, voiceovers & scripts with Google's AI</p>
             <button id="googleSignInBtn" class="google-signin-btn" onclick="signInWithGoogle()">
                 <svg width="20" height="20" viewBox="0 0 48 48">
-                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
-                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
-                    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
-                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+                    <path fill="#EA4335"
+                        d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+                    <path fill="#4285F4"
+                        d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+                    <path fill="#FBBC05"
+                        d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+                    <path fill="#34A853"
+                        d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
                 </svg>
                 Sign in with Google
             </button>
@@ -38,7 +42,8 @@
         <div class="modal-card">
             <h2>Set Up Your API Key</h2>
             <p>Enter your Google Gemini API key to get started. Each user needs their own key.</p>
-            <p class="modal-hint">Get your key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a></p>
+            <p class="modal-hint">Get your key from <a href="https://aistudio.google.com/apikey" target="_blank"
+                    rel="noopener">Google AI Studio</a></p>
             <input type="password" id="apiKeyInput" class="style-input" placeholder="AIza...">
             <div id="apiKeyError" class="error-message" style="display: none;"></div>
             <button id="saveApiKeyBtn" onclick="saveApiKey()">Save API Key</button>
@@ -78,6 +83,13 @@
                     <line x1="12" x2="12" y1="19" y2="22" />
                 </svg>
                 Voiceover
+            </button>
+            <button class="tab" data-tab="visuals" onclick="switchTab('visuals')">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="23 7 16 12 23 17 23 7"/>
+                    <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                </svg>
+                Visuals
             </button>
             <button class="tab" data-tab="research" onclick="switchTab('research')">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -192,6 +204,159 @@
             <div id="ttsErrorMessage" class="error-message" style="display: none;"></div>
         </main>
 
+        <!-- ============ VISUALS TAB ============ -->
+        <main id="tab-visuals" class="tab-content">
+
+            <!-- Data Loading Section -->
+            <div class="visuals-data-section">
+                <h3 class="section-title">Load Production Data</h3>
+                <div class="input-mode-toggle">
+                    <button class="mode-btn active" id="visualsModeAuto" onclick="setVisualsDataMode('auto')">
+                        Auto-detect from Phase 3
+                    </button>
+                    <button class="mode-btn" id="visualsModeManual" onclick="setVisualsDataMode('manual')">
+                        Paste Production JSON
+                    </button>
+                </div>
+                <div id="visualsAutoLoad">
+                    <div class="source-badge" id="visualsLoadStatus">
+                        <span class="source-dot idle"></span>
+                        No production data loaded yet
+                    </div>
+                    <button class="btn-secondary" onclick="loadLatestProductionTable()" id="loadProdTableBtn">
+                        Load Latest Production Table
+                    </button>
+                </div>
+                <div id="visualsManualLoad" style="display: none;">
+                    <textarea id="visualsPasteArea" class="paste-area" rows="6"
+                        placeholder='Paste production table JSON here... (the full JSON from Phase 3)'></textarea>
+                    <button class="btn-secondary" style="margin-top: 8px;" onclick="importVisualsJson()">
+                        Import JSON
+                    </button>
+                </div>
+            </div>
+
+            <!-- Visual Style Configuration -->
+            <div class="visuals-config-section" id="visualsConfigSection" style="display: none;">
+                <h3 class="section-title">Visual Style Configuration</h3>
+                <div class="param-row">
+                    <div class="param-field">
+                        <label class="input-label" for="visAspectRatio">Aspect Ratio</label>
+                        <select id="visAspectRatio" onchange="updateVisualsConfig()">
+                            <option value="16:9" selected>16:9 Landscape</option>
+                            <option value="9:16">9:16 Portrait</option>
+                            <option value="1:1">1:1 Square</option>
+                            <option value="3:4">3:4</option>
+                            <option value="4:3">4:3</option>
+                            <option value="4:5">4:5</option>
+                            <option value="5:4">5:4</option>
+                        </select>
+                    </div>
+                    <div class="param-field">
+                        <label class="input-label" for="visResolution">Resolution</label>
+                        <select id="visResolution" onchange="updateVisualsConfig()">
+                            <option value="1K">1K (Fast)</option>
+                            <option value="2K" selected>2K (Balanced)</option>
+                            <option value="4K">4K (High Quality)</option>
+                        </select>
+                    </div>
+                    <div class="param-field">
+                        <label class="input-label" for="visImageModel">Image Model</label>
+                        <select id="visImageModel" onchange="updateVisualsConfig()">
+                            <option value="gemini-3-pro-image-preview" selected>Gemini 3 Pro (Quality)</option>
+                            <option value="gemini-2.5-flash-image">Gemini Flash (Fast)</option>
+                        </select>
+                    </div>
+                    <div class="param-field">
+                        <label class="input-label" for="visVeoModel">Veo Model</label>
+                        <select id="visVeoModel" onchange="updateVisualsConfig()">
+                            <option value="veo-3.1-generate-preview" selected>Veo 3.1 (Quality + Audio)</option>
+                            <option value="veo-3.1-fast">Veo 3.1 Fast</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Style Reference Images -->
+                <div class="visuals-style-images">
+                    <label class="input-label">Style Reference Images (1-4)</label>
+                    <p class="paste-hint">Upload images that define the visual style. These will be sent as references with every image generation.</p>
+                    <div class="image-upload-area">
+                        <input type="file" id="visStyleImageInput" accept="image/*" multiple style="display: none;"
+                            onchange="handleVisualsStyleUpload(event)">
+                        <button class="btn-secondary" onclick="document.getElementById('visStyleImageInput').click()">
+                            Upload Style Images (Max 4)
+                        </button>
+                        <button class="btn-secondary" onclick="clearVisualsStyleImages()" id="visClearStyleBtn" style="display: none;">
+                            Clear
+                        </button>
+                    </div>
+                    <div id="visStyleImagePreviews" class="image-previews"></div>
+                </div>
+
+                <!-- Additional Context -->
+                <div style="margin-top: 12px;">
+                    <label class="input-label" for="visAdditionalContext">Additional Context</label>
+                    <input type="text" id="visAdditionalContext" class="style-input"
+                        placeholder="e.g., 2D Cartoon Style, Anime, Photorealistic..." onchange="updateVisualsConfig()">
+                </div>
+            </div>
+
+            <!-- Character Management -->
+            <div class="visuals-characters-section" id="visualsCharactersSection" style="display: none;">
+                <h3 class="section-title">Characters</h3>
+                <p class="paste-hint">Define characters with reference images for consistent appearance across scenes.</p>
+                <div id="characterList" class="character-list"></div>
+                <button class="btn-secondary" onclick="openAddCharacterModal()">+ Add Character</button>
+            </div>
+
+            <!-- Character Modal -->
+            <div id="characterModal" class="modal-overlay" style="display: none;">
+                <div class="modal-card">
+                    <h2>Add Character</h2>
+                    <label class="input-label">Character Name</label>
+                    <input type="text" id="charNameInput" class="style-input" placeholder="e.g., Detective Miller">
+                    <label class="input-label" style="margin-top: 12px;">Reference Images (1-4)</label>
+                    <div class="image-upload-area">
+                        <input type="file" id="charImageInput" accept="image/*" multiple style="display: none;"
+                            onchange="handleCharImageUpload(event)">
+                        <button class="btn-secondary" onclick="document.getElementById('charImageInput').click()">
+                            Upload Images
+                        </button>
+                    </div>
+                    <div id="charImagePreviews" class="image-previews" style="margin-top: 8px;"></div>
+                    <div style="display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end;">
+                        <button class="btn-secondary" onclick="closeCharacterModal()">Cancel</button>
+                        <button onclick="saveCharacter()">Save Character</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scene List -->
+            <div id="visualsSceneList" class="visuals-scene-list" style="display: none;"></div>
+
+            <!-- Global Action Bar -->
+            <div class="visuals-action-bar" id="visualsActionBar" style="display: none;">
+                <div class="visuals-action-info">
+                    <span id="visualsSceneCount">0 scenes</span>
+                    <span id="visualsImageProgress" style="display: none;"></span>
+                    <span id="visualsVideoProgress" style="display: none;"></span>
+                </div>
+                <div class="visuals-action-buttons">
+                    <button id="generateAllImagesBtn" onclick="generateAllImages()">
+                        Generate All Images
+                    </button>
+                    <button id="animateAllBtn" onclick="animateAllScenes()" style="display: none;">
+                        Animate All Marked
+                    </button>
+                    <button class="btn-secondary" onclick="downloadAllAssets()">
+                        Download All Assets
+                    </button>
+                </div>
+            </div>
+
+            <div id="visualsError" class="error-message" style="display: none;"></div>
+        </main>
+
         <!-- ============ RESEARCH & SCRIPT TAB ============ -->
         <main id="tab-research" class="tab-content">
 
@@ -226,48 +391,15 @@
                             placeholder="e.g., How the fast fashion industry exploits workers in developing countries"></textarea>
 
                         <div class="param-row">
-                            <div class="param-field">
+                            <div class="param-field" style="flex: 1;">
                                 <label class="input-label" for="researchModelSelect">Research Depth</label>
                                 <select id="researchModelSelect">
                                     <option value="fast">⚡ Fast (Gemini Flash)</option>
                                     <option value="deep" selected>🧠 Deep (Gemini Pro + Search)</option>
-                                </select>
-                            </div>
-                            <div class="param-field">
-                                <label class="input-label" for="durationSelect">Video Length</label>
-                                <select id="durationSelect">
-                                    <option value="5">5 minutes</option>
-                                    <option value="10" selected>10 minutes</option>
-                                    <option value="15">15 minutes</option>
-                                    <option value="20">20 minutes</option>
-                                </select>
-                            </div>
-                            <div class="param-field">
-                                <label class="input-label" for="audienceSelect">Audience</label>
-                                <select id="audienceSelect">
-                                    <option value="General" selected>General</option>
-                                    <option value="Young Adults (18-25)">Young Adults (18-25)</option>
-                                    <option value="Professionals">Professionals</option>
-                                    <option value="Expert">Expert</option>
-                                </select>
-                            </div>
-                            <div class="param-field">
-                                <label class="input-label" for="toneSelect">Tone</label>
-                                <select id="toneSelect">
-                                    <option value="">Auto (from template)</option>
-                                    <option value="Investigative">Investigative</option>
-                                    <option value="Conversational">Conversational</option>
-                                    <option value="Confrontational">Confrontational</option>
-                                    <option value="Neutral">Neutral</option>
-                                    <option value="Educational">Educational</option>
-                                    <option value="Entertaining">Entertaining</option>
+                                    <option value="deep_research_agent">🔬 Deep Research Agent (2-5 min)</option>
                                 </select>
                             </div>
                         </div>
-
-                        <label class="input-label">Focus angle <span style="color:#555">(optional)</span></label>
-                        <input type="text" id="focusInput" class="style-input"
-                            placeholder="e.g., Focus on the environmental impact specifically">
 
                         <div class="controls">
                             <button class="btn-secondary" onclick="resetTemplate()">← Back</button>
@@ -290,20 +422,21 @@
                             <div class="sources-list" id="sourcesList"></div>
                         </div>
                     </div>
+
                 </div>
 
                 <div id="phase1Error" class="error-message" style="display: none;"></div>
             </div>
 
             <!-- ═══════════════════════════════════
-                 PHASE 2: SCRIPT WRITING
+                 PHASE 2: NARRATION
                  ═══════════════════════════════════ -->
             <div class="phase-card" id="phase2Card">
                 <div class="phase-header">
                     <div class="phase-number">2</div>
                     <div class="phase-title-group">
-                        <h3 class="phase-title">✍️ Script Writing</h3>
-                        <p class="phase-subtitle">Generate a scene-by-scene script with narration and visuals</p>
+                        <h3 class="phase-title">✍️ Narration</h3>
+                        <p class="phase-subtitle">Choose audience, angle & tone, then generate your narration</p>
                     </div>
                     <div class="phase-status" id="phase2Status">Waiting for input</div>
                 </div>
@@ -319,41 +452,121 @@
                         </button>
                     </div>
 
-                    <!-- Auto mode: uses research dossier -->
+                    <!-- Auto mode: multi-step wizard -->
                     <div id="scriptAutoInput">
                         <div class="source-badge" id="scriptSourceBadge">
                             <span class="source-dot idle"></span>
                             No research loaded yet — complete Phase 1 or switch to manual mode
                         </div>
 
-                        <!-- Script Style Selection -->
-                        <div style="margin-top: 12px;">
-                            <label class="input-label">Script Style</label>
-                            <div class="style-toggle">
-                                <label>
-                                    <input type="radio" name="styleMode" value="template" checked
-                                        onclick="toggleStyleInput()">
-                                    <span>Use Template Default</span>
-                                </label>
-                                <label>
-                                    <input type="radio" name="styleMode" value="youtube" onclick="toggleStyleInput()">
-                                    <span>Mimic YouTube Video</span>
-                                </label>
-                            </div>
-                            <div id="youtubeStyleInput" style="display: none; margin-top: 10px;">
-                                <input type="text" id="styleUrl" class="style-input"
-                                    placeholder="Paste YouTube URL to copy style (e.g., https://youtube.com/watch?v=...)">
-                                <small style="color: #888; display: block; margin-top: 5px;">
-                                    We'll analyze this video's pacing, tone, and structure to write YOUR script.
-                                </small>
+                        <!-- STEP A: Audience -->
+                        <div id="wizardStepA" class="wizard-step" style="display: none;">
+                            <label class="input-label">Step 1: Who is your audience?</label>
+                            <div class="param-row" style="align-items: flex-end;">
+                                <div class="param-field" style="flex: 1;">
+                                    <select id="audienceSelect">
+                                        <option value="General" selected>General</option>
+                                        <option value="Young Adults (18-25)">Young Adults (18-25)</option>
+                                        <option value="Professionals">Professionals</option>
+                                        <option value="Expert">Expert</option>
+                                    </select>
+                                </div>
+                                <button class="btn-secondary" onclick="confirmAudience()">Next →</button>
                             </div>
                         </div>
 
-                        <div class="controls" style="margin-top: 12px;">
-                            <button id="scriptBtn" onclick="generateScriptFromResearch()">
-                                <span id="scriptBtnText">✍️ Generate Script</span>
-                                <div class="spinner" id="scriptSpinner"></div>
-                            </button>
+                        <!-- STEP B: Title / Narrative Angle -->
+                        <div id="wizardStepB" class="wizard-step" style="display: none;">
+                            <label class="input-label">Step 2: Choose a narrative angle</label>
+                            <p class="paste-hint">Each title represents a different way to tell the story. Pick one, edit it, or write your own.</p>
+                            <div id="titleSpinnerWrap" style="display: none;">
+                                <div class="title-loading">
+                                    <div class="spinner" style="display: inline-block;"></div>
+                                    <span>Generating title suggestions...</span>
+                                </div>
+                            </div>
+                            <div id="titleCards" class="title-cards-grid"></div>
+                            <div id="titleEditSection" style="display: none;">
+                                <label class="input-label" style="margin-top: 12px;">Your Title</label>
+                                <input type="text" id="titleEditInput" class="style-input title-edit-input"
+                                    placeholder="Type your own title or edit the selected one">
+                                <div style="margin-top: 8px;">
+                                    <button class="btn-secondary" onclick="confirmTitle()">Confirm Title →</button>
+                                </div>
+                                <div id="titleConfirmedBadge" class="source-badge" style="display: none;"></div>
+                            </div>
+                        </div>
+
+                        <!-- STEP C: Length, Tone, Focus -->
+                        <div id="wizardStepC" class="wizard-step" style="display: none;">
+                            <label class="input-label">Step 3: Script parameters</label>
+                            <div class="param-row">
+                                <div class="param-field">
+                                    <label class="input-label" for="durationSelect">Video Length</label>
+                                    <select id="durationSelect">
+                                        <option value="5">5 minutes</option>
+                                        <option value="10" selected>10 minutes</option>
+                                        <option value="15">15 minutes</option>
+                                        <option value="20">20 minutes</option>
+                                    </select>
+                                </div>
+                                <div class="param-field">
+                                    <label class="input-label" for="toneSelect">Tone</label>
+                                    <select id="toneSelect">
+                                        <option value="">Auto (from template)</option>
+                                        <option value="Investigative">Investigative</option>
+                                        <option value="Conversational">Conversational</option>
+                                        <option value="Confrontational">Confrontational</option>
+                                        <option value="Neutral">Neutral</option>
+                                        <option value="Educational">Educational</option>
+                                        <option value="Entertaining">Entertaining</option>
+                                    </select>
+                                    <div id="toneSuggestionBadge" class="tone-suggestion" style="display: none;"></div>
+                                </div>
+                            </div>
+                            <label class="input-label">Focus angle <span style="color:#555">(optional)</span></label>
+                            <input type="text" id="focusInput" class="style-input"
+                                placeholder="e.g., Focus on the environmental impact specifically">
+
+                            <!-- Script Style Selection -->
+                            <div style="margin-top: 12px;">
+                                <label class="input-label">Script Style</label>
+                                <div class="style-toggle">
+                                    <label>
+                                        <input type="radio" name="styleMode" value="template" checked
+                                            onclick="toggleStyleInput()">
+                                        <span>Use Template Default</span>
+                                    </label>
+                                    <label>
+                                        <input type="radio" name="styleMode" value="transcript"
+                                            onclick="toggleStyleInput()">
+                                        <span>Analyze Transcript Style</span>
+                                    </label>
+                                </div>
+                                <div id="transcriptStyleInput" style="display: none; margin-top: 10px;">
+                                    <textarea id="styleTranscript" class="style-input" rows="6"
+                                        placeholder="Paste the beginning of a transcript here (first 5-10 minutes)...
+We'll analyze the pacing, tone, and structure to write YOUR script in this style."></textarea>
+                                </div>
+                            </div>
+
+                            <div class="controls" style="margin-top: 12px;">
+                                <button id="scriptBtn" onclick="generateNarration()">
+                                    <span id="scriptBtnText">✍️ Generate Narration</span>
+                                    <div class="spinner" id="scriptSpinner"></div>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- STEP D: Narration Display -->
+                        <div id="wizardStepD" class="wizard-step" style="display: none;">
+                            <label class="input-label">Your Narration <span id="narrationEditHint" style="font-weight:400; color:#888; font-size:0.8rem;">(click any beat text to edit inline)</span></label>
+                            <div id="narrationDisplay" class="narration-display"></div>
+                            <div class="controls script-actions">
+                                <button class="btn-secondary" onclick="copyNarration()">📋 Copy</button>
+                                <button class="btn-secondary" onclick="downloadNarration()">💾 Download</button>
+                                <button id="lockNarrationBtn" class="btn-primary" onclick="lockNarration()">🔒 Lock Narration & Continue to Phase 3</button>
+                            </div>
                         </div>
                     </div>
 
@@ -361,19 +574,33 @@
                     <div id="scriptManualInput" style="display: none;">
                         <label class="input-label">Paste Your Script</label>
                         <p class="paste-hint">
-                            ✅ <strong>Paste your plain text script</strong> — the system will automatically break it down into scenes<br>
-                            <small style="color: #666;">Or paste structured JSON: <code>{ "script": [ { "scene": 1, ... } ] }</code></small>
+                            ✅ <strong>Paste your plain text script</strong> — the system will automatically break it
+                            down into scenes<br>
+                            <small style="color: #666;">Or paste structured JSON:
+                                <code>{ "script": [ { "scene": 1, ... } ] }</code></small>
                         </p>
-                        <textarea id="scriptPasteArea" rows="8" class="paste-area"
-                            placeholder="Paste your script here as plain text...
+                        <textarea id="scriptPasteArea" rows="8" class="paste-area" placeholder="Paste your script here as plain text...
 
 The system will automatically:
 • Break it down into timed scenes
 • Extract visual descriptions
 • Prepare it for production (Phase 3)
 
-No formatting needed — just paste your narration!"
-                        ></textarea>
+No formatting needed — just paste your narration!"></textarea>
+
+                        <!-- Manual Style Input -->
+                        <div style="margin-top: 15px; border-top: 1px solid #333; padding-top: 10px;">
+                            <label class="input-label" style="display:flex; align-items:center; cursor:pointer;"
+                                onclick="toggleManualStyle()">
+                                <span>🎨 Apply Style from Transcript (Optional)</span>
+                                <span id="manualStyleToggleArrow"
+                                    style="margin-left:auto; transform: rotate(-90deg); transition: transform 0.2s;">▼</span>
+                            </label>
+                            <div id="manualStyleSection" style="display:none; margin-top: 8px;">
+                                <textarea id="manualStyleTranscript" class="style-input" rows="4"
+                                    placeholder="Paste a reference transcript here (first 5-10 mins). We'll analyze its pacing and Visual Style to break down YOUR script."></textarea>
+                            </div>
+                        </div>
                         <div class="controls" style="margin-top: 12px;">
                             <button onclick="importScript()">
                                 <span>📋 Import & Breakdown Script</span>
@@ -432,7 +659,7 @@ No formatting needed — just paste your narration!"
                             🔗 Use Script from Phase 2
                         </button>
                         <button class="mode-btn" id="prodModeManual" onclick="setProdInputMode('manual')">
-                            📋 Paste Your Own Scene Breakdown
+                            📋 Paste Your Own Narration JSON
                         </button>
                     </div>
 
@@ -440,132 +667,139 @@ No formatting needed — just paste your narration!"
                     <div id="prodAutoInput">
                         <div class="source-badge" id="prodSourceBadge">
                             <span class="source-dot idle"></span>
-                            No script loaded yet — complete Phase 2 or switch to manual mode
+                            No narration loaded yet — complete Phase 2 or switch to manual mode
                         </div>
                     </div>
 
                     <!-- Manual mode: paste JSON -->
                     <div id="prodManualInput" style="display: none;">
-                        <label class="input-label">Paste Scene Breakdown JSON</label>
-                        <p class="paste-hint">Paste a JSON object with a <code>"script"</code> array. Each entry should
-                            have: <code>scene</code>, <code>narration</code>, <code>visual</code>, <code>emotion</code>,
-                            etc.</p>
+                        <label class="input-label">Paste Narration JSON</label>
+                        <p class="paste-hint">Paste a JSON object with a <code>"narration"</code> array of acts/beats.
+                            Legacy <code>"script"</code> arrays are also accepted and will be converted.</p>
                         <textarea id="prodPasteArea" rows="8" class="paste-area"
-                            placeholder='{ "title": "My Video", "script": [ { "scene": 1, "narration": "...", "visual": "...", "emotion": "..." } ] }'></textarea>
+                            placeholder='{ "title": "My Video", "narration": [ { "act": "ACT 1", "beat": "Hook", "text": "..." } ] }'></textarea>
                         <div class="controls" style="margin-top: 12px;">
                             <button onclick="importSceneBreakdown()">
-                                <span>📋 Import Scene Breakdown</span>
+                                <span>📋 Import Narration</span>
                             </button>
                         </div>
                     </div>
 
                     <!-- Style Reference Images -->
                     <div class="style-images-section" id="styleImagesSection">
-                        <label class="input-label">🖼️ Style Reference Images (Optional)</label>
+                        <label class="input-label">Style Reference Images (Optional)</label>
                         <p class="paste-hint">
-                            Upload 1-4 images to define a <strong>custom visual style</strong> (color palette, lighting, mood, etc.). The AI will extract the <em>aesthetic qualities</em> and apply them to all prompts. This replaces the manual dropdown settings below.
+                            Upload 1-4 images to define a <strong>custom visual style</strong>. The AI will extract
+                            the <em>artistic intent</em> and recommend which prompt fields to use.
                         </p>
                         <div class="image-upload-area">
-                            <input type="file" id="styleImageInput" accept="image/*" multiple style="display: none;" onchange="handleStyleImageUpload(event)">
+                            <input type="file" id="styleImageInput" accept="image/*" multiple style="display: none;"
+                                onchange="handleStyleImageUpload(event)">
                             <button class="btn-secondary" onclick="document.getElementById('styleImageInput').click()">
-                                📁 Upload Images (Max 4)
+                                Upload Images (Max 4)
                             </button>
-                            <button class="btn-secondary" onclick="clearStyleImages()" id="clearImagesBtn" style="display: none;">
-                                🗑️ Clear Images
+                            <button class="btn-secondary" onclick="clearStyleImages()" id="clearImagesBtn"
+                                style="display: none;">
+                                Clear Images
                             </button>
                         </div>
                         <div id="styleImagePreviews" class="image-previews"></div>
                         <div id="styleAnalysisResult" class="style-analysis-result" style="display: none;"></div>
                     </div>
 
-                    <!-- Visual Style Options -->
-                    <div class="style-section" id="styleSection">
-                        <div class="section-header" onclick="toggleCollapse('styleBody')">
-                            <label class="input-label">🎨 Visual Style (Manual Settings)</label>
-                            <span class="collapse-icon" id="styleBody-icon">▼</span>
+                    <!-- Free-Text Style Input (alternative to images) -->
+                    <div class="style-text-section" id="styleTextSection">
+                        <label class="input-label">Or Describe Your Visual Style</label>
+                        <p class="paste-hint">
+                            No reference images? Describe the look you want in plain language.
+                        </p>
+                        <div style="display: flex; gap: 8px; align-items: flex-start;">
+                            <textarea id="styleTextInput" class="text-area" rows="2"
+                                placeholder="e.g., 2D cartoon with bold outlines, bright primary colors, simple backgrounds, no shadows"
+                                style="flex: 1;"></textarea>
+                            <button class="btn-secondary" onclick="analyzeStyleFromText()" id="analyzeTextBtn">
+                                Analyze
+                            </button>
                         </div>
-                        <div id="styleBody" class="collapsible">
-                            <div class="param-row">
-                                <div class="param-field">
-                                    <label class="input-label" for="genreSelect">Genre / Tone</label>
-                                    <select id="genreSelect">
-                                        <option value="Cinematic Drama" selected>Cinematic Drama</option>
-                                        <option value="Documentary Realism">Documentary Realism</option>
-                                        <option value="Noir / Thriller">Noir / Thriller</option>
-                                        <option value="Corporate / Commercial">Corporate / Commercial</option>
-                                        <option value="Investigative / Exposé">Investigative / Exposé</option>
-                                        <option value="Human Interest / Warm">Human Interest / Warm</option>
-                                        <option value="Epic / Grand">Epic / Grand</option>
-                                        <option value="Experimental / Artistic">Experimental / Artistic</option>
-                                    </select>
-                                </div>
-                                <div class="param-field">
-                                    <label class="input-label" for="colorWorldSelect">Color World</label>
-                                    <select id="colorWorldSelect">
-                                        <option value="Neutral" selected>Neutral</option>
-                                        <option value="Warm">Warm (ambers, oranges)</option>
-                                        <option value="Cool">Cool (teals, blues)</option>
-                                        <option value="High Contrast">High Contrast</option>
-                                        <option value="Desaturated / Muted">Desaturated / Muted</option>
-                                        <option value="Vibrant / Saturated">Vibrant / Saturated</option>
-                                    </select>
-                                </div>
-                                <div class="param-field">
-                                    <label class="input-label" for="lightingSelect">Lighting</label>
-                                    <select id="lightingSelect">
-                                        <option value="Natural / Available Light" selected>Natural / Available</option>
-                                        <option value="Dramatic / Chiaroscuro">Dramatic / Chiaroscuro</option>
-                                        <option value="Soft / Diffused">Soft / Diffused</option>
-                                        <option value="Hard / Direct">Hard / Direct</option>
-                                        <option value="Mixed Practical">Mixed Practical</option>
-                                        <option value="Stylized / Colored">Stylized / Colored</option>
-                                    </select>
-                                </div>
+                    </div>
+
+                    <!-- Style Review & Approval Panel -->
+                    <div id="styleReviewPanel" class="style-review-panel" style="display: none;">
+                        <div class="review-header">
+                            <label class="input-label">Style Review & Approval</label>
+                            <span id="styleApprovedBadge" class="style-approved-badge" style="display: none;">Approved</span>
+                        </div>
+
+                        <div class="review-field">
+                            <label>Style Summary</label>
+                            <textarea id="reviewStyleSummary" rows="2" class="review-input"></textarea>
+                        </div>
+
+                        <div class="review-grid">
+                            <div class="review-field">
+                                <label>Detail Level</label>
+                                <input type="text" id="reviewDetailLevel" class="review-input">
                             </div>
-                            <div class="param-row">
-                                <div class="param-field">
-                                    <label class="input-label" for="cameraSelect">Camera Personality</label>
-                                    <select id="cameraSelect">
-                                        <option value="Authoritative" selected>Authoritative</option>
-                                        <option value="Observational">Observational</option>
-                                        <option value="Intimate">Intimate</option>
-                                        <option value="Nervous / Urgent">Nervous / Urgent</option>
-                                        <option value="Graceful">Graceful</option>
-                                        <option value="Dynamic">Dynamic</option>
-                                    </select>
-                                </div>
-                                <div class="param-field">
-                                    <label class="input-label" for="movementSelect">Movement Style</label>
-                                    <select id="movementSelect">
-                                        <option value="Subtle Movement" selected>Subtle Movement</option>
-                                        <option value="Mostly Static">Mostly Static</option>
-                                        <option value="Motivated Movement">Motivated Movement</option>
-                                        <option value="Expressive Movement">Expressive Movement</option>
-                                    </select>
-                                </div>
-                                <div class="param-field">
-                                    <label class="input-label" for="aspectRatioSelect">Aspect Ratio</label>
-                                    <select id="aspectRatioSelect">
-                                        <option value="16:9" selected>16:9 Landscape</option>
-                                        <option value="9:16">9:16 Portrait</option>
-                                    </select>
-                                </div>
-                                <div class="param-field">
-                                    <label class="input-label" for="imageModelSelect">Image Model</label>
-                                    <select id="imageModelSelect">
-                                        <option value="Generic" selected>Generic</option>
-                                        <option value="Midjourney V7">Midjourney V7</option>
-                                        <option value="FLUX Pro">FLUX Pro</option>
-                                        <option value="Stable Diffusion XL">SDXL</option>
-                                    </select>
-                                </div>
+                            <div class="review-field">
+                                <label>Scene Complexity</label>
+                                <input type="text" id="reviewSceneComplexity" class="review-input">
                             </div>
+                            <div class="review-field">
+                                <label>Camera Language</label>
+                                <input type="text" id="reviewCameraLanguage" class="review-input">
+                            </div>
+                            <div class="review-field">
+                                <label>Lighting Approach</label>
+                                <input type="text" id="reviewLighting" class="review-input">
+                            </div>
+                            <div class="review-field">
+                                <label>Subject Framing</label>
+                                <input type="text" id="reviewSubjectFraming" class="review-input">
+                            </div>
+                            <div class="review-field">
+                                <label>Writing Style</label>
+                                <input type="text" id="reviewWritingStyle" class="review-input">
+                            </div>
+                            <div class="review-field">
+                                <label>Color Palette</label>
+                                <input type="text" id="reviewColorPalette" class="review-input">
+                            </div>
+                            <div class="review-field">
+                                <label>Texture</label>
+                                <input type="text" id="reviewTexture" class="review-input">
+                            </div>
+                            <div class="review-field">
+                                <label>Default Mood</label>
+                                <input type="text" id="reviewMoodDefault" class="review-input">
+                            </div>
+                        </div>
+
+                        <div class="review-field" style="margin-top: 12px;">
+                            <label>Prompt Schema — Which fields to include in production prompts</label>
+                            <div id="schemaFieldsChecklist" class="schema-checklist"></div>
+                        </div>
+
+                        <div class="review-field" style="margin-top: 12px;">
+                            <label>Aspect Ratio</label>
+                            <select id="reviewAspectRatio" class="review-input" style="width: auto;">
+                                <option value="16:9" selected>16:9 Landscape</option>
+                                <option value="9:16">9:16 Portrait</option>
+                            </select>
+                        </div>
+
+                        <div class="controls" style="margin-top: 12px;">
+                            <button class="btn-primary" onclick="approveStyle()">
+                                Approve Style & Schema
+                            </button>
+                            <button class="btn-secondary" onclick="clearApprovedStyle()">
+                                Reset
+                            </button>
                         </div>
                     </div>
 
                     <div class="controls" style="margin-top: 16px;">
                         <button id="productionBtn" onclick="generateProductionTable()">
-                            <span id="productionBtnText">🎬 Generate Production Table</span>
+                            <span id="productionBtnText">Generate Production Table</span>
                             <div class="spinner" id="productionSpinner"></div>
                         </button>
                     </div>
@@ -605,8 +839,10 @@ No formatting needed — just paste your narration!"
                         </div>
 
                         <div class="controls script-actions">
-                            <button class="btn-secondary" onclick="copyFirstFramePrompts()">🖼️ Copy All First Frame Prompts</button>
-                            <button class="btn-secondary" onclick="copyLastFramePrompts()">🖼️ Copy All Last Frame Prompts</button>
+                            <button class="btn-secondary" onclick="copyFirstFramePrompts()">🖼️ Copy All First Frame
+                                Prompts</button>
+                            <button class="btn-secondary" onclick="copyLastFramePrompts()">🖼️ Copy All Last Frame
+                                Prompts</button>
                             <button class="btn-secondary" onclick="copyVeoPrompts()">🎬 Copy All Veo Prompts</button>
                             <button class="btn-secondary" onclick="copyAllPrompts()">📋 Copy All Prompts</button>
                             <button class="btn-secondary" onclick="downloadProductionTable()">💾 Download JSON</button>
@@ -748,10 +984,35 @@ No formatting needed — just paste your narration!"
            ══════════════════════════════════════ */
         let selectedTemplate = null;
         let currentDossier = '';
+        let selectedTitle = null;
         let currentScriptData = null;
+        let currentNarration = null;   // Narration data (acts/beats) from Phase 2
+        let currentDossierId = null;   // Firestore dossier ID
         let currentProductionData = null;
         let styleReferenceImages = []; // Array of base64 image data
-        let styleAnalysis = null; // AI-analyzed style from images
+        let approvedStyle = null; // Structured style dict {style_summary, style_intent, prompt_schema}
+
+        // Master list of all possible prompt fields
+        const PROMPT_FIELDS = [
+            { key: 'shot_size', label: 'Shot Size (wide, medium, close-up)', locked: true },
+            { key: 'subject', label: 'Subject Description', locked: true },
+            { key: 'arrangement', label: 'Pose / Camera Angle', locked: true },
+            { key: 'background', label: 'Background / Environment', locked: true },
+            { key: 'mood', label: 'Mood / Atmosphere', locked: false },
+            { key: 'lighting', label: 'Lighting Setup', locked: false },
+            { key: 'lighting_direction', label: 'Lighting Direction & Color Temp', locked: false },
+            { key: 'camera_lens', label: 'Camera Lens (mm)', locked: false },
+            { key: 'camera_aperture', label: 'Aperture / f-stop', locked: false },
+            { key: 'dof', label: 'Depth of Field', locked: false },
+            { key: 'film_stock', label: 'Film Stock / Texture', locked: false },
+            { key: 'color_restriction', label: 'Color Palette', locked: false },
+            { key: 'output_style', label: 'Output Style / Aesthetic', locked: false },
+            { key: 'room_objects', label: 'Props / Objects', locked: false },
+            { key: 'made_out_of', label: 'Material / Texture', locked: false },
+            { key: 'tags', label: 'Aesthetic Tags', locked: false },
+        ];
+        let deepResearchInteractionId = null; // Interaction ID for async deep research
+        let deepResearchPollTimer = null; // Polling timer for deep research
 
         /* ── Tab Switching ── */
         function switchTab(tabName) {
@@ -926,30 +1187,27 @@ No formatting needed — just paste your narration!"
         function updateScriptSourceBadge() {
             const badge = document.getElementById('scriptSourceBadge');
             if (currentDossier) {
-                badge.innerHTML = '<span class="source-dot ready"></span> ✅ Research loaded — ready to generate script';
+                badge.innerHTML = '<span class="source-dot ready"></span> Research loaded — select your audience to begin';
+                document.getElementById('wizardStepA').style.display = 'block';
             } else {
                 badge.innerHTML = '<span class="source-dot idle"></span> No research loaded yet — complete Phase 1 or switch to manual mode';
+                document.getElementById('wizardStepA').style.display = 'none';
             }
         }
 
         function updateProdSourceBadge() {
             const badge = document.getElementById('prodSourceBadge');
-            if (currentScriptData?.script) {
-                const s = currentScriptData.script;
-                let processedText = "";
-
-                if (s.script && Array.isArray(s.script) && s.script.length > 0) {
-                    const count = s.total_scenes || s.script.length;
-                    processedText = `(${count} scenes)`;
-                } else if (s.raw_text) {
-                    processedText = "(Plain Text)";
-                } else {
-                    processedText = "(Unknown format)";
+            if (currentNarration) {
+                const beats = currentNarration.narration || [];
+                let actCount = 0;
+                let beatCount = 0;
+                if (Array.isArray(beats)) {
+                    actCount = new Set(beats.map(b => b.act)).size;
+                    beatCount = beats.length;
                 }
-
-                badge.innerHTML = `<span class="source-dot ready"></span> ✅ Script loaded ${processedText} — ready to generate production table`;
+                badge.innerHTML = `<span class="source-dot ready"></span> Narration loaded (${actCount} acts, ${beatCount} beats) — ready to generate production table`;
             } else {
-                badge.innerHTML = '<span class="source-dot idle"></span> No script loaded yet — complete Phase 2 or switch to manual mode';
+                badge.innerHTML = '<span class="source-dot idle"></span> No narration loaded yet — complete Phase 2 or switch to manual mode';
             }
         }
 
@@ -1001,6 +1259,7 @@ No formatting needed — just paste your narration!"
             const btnText = document.getElementById('researchBtnText');
             const spinner = document.getElementById('researchSpinner');
             const errorDiv = document.getElementById('phase1Error');
+            const researchModel = document.getElementById('researchModelSelect').value;
 
             btn.disabled = true;
             btnText.style.display = 'none';
@@ -1008,7 +1267,13 @@ No formatting needed — just paste your narration!"
             errorDiv.style.display = 'none';
             document.getElementById('researchResults').style.display = 'none';
 
-            updatePhaseStatus(1, 'Researching…', 'running');
+            // Clear any previous deep research polling
+            if (deepResearchPollTimer) {
+                clearInterval(deepResearchPollTimer);
+                deepResearchPollTimer = null;
+            }
+
+            updatePhaseStatus(1, researchModel === 'deep_research_agent' ? 'Starting Deep Research Agent…' : 'Researching…', 'running');
 
             try {
                 const response = await authFetch('/api/research', {
@@ -1017,55 +1282,272 @@ No formatting needed — just paste your narration!"
                     body: JSON.stringify({
                         topic,
                         template_id: selectedTemplate,
-                        research_model: document.getElementById('researchModelSelect').value
+                        research_model: researchModel
                     }),
                 });
 
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Research failed');
 
-                currentDossier = data.dossier;
+                // Async deep research: start polling
+                if (data.async && data.interaction_id) {
+                    deepResearchInteractionId = data.interaction_id;
+                    updatePhaseStatus(1, 'Deep Research running… (polling every 10s)', 'running');
+                    btnText.textContent = '🔬 Researching…';
+                    btnText.style.display = 'inline';
+                    spinner.style.display = 'inline-block';
 
-                // Display results
-                document.getElementById('researchSummary').innerHTML =
-                    `<h4>Summary</h4><p>${escapeHtml(data.summary)}</p>`;
-
-                if (data.key_facts && data.key_facts.length) {
-                    document.getElementById('keyFacts').innerHTML =
-                        `<h4>Key Facts</h4><ul>${data.key_facts.map(f => `<li>${escapeHtml(f)}</li>`).join('')}</ul>`;
+                    deepResearchPollTimer = setInterval(() => {
+                        pollDeepResearch(topic);
+                    }, 10000);
+                    return; // Don't reset button — polling continues
                 }
 
-                if (data.sources && data.sources.length) {
-                    document.getElementById('sourcesList').innerHTML =
-                        `<h4>Sources Referenced</h4><ul class="sources">${data.sources.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`;
-                }
-
-                document.getElementById('researchResults').style.display = 'block';
-
-                const factCount = data.key_facts?.length || 0;
-                updatePhaseStatus(1, `✅ Complete — ${factCount} facts found`, 'complete');
-
-                // Auto-update downstream Phase 2 source badge
-                updateScriptSourceBadge();
+                // Synchronous result (fast/deep)
+                displayResearchResults(data);
 
             } catch (error) {
                 errorDiv.innerText = error.message;
                 errorDiv.style.display = 'block';
-                updatePhaseStatus(1, '❌ Error', 'error');
-            } finally {
+                updatePhaseStatus(1, 'Error', 'error');
                 btn.disabled = false;
                 btnText.style.display = 'inline';
+                btnText.textContent = '🔍 Start Research';
                 spinner.style.display = 'none';
             }
         }
 
-        /* ── Phase 2: Script Writing ── */
-        function toggleStyleInput() {
-            const isYoutube = document.querySelector('input[name="styleMode"][value="youtube"]').checked;
-            document.getElementById('youtubeStyleInput').style.display = isYoutube ? 'block' : 'none';
+        async function pollDeepResearch(topic) {
+            const errorDiv = document.getElementById('phase1Error');
+            try {
+                const response = await authFetch('/api/research/poll', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        interaction_id: deepResearchInteractionId,
+                        topic: topic,
+                        template_id: selectedTemplate,
+                    }),
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'in_progress') {
+                    return; // Keep polling
+                }
+
+                // Stop polling
+                clearInterval(deepResearchPollTimer);
+                deepResearchPollTimer = null;
+                deepResearchInteractionId = null;
+
+                const btn = document.getElementById('researchBtn');
+                const btnText = document.getElementById('researchBtnText');
+                const spinner = document.getElementById('researchSpinner');
+                btn.disabled = false;
+                btnText.textContent = '🔍 Start Research';
+                btnText.style.display = 'inline';
+                spinner.style.display = 'none';
+
+                if (data.error || data.status === 'failed') {
+                    throw new Error(data.error || 'Deep research failed');
+                }
+
+                // Completed
+                displayResearchResults(data);
+
+            } catch (error) {
+                clearInterval(deepResearchPollTimer);
+                deepResearchPollTimer = null;
+                deepResearchInteractionId = null;
+
+                const btn = document.getElementById('researchBtn');
+                const btnText = document.getElementById('researchBtnText');
+                const spinner = document.getElementById('researchSpinner');
+                btn.disabled = false;
+                btnText.textContent = '🔍 Start Research';
+                btnText.style.display = 'inline';
+                spinner.style.display = 'none';
+
+                errorDiv.innerText = error.message;
+                errorDiv.style.display = 'block';
+                updatePhaseStatus(1, 'Error', 'error');
+            }
         }
 
-        async function generateScriptFromResearch() {
+        function displayResearchResults(data) {
+            currentDossier = data.dossier;
+
+            // Display results
+            document.getElementById('researchSummary').innerHTML =
+                `<h4>Summary</h4><p>${escapeHtml(data.summary)}</p>`;
+
+            if (data.key_facts && data.key_facts.length) {
+                document.getElementById('keyFacts').innerHTML =
+                    `<h4>Key Facts</h4><ul>${data.key_facts.map(f => `<li>${escapeHtml(f)}</li>`).join('')}</ul>`;
+            } else {
+                document.getElementById('keyFacts').innerHTML = '';
+            }
+
+            if (data.sources && data.sources.length) {
+                document.getElementById('sourcesList').innerHTML =
+                    `<h4>Sources Referenced</h4><ul class="sources">${data.sources.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`;
+            } else {
+                document.getElementById('sourcesList').innerHTML = '';
+            }
+
+            document.getElementById('researchResults').style.display = 'block';
+
+            const factCount = data.key_facts?.length || 0;
+            const model = document.getElementById('researchModelSelect').value;
+            const label = model === 'deep_research_agent' ? 'Deep Research complete' : `Research complete (${factCount} facts)`;
+            updatePhaseStatus(1, label, 'complete');
+
+            // Reset button state
+            const btn = document.getElementById('researchBtn');
+            const btnText = document.getElementById('researchBtnText');
+            const spinner = document.getElementById('researchSpinner');
+            btn.disabled = false;
+            btnText.textContent = '🔍 Start Research';
+            btnText.style.display = 'inline';
+            spinner.style.display = 'none';
+
+            // Auto-update downstream Phase 2 source badge (shows wizardStepA)
+            updateScriptSourceBadge();
+        }
+
+        /* ── Title Suggestions (Phase 2 Wizard) ── */
+        async function suggestTitles() {
+            const spinnerWrap = document.getElementById('titleSpinnerWrap');
+            const cardsDiv = document.getElementById('titleCards');
+            const editSection = document.getElementById('titleEditSection');
+
+            spinnerWrap.style.display = 'flex';
+            cardsDiv.innerHTML = '';
+            editSection.style.display = 'none';
+            selectedTitle = null;
+
+            try {
+                const response = await authFetch('/api/suggest-titles', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        topic: document.getElementById('researchTopic').value.trim(),
+                        template_id: selectedTemplate,
+                        dossier: currentDossier,
+                        audience: document.getElementById('audienceSelect').value,
+                    }),
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Title suggestion failed');
+
+                spinnerWrap.style.display = 'none';
+
+                cardsDiv.innerHTML = data.titles.map((t, i) => `
+                    <button class="title-card" onclick="selectTitleCard(${i}, this)" data-title="${escapeHtml(t.title)}">
+                        <span class="title-card-number">${i + 1}</span>
+                        <span class="title-card-text">${escapeHtml(t.title)}</span>
+                        <span class="title-card-desc">${escapeHtml(t.description)}</span>
+                    </button>
+                `).join('');
+
+                editSection.style.display = 'block';
+
+                document.getElementById('titleEditInput').addEventListener('input', function () {
+                    selectedTitle = this.value.trim();
+                    updateTitleConfirmBadge();
+                });
+
+            } catch (error) {
+                spinnerWrap.style.display = 'none';
+                cardsDiv.innerHTML = `<p style="color:#ff6b6b">Failed to generate titles: ${escapeHtml(error.message)}</p>`;
+                editSection.style.display = 'block';
+            }
+        }
+
+        function selectTitleCard(index, el) {
+            document.querySelectorAll('.title-card').forEach(c => c.classList.remove('selected'));
+            el.classList.add('selected');
+
+            const title = el.getAttribute('data-title');
+            document.getElementById('titleEditInput').value = title;
+            selectedTitle = title;
+            updateTitleConfirmBadge();
+        }
+
+        function updateTitleConfirmBadge() {
+            const badge = document.getElementById('titleConfirmedBadge');
+            if (selectedTitle) {
+                badge.style.display = 'block';
+                badge.innerHTML = `<span class="source-dot ready"></span> Title: "${escapeHtml(selectedTitle)}"`;
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+
+        /* ── Phase 2: Narration Wizard ── */
+        function toggleStyleInput() {
+            const isTranscript = document.querySelector('input[name="styleMode"][value="transcript"]').checked;
+            document.getElementById('transcriptStyleInput').style.display = isTranscript ? 'block' : 'none';
+        }
+
+        function confirmAudience() {
+            document.getElementById('wizardStepB').style.display = 'block';
+            suggestTitles();
+        }
+
+        function confirmTitle() {
+            const titleInput = document.getElementById('titleEditInput').value.trim();
+            if (!titleInput) {
+                selectedTitle = null;
+                return alert('Please select or type a title first.');
+            }
+            selectedTitle = titleInput;
+            updateTitleConfirmBadge();
+            autoSuggestTone();
+        }
+
+        async function autoSuggestTone() {
+            const badge = document.getElementById('toneSuggestionBadge');
+            badge.style.display = 'block';
+            badge.innerHTML = 'Suggesting tone...';
+
+            try {
+                const response = await authFetch('/api/auto-suggest-tone', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        template_id: selectedTemplate,
+                        selected_title: selectedTitle,
+                        audience: document.getElementById('audienceSelect').value,
+                    }),
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Tone suggestion failed');
+
+                const toneSelect = document.getElementById('toneSelect');
+                const suggestedTone = data.suggested_tone || 'Conversational';
+                const options = Array.from(toneSelect.options);
+                const match = options.find(o => o.value.toLowerCase() === suggestedTone.toLowerCase());
+                if (match) {
+                    toneSelect.value = match.value;
+                } else {
+                    toneSelect.value = '';
+                }
+
+                badge.innerHTML = `Suggested: <strong>${escapeHtml(suggestedTone)}</strong> — ${escapeHtml(data.reasoning || '')}`;
+
+            } catch (error) {
+                badge.innerHTML = `<span style="color:#888">Could not auto-suggest tone</span>`;
+                console.error('Tone suggestion error:', error);
+            }
+
+            document.getElementById('wizardStepC').style.display = 'block';
+        }
+
+        async function generateNarration() {
             if (!currentDossier) return alert('No research data. Run research first, or switch to manual mode.');
 
             const topic = document.getElementById('researchTopic').value.trim();
@@ -1075,10 +1557,10 @@ No formatting needed — just paste your narration!"
             const errorDiv = document.getElementById('phase2Error');
 
             const styleMode = document.querySelector('input[name="styleMode"]:checked').value;
-            const styleUrl = document.getElementById('styleUrl').value.trim();
+            const styleTranscript = document.getElementById('styleTranscript').value.trim();
 
-            if (styleMode === 'youtube' && !styleUrl) {
-                return alert('Please enter a YouTube URL to mimic.');
+            if (styleMode === 'transcript' && !styleTranscript) {
+                return alert('Please paste a transcript to analyze.');
             }
 
             btn.disabled = true;
@@ -1086,7 +1568,7 @@ No formatting needed — just paste your narration!"
             spinner.style.display = 'block';
             errorDiv.style.display = 'none';
 
-            updatePhaseStatus(2, 'Writing script…', 'running');
+            updatePhaseStatus(2, 'Writing narration…', 'running');
 
             try {
                 const response = await authFetch('/api/generate-script', {
@@ -1101,26 +1583,32 @@ No formatting needed — just paste your narration!"
                         tone: document.getElementById('toneSelect').value,
                         focus: document.getElementById('focusInput').value,
                         style_mode: styleMode,
-                        style_url: styleUrl
+                        style_transcript: styleTranscript,
+                        selected_title: selectedTitle || ''
                     }),
                 });
 
                 const data = await response.json();
-                if (!response.ok) throw new Error(data.error || 'Script generation failed');
+                if (!response.ok) throw new Error(data.error || 'Narration generation failed');
 
-                currentScriptData = data;
-                renderScriptTable(data.script);
+                currentNarration = data.narration;
+                renderNarration(data.narration);
+                document.getElementById('wizardStepD').style.display = 'block';
 
-                const sceneCount = data.script.total_scenes || data.script.script?.length || '?';
-                updatePhaseStatus(2, `✅ Complete — ${sceneCount} scenes`, 'complete');
-
-                // Auto-update downstream Phase 3 source badge
+                const beats = data.narration?.narration || [];
+                let actCount = 0;
+                let beatCount = 0;
+                if (Array.isArray(beats)) {
+                    actCount = new Set(beats.map(b => b.act)).size;
+                    beatCount = beats.length;
+                }
+                updatePhaseStatus(2, `Narration complete (${actCount} acts, ${beatCount} beats)`, 'complete');
                 updateProdSourceBadge();
 
             } catch (error) {
                 errorDiv.innerText = error.message;
                 errorDiv.style.display = 'block';
-                updatePhaseStatus(2, '❌ Error', 'error');
+                updatePhaseStatus(2, 'Error', 'error');
             } finally {
                 btn.disabled = false;
                 btnText.style.display = 'inline';
@@ -1128,64 +1616,282 @@ No formatting needed — just paste your narration!"
             }
         }
 
-        async function importScript() {
+        function renderNarration(narrationObj) {
+            const container = document.getElementById('narrationDisplay');
+            const beats = Array.isArray(narrationObj) ? narrationObj : (narrationObj?.narration || []);
+
+            if (!beats.length) {
+                if (narrationObj?.raw_text) {
+                    container.innerHTML = `<div class="narration-beat"><div class="narration-beat-text">${escapeHtml(narrationObj.raw_text)}</div></div>`;
+                } else {
+                    container.innerHTML = '<p style="color:#888">No narration data to display.</p>';
+                }
+                return;
+            }
+
+            let headerHtml = '';
+            if (narrationObj?.title) {
+                const totalWords = beats.reduce((sum, b) => sum + (b.text || b.narration || '').split(/\s+/).length, 0);
+                headerHtml = `<div style="margin-bottom: 12px;">
+                    <h3 class="script-title">${escapeHtml(narrationObj.title)}</h3>
+                    <div class="script-meta">
+                        ${narrationObj.hook_type ? `<span class="meta-tag">Hook: ${escapeHtml(narrationObj.hook_type)}</span>` : ''}
+                        ${narrationObj.duration_minutes ? `<span class="meta-tag">${narrationObj.duration_minutes} min</span>` : ''}
+                        <span class="meta-tag">${beats.length} beats</span>
+                        <span class="meta-tag">~${totalWords} words</span>
+                    </div>
+                </div>`;
+            }
+
+            const acts = {};
+            beats.forEach((beat, idx) => {
+                const actName = beat.act || 'Unknown';
+                if (!acts[actName]) acts[actName] = [];
+                acts[actName].push({ ...beat, _index: idx });
+            });
+
+            let html = headerHtml;
+            for (const [actName, actBeats] of Object.entries(acts)) {
+                const safeAct = escapeHtml(actName);
+                html += `<div class="narration-act" data-act="${safeAct}">`;
+                html += `<div class="narration-act-header">
+                    <span>${safeAct}</span>
+                    <div class="act-controls">
+                        <button class="btn-tiny btn-restyle" onclick="regenerateAct('${safeAct}', 'restyle')" title="Restyle this act">Restyle Act</button>
+                        <button class="btn-tiny btn-reimagine" onclick="regenerateAct('${safeAct}', 'reimagine')" title="Reimagine this act with different facts">Reimagine Act</button>
+                    </div>
+                </div>`;
+                for (const beat of actBeats) {
+                    const beatText = beat.text || beat.narration || '';
+                    html += `<div class="narration-beat" data-beat-index="${beat._index}">`;
+                    html += `<div class="narration-beat-header">`;
+                    html += `<div class="narration-beat-label">${escapeHtml(beat.beat || '')}</div>`;
+                    html += `<div class="beat-controls">
+                        <button class="btn-tiny btn-restyle" onclick="regenerateBeat(${beat._index}, 'restyle')" title="Restyle">Restyle</button>
+                        <button class="btn-tiny btn-reimagine" onclick="regenerateBeat(${beat._index}, 'reimagine')" title="Reimagine">Reimagine</button>
+                    </div>`;
+                    html += `</div>`;
+                    html += `<div class="narration-beat-text" contenteditable="true" data-beat-index="${beat._index}" onblur="onBeatTextEdit(this, ${beat._index})">${escapeHtml(beatText)}</div>`;
+                    html += `</div>`;
+                }
+                html += `</div>`;
+            }
+
+            container.innerHTML = html;
+        }
+
+        function onBeatTextEdit(el, beatIndex) {
+            if (!currentNarration || !currentNarration.narration) return;
+            const newText = el.innerText.trim();
+            if (currentNarration.narration[beatIndex]) {
+                currentNarration.narration[beatIndex].text = newText;
+            }
+        }
+
+        async function regenerateBeat(beatIndex, mode) {
+            if (!currentNarration) return;
+            const beatEl = document.querySelector(`.narration-beat[data-beat-index="${beatIndex}"]`);
+            if (beatEl) beatEl.classList.add('regenerating');
+
+            try {
+                const resp = await fetch('/api/regenerate-beat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await firebase.auth().currentUser.getIdToken()}` },
+                    body: JSON.stringify({
+                        topic: document.getElementById('topicInput')?.value || '',
+                        template_id: selectedTemplate || 'educational_explainer',
+                        dossier: currentDossier || '',
+                        narration: currentNarration,
+                        target_beat_indices: [beatIndex],
+                        mode: mode,
+                        audience: document.getElementById('audienceSelect')?.value || 'General',
+                        tone: document.getElementById('toneSelect')?.value || '',
+                        duration_minutes: parseInt(document.getElementById('durationSelect')?.value) || 10,
+                    })
+                });
+                const data = await resp.json();
+                if (data.error) throw new Error(data.error);
+                if (data.beats && data.beats.length > 0) {
+                    const regen = data.beats[0];
+                    currentNarration.narration[beatIndex] = {
+                        ...currentNarration.narration[beatIndex],
+                        text: regen.text || regen.narration || '',
+                        beat: regen.beat || currentNarration.narration[beatIndex].beat,
+                    };
+                    renderNarration(currentNarration);
+                }
+            } catch (err) {
+                alert(`Regeneration failed: ${err.message}`);
+            } finally {
+                if (beatEl) beatEl.classList.remove('regenerating');
+            }
+        }
+
+        async function regenerateAct(actName, mode) {
+            if (!currentNarration) return;
+            const actEl = document.querySelector(`.narration-act[data-act="${actName}"]`);
+            if (actEl) actEl.classList.add('regenerating');
+
+            try {
+                const resp = await fetch('/api/regenerate-beat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await firebase.auth().currentUser.getIdToken()}` },
+                    body: JSON.stringify({
+                        topic: document.getElementById('topicInput')?.value || '',
+                        template_id: selectedTemplate || 'educational_explainer',
+                        dossier: currentDossier || '',
+                        narration: currentNarration,
+                        target_act: actName,
+                        mode: mode,
+                        audience: document.getElementById('audienceSelect')?.value || 'General',
+                        tone: document.getElementById('toneSelect')?.value || '',
+                        duration_minutes: parseInt(document.getElementById('durationSelect')?.value) || 10,
+                    })
+                });
+                const data = await resp.json();
+                if (data.error) throw new Error(data.error);
+                if (data.beats && data.beats.length > 0) {
+                    let targetIndices = [];
+                    currentNarration.narration.forEach((b, i) => {
+                        if (b.act === actName) targetIndices.push(i);
+                    });
+                    data.beats.forEach((regen, j) => {
+                        if (j < targetIndices.length) {
+                            const idx = targetIndices[j];
+                            currentNarration.narration[idx] = {
+                                ...currentNarration.narration[idx],
+                                text: regen.text || regen.narration || '',
+                                beat: regen.beat || currentNarration.narration[idx].beat,
+                            };
+                        }
+                    });
+                    renderNarration(currentNarration);
+                }
+            } catch (err) {
+                alert(`Act regeneration failed: ${err.message}`);
+            } finally {
+                if (actEl) actEl.classList.remove('regenerating');
+            }
+        }
+
+        function lockNarration() {
+            if (!currentNarration) return alert('No narration to lock.');
+            // Sync any contenteditable changes
+            document.querySelectorAll('.narration-beat-text[contenteditable]').forEach(el => {
+                const idx = parseInt(el.dataset.beatIndex);
+                if (!isNaN(idx) && currentNarration.narration[idx]) {
+                    currentNarration.narration[idx].text = el.innerText.trim();
+                }
+            });
+            // Disable editing
+            document.querySelectorAll('.narration-beat-text[contenteditable]').forEach(el => {
+                el.contentEditable = 'false';
+            });
+            document.querySelectorAll('.beat-controls, .act-controls').forEach(el => {
+                el.style.display = 'none';
+            });
+            document.getElementById('lockNarrationBtn').disabled = true;
+            document.getElementById('lockNarrationBtn').textContent = '🔒 Narration Locked';
+            document.getElementById('narrationEditHint').textContent = '(locked)';
+            // Switch to Phase 3
+            switchTab('production');
+            updateProdSourceBadge();
+        }
+
+        function copyNarration() {
+            if (!currentNarration) return;
+            const beats = currentNarration.narration || [];
+            if (!Array.isArray(beats) || beats.length === 0) {
+                if (currentNarration.raw_text) {
+                    navigator.clipboard.writeText(currentNarration.raw_text);
+                    alert('Narration copied to clipboard!');
+                }
+                return;
+            }
+            const text = beats.map(b =>
+                `[${b.act || ''}] ${b.beat || ''}\n${b.text || b.narration || ''}`
+            ).join('\n\n');
+            navigator.clipboard.writeText(text);
+            alert('Narration copied to clipboard!');
+        }
+
+        function downloadNarration() {
+            if (!currentNarration) return;
+            const blob = new Blob([JSON.stringify({ narration: currentNarration }, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `narration_${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function toggleManualStyle() {
+            const section = document.getElementById('manualStyleSection');
+            const arrow = document.getElementById('manualStyleToggleArrow');
+            if (section.style.display === 'none') {
+                section.style.display = 'block';
+                arrow.style.transform = 'rotate(0deg)';
+            } else {
+                section.style.display = 'none';
+                arrow.style.transform = 'rotate(-90deg)';
+            }
+        }
+
+        function importScript() {
             const textarea = document.getElementById('scriptPasteArea');
             const errorDiv = document.getElementById('phase2Error');
             errorDiv.style.display = 'none';
             const rawValue = textarea.value.trim();
 
-            if (!rawValue) return;
+            if (!rawValue) return alert("Please paste a script first.");
 
             try {
-                // Try parsing as JSON first
                 const parsed = JSON.parse(rawValue);
-                if (!parsed.script || !Array.isArray(parsed.script)) {
-                    throw new Error('Invalid JSON: must contain a "script" array.');
+
+                if (parsed.narration && Array.isArray(parsed.narration)) {
+                    // Already in narration format
+                    currentNarration = parsed;
+                } else if (parsed.script && Array.isArray(parsed.script)) {
+                    // Legacy scene breakdown → convert to narration format
+                    const beats = [];
+                    const seenBeats = {};
+                    for (const scene of parsed.script) {
+                        const actName = scene.act || 'IMPORTED';
+                        const beatName = scene.beat || ('Scene ' + (scene.scene || '?'));
+                        const key = actName + '|||' + beatName;
+                        if (seenBeats[key]) {
+                            seenBeats[key].text += ' ' + (scene.narration || '');
+                        } else {
+                            const beat = { act: actName, beat: beatName, text: scene.narration || '' };
+                            seenBeats[key] = beat;
+                            beats.push(beat);
+                        }
+                    }
+                    currentNarration = {
+                        title: parsed.title || 'Imported Script',
+                        duration_minutes: parsed.duration_minutes || 10,
+                        narration: beats,
+                    };
+                } else {
+                    throw new Error('JSON must have a "narration" or "script" array.');
                 }
-
-                currentScriptData = { script: parsed };
-                renderScriptTable(parsed);
-
-                const sceneCount = parsed.total_scenes || parsed.script.length;
-                updatePhaseStatus(2, `✅ Imported — ${sceneCount} scenes`, 'complete');
-
-                // Auto-update downstream Phase 3 source badge
-                updateProdSourceBadge();
-
-            } catch (error) {
-                // FALLBACK: Treat as plain text and break it down
-                console.log("JSON parse failed, breaking down as plain text:", error.message);
-
-                updatePhaseStatus(2, 'Breaking down text…', 'running');
-
-                try {
-                    const response = await authFetch('/api/breakdown-script', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            script_text: rawValue,
-                            duration_minutes: 10  // Default duration
-                        }),
-                    });
-
-                    const data = await response.json();
-                    if (!response.ok) throw new Error(data.error || 'Breakdown failed');
-
-                    currentScriptData = { script: data };
-                    renderScriptTable(data);
-
-                    const sceneCount = data.total_scenes || data.script?.length || '?';
-                    updatePhaseStatus(2, `✅ Complete — ${sceneCount} scenes`, 'complete');
-
-                    // Auto-update downstream Phase 3 source badge
-                    updateProdSourceBadge();
-
-                } catch (breakdownError) {
-                    errorDiv.innerText = `Breakdown error: ${breakdownError.message}`;
-                    errorDiv.style.display = 'block';
-                    updatePhaseStatus(2, '❌ Error', 'error');
-                }
+            } catch (jsonError) {
+                // Plain text → wrap as narration
+                currentNarration = {
+                    title: 'Manual Script',
+                    duration_minutes: parseInt(document.getElementById('durationSelect')?.value || '10'),
+                    narration: [{ act: 'MANUAL', beat: 'Full Script', text: rawValue }],
+                };
             }
+
+            renderNarration(currentNarration);
+            document.getElementById('wizardStepD').style.display = 'block';
+
+            const beats = currentNarration.narration || [];
+            const actCount = new Set(beats.map(b => b.act)).size;
+            updatePhaseStatus(2, `Imported (${actCount} acts, ${beats.length} beats)`, 'complete');
+            updateProdSourceBadge();
         }
 
         function renderScriptTable(script) {
@@ -1227,17 +1933,37 @@ No formatting needed — just paste your narration!"
 
             try {
                 const parsed = JSON.parse(textarea.value.trim());
-                if (!parsed.script || !Array.isArray(parsed.script)) {
-                    throw new Error('Invalid JSON: must contain a "script" array.');
+
+                if (parsed.narration && Array.isArray(parsed.narration)) {
+                    // Already narration format
+                    currentNarration = parsed;
+                } else if (parsed.script && Array.isArray(parsed.script)) {
+                    // Legacy scene breakdown → convert to narration
+                    const beats = [];
+                    const seenBeats = {};
+                    for (const scene of parsed.script) {
+                        const actName = scene.act || 'IMPORTED';
+                        const beatName = scene.beat || ('Scene ' + (scene.scene || '?'));
+                        const key = actName + '|||' + beatName;
+                        if (seenBeats[key]) {
+                            seenBeats[key].text += ' ' + (scene.narration || '');
+                        } else {
+                            const beat = { act: actName, beat: beatName, text: scene.narration || '' };
+                            seenBeats[key] = beat;
+                            beats.push(beat);
+                        }
+                    }
+                    currentNarration = {
+                        title: parsed.title || 'Imported Script',
+                        duration_minutes: parsed.duration_minutes || 10,
+                        narration: beats,
+                    };
+                } else {
+                    throw new Error('JSON must have a "narration" or "script" array.');
                 }
 
-                // Store as currentScriptData so generateProductionTable can use it
-                currentScriptData = { script: parsed };
-
-                const sceneCount = parsed.total_scenes || parsed.script.length;
-                updatePhaseStatus(3, `✅ Imported ${sceneCount} scenes — ready to generate`, 'complete');
-
-                // Update badge
+                const beatCount = (currentNarration.narration || []).length;
+                updatePhaseStatus(3, `✅ Imported ${beatCount} beats — ready to generate`, 'complete');
                 updateProdSourceBadge();
 
             } catch (error) {
@@ -1248,7 +1974,7 @@ No formatting needed — just paste your narration!"
         }
 
         async function generateProductionTable() {
-            if (!currentScriptData?.script) return alert('No script data. Generate or import a script first.');
+            if (!currentNarration) return alert('No narration data. Generate narration first, or import a script.');
 
             const btn = document.getElementById('productionBtn');
             const btnText = document.getElementById('productionBtnText');
@@ -1264,25 +1990,19 @@ No formatting needed — just paste your narration!"
             updatePhaseStatus(3, 'Generating prompts…', 'running');
 
             try {
-                // Build request body - use style analysis from images if available
                 const requestBody = {
-                    scene_breakdown: currentScriptData.script,
+                    narration: currentNarration,
+                    duration_minutes: currentNarration.duration_minutes
+                        || parseInt(document.getElementById('durationSelect').value) || 10,
                 };
 
-                if (styleAnalysis) {
-                    // Use image-derived style analysis
-                    requestBody.style_analysis = styleAnalysis;
-                    console.log('[Production] Using image-derived style analysis');
+                if (approvedStyle) {
+                    requestBody.style_analysis = approvedStyle;
+                    requestBody.aspect_ratio = document.getElementById('reviewAspectRatio').value;
+                    console.log('[Production] Using approved style:', approvedStyle.style_summary);
                 } else {
-                    // Use manual style settings
-                    requestBody.genre = document.getElementById('genreSelect').value;
-                    requestBody.color_world = document.getElementById('colorWorldSelect').value;
-                    requestBody.lighting = document.getElementById('lightingSelect').value;
-                    requestBody.camera_personality = document.getElementById('cameraSelect').value;
-                    requestBody.movement_style = document.getElementById('movementSelect').value;
-                    requestBody.aspect_ratio = document.getElementById('aspectRatioSelect').value;
-                    requestBody.image_model = document.getElementById('imageModelSelect').value;
-                    console.log('[Production] Using manual style settings');
+                    requestBody.aspect_ratio = '16:9';
+                    console.log('[Production] No style approved — using default cinematic style');
                 }
 
                 const response = await authFetch('/api/generate-production-table', {
@@ -1323,7 +2043,10 @@ No formatting needed — just paste your narration!"
                 tbody.innerHTML = pt.shots.map(shot => `
                     <tr>
                         <td class="cell-num">${escapeHtml(shot.shot_number || '')}</td>
-                        <td class="cell-beat">${escapeHtml(shot.script_beat || '')}</td>
+                        <td class="cell-beat">
+                            ${escapeHtml(shot.script_beat || '')}
+                            ${shot.cutting_rationale ? `<div class="cutting-rationale">${escapeHtml(shot.cutting_rationale)}</div>` : ''}
+                        </td>
                         <td class="cell-dur">${escapeHtml(shot.duration || '')}</td>
                         <td class="cell-intent">${escapeHtml(shot.directors_intent || '')}</td>
                         <td class="cell-prompt"><pre class="prompt-cell">${escapeHtml(shot.first_frame_prompt || '')}</pre></td>
@@ -1468,8 +2191,10 @@ No formatting needed — just paste your narration!"
             renderStyleImagePreviews();
 
             if (styleReferenceImages.length === 0) {
-                styleAnalysis = null;
+                approvedStyle = null;
                 document.getElementById('styleAnalysisResult').style.display = 'none';
+                document.getElementById('styleReviewPanel').style.display = 'none';
+                document.getElementById('styleTextSection').style.display = 'block';
             } else {
                 analyzeStyleImages();
             }
@@ -1477,17 +2202,23 @@ No formatting needed — just paste your narration!"
 
         function clearStyleImages() {
             styleReferenceImages = [];
-            styleAnalysis = null;
+            approvedStyle = null;
             renderStyleImagePreviews();
             document.getElementById('styleAnalysisResult').style.display = 'none';
+            document.getElementById('styleReviewPanel').style.display = 'none';
+            document.getElementById('styleTextSection').style.display = 'block';
+            document.getElementById('styleApprovedBadge').style.display = 'none';
         }
 
         async function analyzeStyleImages() {
             if (styleReferenceImages.length === 0) return;
 
+            // Hide text input when images are being analyzed
+            document.getElementById('styleTextSection').style.display = 'none';
+
             const resultDiv = document.getElementById('styleAnalysisResult');
             resultDiv.style.display = 'block';
-            resultDiv.innerHTML = '<h4>🔍 Analyzing style...</h4><p>Using Gemini Vision to extract visual style from your images...</p>';
+            resultDiv.innerHTML = '<h4>Analyzing style...</h4><p>Extracting artistic intent from your images...</p>';
 
             try {
                 const response = await authFetch('/api/analyze-style-images', {
@@ -1501,22 +2232,151 @@ No formatting needed — just paste your narration!"
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Style analysis failed');
 
-                styleAnalysis = data.style_analysis;
+                const styleData = data.style_analysis;
                 resultDiv.innerHTML = `
-                    <h4>✅ Custom Style Extracted</h4>
-                    <p><strong>Your Style Guide:</strong> ${escapeHtml(styleAnalysis)}</p>
-                    <small style="color: #888;">This custom aesthetic will be applied to all First Frame, Last Frame, and Veo prompts. Manual dropdown settings will be ignored.</small>
+                    <h4>Style Extracted</h4>
+                    <p><strong>${escapeHtml(styleData.style_summary || 'Custom style')}</strong></p>
+                    <small style="color: #888;">Review and approve the style below before generating.</small>
                 `;
+                showStyleReviewPanel(styleData);
 
             } catch (error) {
                 console.error('Style analysis error:', error);
                 resultDiv.innerHTML = `
-                    <h4>❌ Analysis Failed</h4>
+                    <h4>Analysis Failed</h4>
                     <p style="color: #ff6b6b;">${escapeHtml(error.message)}</p>
-                    <small>You can still use manual style settings below.</small>
+                    <small>You can still describe your style in text below.</small>
                 `;
-                styleAnalysis = null;
+                document.getElementById('styleTextSection').style.display = 'block';
             }
+        }
+
+        async function analyzeStyleFromText() {
+            const description = document.getElementById('styleTextInput').value.trim();
+            if (!description) return alert('Please enter a style description.');
+
+            const btn = document.getElementById('analyzeTextBtn');
+            btn.disabled = true;
+            btn.textContent = 'Analyzing...';
+
+            try {
+                const response = await authFetch('/api/analyze-style-text', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description }),
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Style analysis failed');
+
+                showStyleReviewPanel(data.style_analysis);
+
+            } catch (error) {
+                console.error('Style text analysis error:', error);
+                alert('Style analysis failed: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Analyze';
+            }
+        }
+
+        function showStyleReviewPanel(styleData) {
+            const panel = document.getElementById('styleReviewPanel');
+            panel.style.display = 'block';
+            document.getElementById('styleApprovedBadge').style.display = 'none';
+
+            const intent = styleData.style_intent || {};
+            const schema = styleData.prompt_schema || {};
+
+            // Populate style summary
+            document.getElementById('reviewStyleSummary').value = styleData.style_summary || '';
+
+            // Populate style intent fields
+            document.getElementById('reviewDetailLevel').value = intent.detail_level || '';
+            document.getElementById('reviewSceneComplexity').value = intent.scene_complexity || '';
+            document.getElementById('reviewCameraLanguage').value = intent.camera_language || '';
+            document.getElementById('reviewLighting').value = intent.lighting_instruction || '';
+            document.getElementById('reviewSubjectFraming').value = intent.subject_framing || '';
+            document.getElementById('reviewWritingStyle').value = intent.writing_style || '';
+            document.getElementById('reviewColorPalette').value = intent.color_palette || '';
+            document.getElementById('reviewTexture').value = intent.texture || '';
+            document.getElementById('reviewMoodDefault').value = intent.mood_default || '';
+
+            // Build schema checklist
+            const alwaysInclude = schema.always_include || ['shot_size', 'subject', 'arrangement', 'background'];
+            const include = schema.include || [];
+            const exclude = schema.exclude || [];
+            const activeFields = new Set([...alwaysInclude, ...include]);
+
+            const checklistEl = document.getElementById('schemaFieldsChecklist');
+            checklistEl.innerHTML = PROMPT_FIELDS.map(field => {
+                const isLocked = field.locked;
+                const isChecked = isLocked || activeFields.has(field.key);
+                const isExcluded = exclude.includes(field.key);
+                return `
+                    <label class="schema-field ${isLocked ? 'schema-field-locked' : ''}">
+                        <input type="checkbox" value="${field.key}"
+                            ${isChecked && !isExcluded ? 'checked' : ''}
+                            ${isLocked ? 'disabled' : ''}>
+                        <span>${field.label}</span>
+                    </label>
+                `;
+            }).join('');
+
+            // Scroll to panel
+            panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        function approveStyle() {
+            // Read all values from the review panel
+            const intent = {
+                detail_level: document.getElementById('reviewDetailLevel').value,
+                scene_complexity: document.getElementById('reviewSceneComplexity').value,
+                camera_language: document.getElementById('reviewCameraLanguage').value,
+                lighting_instruction: document.getElementById('reviewLighting').value,
+                subject_framing: document.getElementById('reviewSubjectFraming').value,
+                writing_style: document.getElementById('reviewWritingStyle').value,
+                color_palette: document.getElementById('reviewColorPalette').value,
+                texture: document.getElementById('reviewTexture').value,
+                mood_default: document.getElementById('reviewMoodDefault').value,
+            };
+
+            // Read schema from checkboxes
+            const alwaysInclude = [];
+            const include = [];
+            const exclude = [];
+            const checkboxes = document.querySelectorAll('#schemaFieldsChecklist input[type="checkbox"]');
+            checkboxes.forEach(cb => {
+                const field = PROMPT_FIELDS.find(f => f.key === cb.value);
+                if (field && field.locked) {
+                    alwaysInclude.push(cb.value);
+                } else if (cb.checked) {
+                    include.push(cb.value);
+                } else {
+                    exclude.push(cb.value);
+                }
+            });
+
+            approvedStyle = {
+                style_summary: document.getElementById('reviewStyleSummary').value,
+                style_intent: intent,
+                prompt_schema: {
+                    always_include: alwaysInclude,
+                    include: include,
+                    exclude: exclude,
+                },
+            };
+
+            document.getElementById('styleApprovedBadge').style.display = 'inline-block';
+            console.log('[Style] Approved:', approvedStyle);
+        }
+
+        function clearApprovedStyle() {
+            approvedStyle = null;
+            document.getElementById('styleReviewPanel').style.display = 'none';
+            document.getElementById('styleApprovedBadge').style.display = 'none';
+            document.getElementById('styleAnalysisResult').style.display = 'none';
+            document.getElementById('styleTextSection').style.display = 'block';
         }
 
         /* ── Utility ── */
@@ -1555,11 +2415,29 @@ No formatting needed — just paste your narration!"
 
         function startOver() {
             currentDossier = '';
+            selectedTitle = null;
             currentScriptData = null;
+            currentNarration = null;
+            currentDossierId = null;
             currentProductionData = null;
+            approvedStyle = null;
+
             document.getElementById('researchTopic').value = '';
             document.getElementById('focusInput').value = '';
             document.getElementById('researchResults').style.display = 'none';
+
+            // Reset wizard steps
+            document.getElementById('wizardStepA').style.display = 'none';
+            document.getElementById('wizardStepB').style.display = 'none';
+            document.getElementById('wizardStepC').style.display = 'none';
+            document.getElementById('wizardStepD').style.display = 'none';
+            document.getElementById('titleCards').innerHTML = '';
+            document.getElementById('titleEditInput').value = '';
+            document.getElementById('titleConfirmedBadge').style.display = 'none';
+            document.getElementById('narrationDisplay').innerHTML = '';
+            const toneBadge = document.getElementById('toneSuggestionBadge');
+            if (toneBadge) toneBadge.style.display = 'none';
+
             document.getElementById('scriptResults').style.display = 'none';
             document.getElementById('productionResults').style.display = 'none';
             document.getElementById('continuityNotes').style.display = 'none';
@@ -1604,6 +2482,792 @@ No formatting needed — just paste your narration!"
                 btnText.textContent = modelSelect.value === 'deep' ? '🔍 Start Deep Research' : '⚡ Start Fast Research';
             }
         });
+
+        /* ══════════════════════════════════════
+           VISUALS TAB
+           ══════════════════════════════════════ */
+
+        // ── Visuals State ──
+        let visualsProductionData = null;
+        let visualsScenes = [];
+        let visualsConfig = {
+            aspectRatio: '16:9',
+            resolution: '2K',
+            imageModel: 'gemini-3-pro-image-preview',
+            veoModel: 'veo-3.1-generate-preview',
+            styleImages: [],
+            additionalContext: '',
+        };
+        let visualsCharacters = [];
+        let charModalImages = [];  // temp images for character modal
+        let animationPollers = {};
+        let visualsGenerationPhase = 'idle'; // 'idle' | 'preview' | 'batch'
+
+        // ── Data Loading ──
+        function setVisualsDataMode(mode) {
+            document.getElementById('visualsModeAuto').classList.toggle('active', mode === 'auto');
+            document.getElementById('visualsModeManual').classList.toggle('active', mode === 'manual');
+            document.getElementById('visualsAutoLoad').style.display = mode === 'auto' ? 'block' : 'none';
+            document.getElementById('visualsManualLoad').style.display = mode === 'manual' ? 'block' : 'none';
+        }
+
+        async function loadLatestProductionTable() {
+            const statusEl = document.getElementById('visualsLoadStatus');
+            statusEl.innerHTML = '<span class="source-dot active"></span> Loading...';
+
+            try {
+                const res = await authFetch('/api/latest-production-table');
+                const data = await res.json();
+
+                if (!res.ok) throw new Error(data.error || 'Failed to load production table');
+
+                const pt = data.production_table;
+                initVisualsFromProductionTable(pt);
+                statusEl.innerHTML = `<span class="source-dot ready"></span> Loaded: "${pt.title || 'Untitled'}" (${visualsScenes.length} scenes)`;
+            } catch (e) {
+                statusEl.innerHTML = `<span class="source-dot error"></span> ${e.message}`;
+            }
+        }
+
+        function importVisualsJson() {
+            try {
+                const raw = document.getElementById('visualsPasteArea').value.trim();
+                if (!raw) { alert('Please paste production table JSON'); return; }
+
+                let data = JSON.parse(raw);
+                // Handle both wrapped and unwrapped formats
+                const pt = data.production_table || data;
+
+                if (!pt.shots || !Array.isArray(pt.shots)) {
+                    throw new Error('Invalid format: expected a "shots" array');
+                }
+
+                initVisualsFromProductionTable(pt);
+                const statusEl = document.getElementById('visualsLoadStatus');
+                statusEl.innerHTML = `<span class="source-dot ready"></span> Imported: "${pt.title || 'Untitled'}" (${visualsScenes.length} scenes)`;
+                setVisualsDataMode('auto');
+            } catch (e) {
+                alert('Error parsing JSON: ' + e.message);
+            }
+        }
+
+        function initVisualsFromProductionTable(pt) {
+            visualsProductionData = pt;
+            visualsScenes = (pt.shots || []).map(shot => ({
+                sceneId: String(shot.shot_number),
+                shotNumber: String(shot.shot_number),
+                timestamp: shot.timestamp || '',
+                scriptBeat: shot.script_beat || '',
+                duration: shot.duration || '',
+                directorsIntent: shot.directors_intent || '',
+                emotion: shot.emotion || '',
+                imagePrompt: shot.first_frame_prompt || '',
+                lastFramePrompt: shot.last_frame_prompt || '',
+                veoPrompt: shot.veo_prompt || '',
+                // Runtime state
+                imageStatus: 'idle',
+                imageUrl: null,
+                imageError: null,
+                imageModel: null,
+                videoStatus: 'idle',
+                videoUrl: null,
+                videoError: null,
+                veoModel: null,
+                operationName: null,
+                markedForAnimation: false,
+            }));
+
+            visualsGenerationPhase = 'idle';
+
+            // Show config, characters, scene list, and action bar
+            document.getElementById('visualsConfigSection').style.display = 'block';
+            document.getElementById('visualsCharactersSection').style.display = 'block';
+            document.getElementById('visualsSceneList').style.display = 'block';
+            document.getElementById('visualsActionBar').style.display = 'flex';
+            document.getElementById('visualsSceneCount').textContent = `${visualsScenes.length} scenes`;
+
+            renderVisualsScenes();
+        }
+
+        // ── Config ──
+        function updateVisualsConfig() {
+            visualsConfig.aspectRatio = document.getElementById('visAspectRatio').value;
+            visualsConfig.resolution = document.getElementById('visResolution').value;
+            visualsConfig.imageModel = document.getElementById('visImageModel').value;
+            visualsConfig.veoModel = document.getElementById('visVeoModel').value;
+            visualsConfig.additionalContext = document.getElementById('visAdditionalContext').value;
+        }
+
+        // ── Style Image Upload ──
+        function handleVisualsStyleUpload(event) {
+            const files = Array.from(event.target.files);
+            if (!files.length) return;
+            const remaining = 4 - visualsConfig.styleImages.length;
+            const toProcess = files.slice(0, remaining);
+            if (files.length > remaining) alert(`Max 4 style images. Adding first ${remaining}.`);
+
+            for (const file of toProcess) {
+                if (!file.type.startsWith('image/')) continue;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    visualsConfig.styleImages.push({ name: file.name, data: e.target.result });
+                    renderVisualsStylePreviews();
+                };
+                reader.readAsDataURL(file);
+            }
+            event.target.value = '';
+        }
+
+        function renderVisualsStylePreviews() {
+            const container = document.getElementById('visStyleImagePreviews');
+            const clearBtn = document.getElementById('visClearStyleBtn');
+            if (!visualsConfig.styleImages.length) {
+                container.innerHTML = '';
+                clearBtn.style.display = 'none';
+                return;
+            }
+            clearBtn.style.display = 'inline-block';
+            container.innerHTML = visualsConfig.styleImages.map((img, i) => `
+                <div class="image-preview">
+                    <img src="${img.data}" alt="${img.name}">
+                    <button class="image-preview-remove" onclick="removeVisualsStyleImage(${i})">&#x2715;</button>
+                </div>
+            `).join('');
+        }
+
+        function removeVisualsStyleImage(idx) {
+            visualsConfig.styleImages.splice(idx, 1);
+            renderVisualsStylePreviews();
+        }
+
+        function clearVisualsStyleImages() {
+            visualsConfig.styleImages = [];
+            renderVisualsStylePreviews();
+        }
+
+        // ── Character Management ──
+        function openAddCharacterModal() {
+            charModalImages = [];
+            document.getElementById('charNameInput').value = '';
+            document.getElementById('charImagePreviews').innerHTML = '';
+            document.getElementById('characterModal').style.display = 'flex';
+        }
+
+        function closeCharacterModal() {
+            document.getElementById('characterModal').style.display = 'none';
+            charModalImages = [];
+        }
+
+        function handleCharImageUpload(event) {
+            const files = Array.from(event.target.files);
+            if (!files.length) return;
+            const remaining = 4 - charModalImages.length;
+            const toProcess = files.slice(0, remaining);
+            if (files.length > remaining) alert(`Max 4 images per character. Adding first ${remaining}.`);
+
+            for (const file of toProcess) {
+                if (!file.type.startsWith('image/')) continue;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    charModalImages.push({ name: file.name, data: e.target.result });
+                    renderCharModalPreviews();
+                };
+                reader.readAsDataURL(file);
+            }
+            event.target.value = '';
+        }
+
+        function renderCharModalPreviews() {
+            const container = document.getElementById('charImagePreviews');
+            container.innerHTML = charModalImages.map((img, i) => `
+                <div class="image-preview">
+                    <img src="${img.data}" alt="${img.name}">
+                    <button class="image-preview-remove" onclick="removeCharModalImage(${i})">&#x2715;</button>
+                </div>
+            `).join('');
+        }
+
+        function removeCharModalImage(idx) {
+            charModalImages.splice(idx, 1);
+            renderCharModalPreviews();
+        }
+
+        function saveCharacter() {
+            const name = document.getElementById('charNameInput').value.trim();
+            if (!name) { alert('Character name is required'); return; }
+            if (!charModalImages.length) { alert('At least one reference image is required'); return; }
+
+            visualsCharacters.push({ name, images: [...charModalImages] });
+            closeCharacterModal();
+            renderCharacterList();
+        }
+
+        function removeCharacter(idx) {
+            visualsCharacters.splice(idx, 1);
+            renderCharacterList();
+        }
+
+        function renderCharacterList() {
+            const container = document.getElementById('characterList');
+            if (!visualsCharacters.length) {
+                container.innerHTML = '<p class="paste-hint">No characters defined yet.</p>';
+                return;
+            }
+            container.innerHTML = visualsCharacters.map((ch, i) => `
+                <div class="character-card">
+                    <div class="character-card-images">
+                        ${ch.images.map(img => `<img src="${img.data}" alt="${ch.name}">`).join('')}
+                    </div>
+                    <div class="character-card-info">
+                        <strong>${escapeHtml(ch.name)}</strong>
+                        <span>${ch.images.length} reference image${ch.images.length > 1 ? 's' : ''}</span>
+                    </div>
+                    <button class="btn-secondary btn-small" onclick="removeCharacter(${i})">Remove</button>
+                </div>
+            `).join('');
+        }
+
+        // Collect all character images as flat array of base64 data URIs
+        function getAllCharacterImages() {
+            const all = [];
+            for (const ch of visualsCharacters) {
+                for (const img of ch.images) {
+                    if (all.length < 10) all.push(img.data);
+                }
+            }
+            return all;
+        }
+
+        // ── Scene Card Rendering ──
+        function renderVisualsScenes() {
+            const container = document.getElementById('visualsSceneList');
+            container.innerHTML = visualsScenes.map((s, idx) => {
+                const imgModelOptions = `
+                    <option value="" ${!s.imageModel ? 'selected' : ''}>Global</option>
+                    <option value="gemini-3-pro-image-preview" ${s.imageModel === 'gemini-3-pro-image-preview' ? 'selected' : ''}>Pro (Quality)</option>
+                    <option value="gemini-2.5-flash-image" ${s.imageModel === 'gemini-2.5-flash-image' ? 'selected' : ''}>Flash (Fast)</option>
+                `;
+                const veoModelOptions = `
+                    <option value="" ${!s.veoModel ? 'selected' : ''}>Global</option>
+                    <option value="veo-3.1-generate-preview" ${s.veoModel === 'veo-3.1-generate-preview' ? 'selected' : ''}>Veo 3.1 (Quality)</option>
+                    <option value="veo-3.1-fast" ${s.veoModel === 'veo-3.1-fast' ? 'selected' : ''}>Veo Fast</option>
+                `;
+
+                return `
+                <div class="scene-card" id="scene-card-${idx}" data-scene-idx="${idx}">
+                    <div class="scene-card-header">
+                        <span class="scene-number">Scene ${s.shotNumber}</span>
+                        <span class="scene-timestamp">${escapeHtml(s.timestamp)}</span>
+                        <span class="scene-duration">${escapeHtml(s.duration)}</span>
+                    </div>
+                    <div class="scene-card-narration">
+                        <p>"${escapeHtml(s.scriptBeat)}"</p>
+                    </div>
+                    <div class="scene-card-body">
+                        <div class="scene-image-section">
+                            <div class="scene-section-header">
+                                <label class="input-label">Image Prompt</label>
+                                <select class="scene-model-select" onchange="visualsScenes[${idx}].imageModel = this.value || null">
+                                    ${imgModelOptions}
+                                </select>
+                            </div>
+                            <textarea class="scene-prompt-textarea" id="scene-img-prompt-${idx}"
+                                onchange="visualsScenes[${idx}].imagePrompt = this.value">${escapeHtml(s.imagePrompt)}</textarea>
+                            <div class="scene-image-result" id="scene-img-result-${idx}">
+                                ${s.imageUrl
+                                    ? `<img src="${s.imageUrl}" alt="Scene ${s.shotNumber}"><div class="scene-image-actions">
+                                        <button class="btn-small btn-secondary" onclick="regenerateSceneImage(${idx})">Regenerate</button>
+                                        <a class="btn-small btn-secondary" href="${s.imageUrl}" download>Download</a>
+                                       </div>`
+                                    : `<div class="scene-placeholder">Image will appear here</div>`
+                                }
+                            </div>
+                        </div>
+                        <div class="scene-video-section">
+                            <div class="scene-section-header">
+                                <label class="input-label">Animation Prompt (Veo 3.1)</label>
+                                <select class="scene-model-select" onchange="visualsScenes[${idx}].veoModel = this.value || null">
+                                    ${veoModelOptions}
+                                </select>
+                            </div>
+                            <textarea class="scene-prompt-textarea" id="scene-veo-prompt-${idx}"
+                                onchange="visualsScenes[${idx}].veoPrompt = this.value">${escapeHtml(s.veoPrompt)}</textarea>
+                            <div class="scene-video-result" id="scene-vid-result-${idx}">
+                                ${s.videoUrl
+                                    ? `<video src="${s.videoUrl}" controls></video><div class="scene-image-actions">
+                                        <a class="btn-small btn-secondary" href="${s.videoUrl}" download>Download</a>
+                                       </div>`
+                                    : `<div class="scene-placeholder">Video will appear here</div>`
+                                }
+                            </div>
+                            <div class="scene-animation-controls">
+                                <label class="scene-animate-toggle">
+                                    <input type="checkbox" ${s.markedForAnimation ? 'checked' : ''}
+                                        onchange="visualsScenes[${idx}].markedForAnimation = this.checked; updateAnimateAllBtn()">
+                                    Animate this scene
+                                </label>
+                                <button class="btn-small" onclick="animateScene(${idx})" ${!s.imageUrl ? 'disabled title="Generate image first"' : ''}>
+                                    Animate Image
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="scene-status-bar" id="scene-status-${idx}">
+                        ${getStatusHtml(s)}
+                    </div>
+                </div>`;
+            }).join('');
+
+            updateAnimateAllBtn();
+        }
+
+        function getStatusHtml(scene) {
+            const imgStatus = scene.imageStatus;
+            const vidStatus = scene.videoStatus;
+
+            if (imgStatus === 'generating') return '<span class="status-generating">Generating image...</span>';
+            if (vidStatus === 'generating' || vidStatus === 'polling') return '<span class="status-generating">Animating...</span>';
+            if (imgStatus === 'error') return `<span class="status-error">Image error: ${escapeHtml(scene.imageError || 'Unknown')}</span>`;
+            if (vidStatus === 'error') return `<span class="status-error">Animation error: ${escapeHtml(scene.videoError || 'Unknown')}</span>`;
+            if (vidStatus === 'complete') return '<span class="status-complete">Image + Video ready</span>';
+            if (imgStatus === 'complete') return '<span class="status-complete">Image ready</span>';
+            return '<span class="status-idle">Pending</span>';
+        }
+
+        function updateSceneCard(idx) {
+            const s = visualsScenes[idx];
+            // Update image result
+            const imgContainer = document.getElementById(`scene-img-result-${idx}`);
+            if (imgContainer) {
+                if (s.imageUrl) {
+                    imgContainer.innerHTML = `
+                        <img src="${s.imageUrl}" alt="Scene ${s.shotNumber}">
+                        <div class="scene-image-actions">
+                            <button class="btn-small btn-secondary" onclick="regenerateSceneImage(${idx})">Regenerate</button>
+                            <a class="btn-small btn-secondary" href="${s.imageUrl}" download>Download</a>
+                        </div>`;
+                } else if (s.imageStatus === 'generating') {
+                    imgContainer.innerHTML = '<div class="scene-placeholder generating">Generating...</div>';
+                }
+            }
+            // Update video result
+            const vidContainer = document.getElementById(`scene-vid-result-${idx}`);
+            if (vidContainer) {
+                if (s.videoUrl) {
+                    vidContainer.innerHTML = `
+                        <video src="${s.videoUrl}" controls></video>
+                        <div class="scene-image-actions">
+                            <a class="btn-small btn-secondary" href="${s.videoUrl}" download>Download</a>
+                        </div>`;
+                } else if (s.videoStatus === 'generating' || s.videoStatus === 'polling') {
+                    vidContainer.innerHTML = '<div class="scene-placeholder generating">Animating...</div>';
+                }
+            }
+            // Update status bar
+            const statusBar = document.getElementById(`scene-status-${idx}`);
+            if (statusBar) statusBar.innerHTML = getStatusHtml(s);
+
+            // Enable/disable animate button
+            const card = document.getElementById(`scene-card-${idx}`);
+            if (card) {
+                const animBtn = card.querySelector('.scene-animation-controls button');
+                if (animBtn) animBtn.disabled = !s.imageUrl;
+            }
+        }
+
+        function updateAnimateAllBtn() {
+            const markedCount = visualsScenes.filter(s => s.markedForAnimation).length;
+            const btn = document.getElementById('animateAllBtn');
+            if (markedCount > 0) {
+                btn.style.display = 'inline-block';
+                btn.textContent = `Animate ${markedCount} Marked Scene${markedCount > 1 ? 's' : ''}`;
+            } else {
+                btn.style.display = 'none';
+            }
+        }
+
+        function updateImageProgress() {
+            const total = visualsScenes.length;
+            const done = visualsScenes.filter(s => s.imageStatus === 'complete').length;
+            const generating = visualsScenes.filter(s => s.imageStatus === 'generating').length;
+            const el = document.getElementById('visualsImageProgress');
+            if (generating > 0 || done > 0) {
+                el.style.display = 'inline';
+                el.textContent = generating > 0
+                    ? `Images: ${done}/${total} done (${generating} generating...)`
+                    : `Images: ${done}/${total} done`;
+            } else {
+                el.style.display = 'none';
+            }
+        }
+
+        function updateVideoProgress() {
+            const total = visualsScenes.length;
+            const done = visualsScenes.filter(s => s.videoStatus === 'complete').length;
+            const active = visualsScenes.filter(s => s.videoStatus === 'generating' || s.videoStatus === 'polling').length;
+            const el = document.getElementById('visualsVideoProgress');
+            if (active > 0 || done > 0) {
+                el.style.display = 'inline';
+                el.textContent = active > 0
+                    ? `Videos: ${done}/${total} done (${active} animating...)`
+                    : `Videos: ${done}/${total} done`;
+            } else {
+                el.style.display = 'none';
+            }
+        }
+
+        // ── Image Generation ──
+        function buildImageRequestBody(idx) {
+            const s = visualsScenes[idx];
+            return {
+                scene_id: s.sceneId,
+                prompt: s.imagePrompt,
+                model: s.imageModel || visualsConfig.imageModel,
+                aspect_ratio: visualsConfig.aspectRatio,
+                resolution: visualsConfig.resolution,
+                style_images: visualsConfig.styleImages.map(img => img.data),
+                character_images: getAllCharacterImages(),
+                additional_context: visualsConfig.additionalContext,
+            };
+        }
+
+        async function generateSceneImage(idx) {
+            const s = visualsScenes[idx];
+            if (!s) { console.error(`Scene ${idx} not found. ${visualsScenes.length} scenes loaded.`); return; }
+            s.imageStatus = 'generating';
+            s.imageError = null;
+            updateSceneCard(idx);
+            updateImageProgress();
+
+            try {
+                const body = buildImageRequestBody(idx);
+                const res = await authFetch('/api/visuals/generate-image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await res.json();
+
+                if (!res.ok || data.error) throw new Error(data.error || 'Image generation failed');
+
+                s.imageStatus = 'complete';
+                s.imageUrl = data.image_url;
+            } catch (e) {
+                s.imageStatus = 'error';
+                s.imageError = e.message;
+            }
+
+            updateSceneCard(idx);
+            updateImageProgress();
+        }
+
+        async function regenerateSceneImage(idx) {
+            // Read latest prompt from textarea
+            const textarea = document.getElementById(`scene-img-prompt-${idx}`);
+            if (textarea) visualsScenes[idx].imagePrompt = textarea.value;
+            await generateSceneImage(idx);
+        }
+
+        async function generateAllImages() {
+            updateVisualsConfig();
+
+            if (visualsGenerationPhase === 'idle') {
+                // Phase 1: Generate Scene 1 for review
+                visualsGenerationPhase = 'preview';
+                const btn = document.getElementById('generateAllImagesBtn');
+                btn.disabled = true;
+                btn.textContent = 'Generating Scene 1...';
+
+                await generateSceneImage(0);
+
+                btn.disabled = false;
+                if (visualsScenes[0].imageStatus === 'complete') {
+                    btn.textContent = `Generate Remaining ${visualsScenes.length - 1} Images`;
+                    visualsGenerationPhase = 'preview';
+                } else {
+                    btn.textContent = 'Retry Scene 1';
+                    visualsGenerationPhase = 'idle';
+                }
+                return;
+            }
+
+            if (visualsGenerationPhase === 'preview') {
+                // Phase 2: Batch all remaining scenes
+                visualsGenerationPhase = 'batch';
+                const btn = document.getElementById('generateAllImagesBtn');
+                btn.disabled = true;
+                btn.textContent = 'Generating all images...';
+
+                // Read all prompts from textareas
+                visualsScenes.forEach((s, i) => {
+                    const ta = document.getElementById(`scene-img-prompt-${i}`);
+                    if (ta) s.imagePrompt = ta.value;
+                });
+
+                const remaining = visualsScenes
+                    .map((s, i) => ({ scene: s, idx: i }))
+                    .filter(item => item.scene.imageStatus !== 'complete');
+
+                if (remaining.length === 0) {
+                    btn.textContent = 'All Images Generated';
+                    return;
+                }
+
+                // Build batch request
+                const scenes = remaining.map(item => ({
+                    scene_id: item.scene.sceneId,
+                    prompt: item.scene.imagePrompt,
+                    model: item.scene.imageModel || null,
+                }));
+
+                // Mark all as generating
+                remaining.forEach(item => {
+                    item.scene.imageStatus = 'generating';
+                    updateSceneCard(item.idx);
+                });
+                updateImageProgress();
+
+                try {
+                    const res = await authFetch('/api/visuals/generate-batch-images', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            scenes,
+                            global_config: {
+                                model: visualsConfig.imageModel,
+                                aspect_ratio: visualsConfig.aspectRatio,
+                                resolution: visualsConfig.resolution,
+                                style_images: visualsConfig.styleImages.map(img => img.data),
+                                character_images: getAllCharacterImages(),
+                                additional_context: visualsConfig.additionalContext,
+                            },
+                        }),
+                    });
+
+                    const data = await res.json();
+
+                    if (data.results) {
+                        for (const result of data.results) {
+                            const sceneIdx = visualsScenes.findIndex(s => s.sceneId === String(result.scene_id));
+                            if (sceneIdx === -1) continue;
+                            const s = visualsScenes[sceneIdx];
+
+                            if (result.success && result.image_url) {
+                                s.imageStatus = 'complete';
+                                s.imageUrl = result.image_url;
+                            } else {
+                                s.imageStatus = 'error';
+                                s.imageError = result.error || 'Unknown error';
+                            }
+                            updateSceneCard(sceneIdx);
+                        }
+                    }
+                } catch (e) {
+                    remaining.forEach(item => {
+                        if (item.scene.imageStatus === 'generating') {
+                            item.scene.imageStatus = 'error';
+                            item.scene.imageError = e.message;
+                            updateSceneCard(item.idx);
+                        }
+                    });
+                }
+
+                updateImageProgress();
+                btn.disabled = false;
+                const errors = visualsScenes.filter(s => s.imageStatus === 'error').length;
+                btn.textContent = errors > 0
+                    ? `Retry ${errors} Failed Image${errors > 1 ? 's' : ''}`
+                    : 'All Images Generated';
+                visualsGenerationPhase = errors > 0 ? 'preview' : 'batch';
+            }
+        }
+
+        // ── Video Animation ──
+        async function animateScene(idx) {
+            const s = visualsScenes[idx];
+            if (!s.imageUrl) { alert('Generate the image first'); return; }
+
+            // Read latest animation prompt from textarea
+            const textarea = document.getElementById(`scene-veo-prompt-${idx}`);
+            if (textarea) s.veoPrompt = textarea.value;
+
+            s.videoStatus = 'generating';
+            s.videoError = null;
+            updateSceneCard(idx);
+            updateVideoProgress();
+
+            try {
+                const res = await authFetch('/api/visuals/start-animation', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        scene_id: s.sceneId,
+                        image_url: s.imageUrl,
+                        prompt: s.veoPrompt,
+                        model: s.veoModel || visualsConfig.veoModel,
+                        aspect_ratio: visualsConfig.aspectRatio,
+                        duration: parseInt(s.duration) || 6,
+                    }),
+                });
+                const data = await res.json();
+
+                if (!res.ok || data.error) throw new Error(data.error || 'Failed to start animation');
+
+                s.operationName = data.operation_name;
+                s.videoStatus = 'polling';
+                updateSceneCard(idx);
+
+                // Start polling
+                startPolling(idx);
+            } catch (e) {
+                s.videoStatus = 'error';
+                s.videoError = e.message;
+                updateSceneCard(idx);
+                updateVideoProgress();
+            }
+        }
+
+        function startPolling(idx) {
+            const s = visualsScenes[idx];
+            if (animationPollers[idx]) clearInterval(animationPollers[idx]);
+
+            animationPollers[idx] = setInterval(async () => {
+                try {
+                    const res = await authFetch('/api/visuals/poll-animation', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            operation_name: s.operationName,
+                            scene_id: s.sceneId,
+                        }),
+                    });
+                    const data = await res.json();
+
+                    if (data.status === 'completed') {
+                        clearInterval(animationPollers[idx]);
+                        delete animationPollers[idx];
+                        s.videoStatus = 'complete';
+                        s.videoUrl = data.video_url;
+                        updateSceneCard(idx);
+                        updateVideoProgress();
+                    } else if (data.status === 'failed') {
+                        clearInterval(animationPollers[idx]);
+                        delete animationPollers[idx];
+                        s.videoStatus = 'error';
+                        s.videoError = data.error || 'Animation failed';
+                        updateSceneCard(idx);
+                        updateVideoProgress();
+                    }
+                    // 'in_progress' — keep polling
+                } catch (e) {
+                    clearInterval(animationPollers[idx]);
+                    delete animationPollers[idx];
+                    s.videoStatus = 'error';
+                    s.videoError = e.message;
+                    updateSceneCard(idx);
+                    updateVideoProgress();
+                }
+            }, 10000); // Poll every 10 seconds
+        }
+
+        async function animateAllScenes() {
+            const marked = visualsScenes
+                .map((s, i) => ({ scene: s, idx: i }))
+                .filter(item => item.scene.markedForAnimation && item.scene.imageUrl && item.scene.videoStatus !== 'complete');
+
+            if (!marked.length) { alert('No eligible scenes to animate. Mark scenes and ensure images are generated.'); return; }
+
+            // Read all animation prompts from textareas
+            marked.forEach(item => {
+                const ta = document.getElementById(`scene-veo-prompt-${item.idx}`);
+                if (ta) item.scene.veoPrompt = ta.value;
+            });
+
+            // Mark all as generating
+            marked.forEach(item => {
+                item.scene.videoStatus = 'generating';
+                updateSceneCard(item.idx);
+            });
+            updateVideoProgress();
+
+            const btn = document.getElementById('animateAllBtn');
+            btn.disabled = true;
+            btn.textContent = 'Starting animations...';
+
+            try {
+                const scenes = marked.map(item => ({
+                    scene_id: item.scene.sceneId,
+                    image_url: item.scene.imageUrl,
+                    prompt: item.scene.veoPrompt,
+                    model: item.scene.veoModel || null,
+                    duration: parseInt(item.scene.duration) || 6,
+                }));
+
+                const res = await authFetch('/api/visuals/start-batch-animation', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        scenes,
+                        global_config: {
+                            model: visualsConfig.veoModel,
+                            aspect_ratio: visualsConfig.aspectRatio,
+                        },
+                    }),
+                });
+
+                const data = await res.json();
+
+                if (data.operations) {
+                    for (const op of data.operations) {
+                        const sceneIdx = visualsScenes.findIndex(s => s.sceneId === String(op.scene_id));
+                        if (sceneIdx === -1) continue;
+                        const s = visualsScenes[sceneIdx];
+
+                        if (op.error) {
+                            s.videoStatus = 'error';
+                            s.videoError = op.error;
+                        } else {
+                            s.operationName = op.operation_name;
+                            s.videoStatus = 'polling';
+                            startPolling(sceneIdx);
+                        }
+                        updateSceneCard(sceneIdx);
+                    }
+                }
+            } catch (e) {
+                marked.forEach(item => {
+                    if (item.scene.videoStatus === 'generating') {
+                        item.scene.videoStatus = 'error';
+                        item.scene.videoError = e.message;
+                        updateSceneCard(item.idx);
+                    }
+                });
+            }
+
+            updateVideoProgress();
+            btn.disabled = false;
+            updateAnimateAllBtn();
+        }
+
+        // ── Download All Assets ──
+        async function downloadAllAssets() {
+            try {
+                const res = await authFetch('/api/visuals/download-all');
+                if (!res.ok) {
+                    const data = await res.json();
+                    throw new Error(data.error || 'Download failed');
+                }
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'visuals_assets.zip';
+                a.click();
+                URL.revokeObjectURL(url);
+            } catch (e) {
+                alert('Download failed: ' + e.message);
+            }
+        }
     </script>
 </body>
 
