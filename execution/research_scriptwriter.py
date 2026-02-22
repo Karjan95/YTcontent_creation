@@ -66,16 +66,43 @@ def _parse_json_response(raw_response: str) -> dict:
     if not raw_response:
         raise ValueError("Empty response from Gemini")
     text = raw_response.strip()
+
+    # Strip markdown code fences (```json ... ``` or ``` ... ```)
     if text.startswith("```"):
         lines = text.split("\n")
-        text = "\n".join(lines[1:-1])
-    return json.loads(text)
+        # Remove the opening ``` line
+        lines = lines[1:]
+        # Remove the closing ``` line (handle trailing whitespace/empty lines)
+        while lines and lines[-1].strip() in ("```", ""):
+            if lines[-1].strip() == "```":
+                lines.pop()
+                break
+            lines.pop()
+        text = "\n".join(lines).strip()
+
+    # Try direct parse first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: find the outermost { ... } in the text
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    if first_brace != -1 and last_brace > first_brace:
+        candidate = text[first_brace:last_brace + 1]
+        return json.loads(candidate)  # Let this raise if it also fails
+
+    raise json.JSONDecodeError("No JSON object found", text, 0)
 
 
 def generate_narration(topic: str, template_id: str, research_dossier: str,
-                       duration_minutes: int = 10, audience: str = "General",
+                       duration_minutes: int = 10, audience: str = "general",
                        tone: str = "", focus: str = "", style_guide: str = None,
-                       selected_title: str = None, api_key: str = None) -> dict:
+                       selected_title: str = None, format_preset: str = "",
+                       viewer_outcome: str = "", style_blend_mode: str = "clone",
+                       custom_audience: str = "", custom_tone: str = "",
+                       api_key: str = None) -> dict:
     """
     PHASE 1: Generate a flowing narration script using Gemini.
 
@@ -95,6 +122,11 @@ def generate_narration(topic: str, template_id: str, research_dossier: str,
         focus=focus,
         style_guide=style_guide,
         selected_title=selected_title,
+        format_preset=format_preset,
+        viewer_outcome=viewer_outcome,
+        style_blend_mode=style_blend_mode,
+        custom_audience=custom_audience,
+        custom_tone=custom_tone,
     )
 
     raw_response = generate_content(prompt, model_name="gemini-3-flash-preview", api_key=api_key)

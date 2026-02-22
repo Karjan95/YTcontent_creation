@@ -50,536 +50,640 @@
         </div>
     </div>
 
+    <!-- ═══ PROJECT NAME MODAL ═══ -->
+    <div id="projectNameModal" class="modal-overlay" style="display: none;">
+        <div class="modal-card">
+            <h2>New Project</h2>
+            <p>Give your project a name to get started.</p>
+            <input type="text" id="projectNameInput" class="style-input" placeholder="e.g. AI History Video"
+                onkeydown="if(event.key==='Enter') confirmNewProject()">
+            <div style="display: flex; gap: 8px; margin-top: 12px;">
+                <button class="btn-primary" style="flex:1" onclick="confirmNewProject()">Create Project</button>
+                <button class="btn-secondary" style="flex:1" onclick="cancelNewProject()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ GLOBAL NOTIFICATION BAR ═══ -->
+    <div id="globalNotifications" class="global-notifications"></div>
+
     <!-- ═══ MAIN APP ═══ -->
-    <div class="container" id="appContainer" style="display: none;">
-        <header>
-            <div class="header-row">
-                <div>
-                    <h1>Gemini <span class="accent">Studio</span></h1>
-                    <p>Create images, voiceovers & scripts with Google's AI</p>
-                </div>
-                <div class="user-info" id="userInfo" style="display: none;">
-                    <img id="userAvatar" class="user-avatar" src="" alt="User">
-                    <span id="userName" class="user-name"></span>
-                    <button class="btn-secondary signout-btn" onclick="signOut()">Sign Out</button>
-                </div>
+    <div class="app-wrapper" id="appWrapper" style="display: none;">
+        <!-- ═══ SIDEBAR (PROJECTS) ═══ -->
+        <aside class="sidebar" id="projectsSidebar">
+            <h2>Projects</h2>
+            <button class="btn-primary" style="width: 100%; margin-bottom: 12px; min-width: 0;"
+                onclick="createNewProject()">+ New Project</button>
+            <div class="project-list" id="projectList">
+                <div class="spinner" id="projectsSpinner" style="display: block; margin-top: 20px;"></div>
             </div>
-        </header>
+        </aside>
 
-        <!-- Tab Bar -->
-        <nav class="tab-bar">
-            <button class="tab active" data-tab="image" onclick="switchTab('image')">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="3" y="3" width="18" height="18" rx="2" />
-                    <circle cx="8.5" cy="8.5" r="1.5" />
-                    <path d="m21 15-5-5L5 21" />
-                </svg>
-                Image
-            </button>
-            <button class="tab" data-tab="voiceover" onclick="switchTab('voiceover')">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                    <line x1="12" x2="12" y1="19" y2="22" />
-                </svg>
-                Voiceover
-            </button>
-            <button class="tab" data-tab="visuals" onclick="switchTab('visuals')">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polygon points="23 7 16 12 23 17 23 7"/>
-                    <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-                </svg>
-                Visuals
-            </button>
-            <button class="tab" data-tab="research" onclick="switchTab('research')">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
-                    <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
-                </svg>
-                Research & Script
-            </button>
-        </nav>
-
-        <!-- ============ IMAGE TAB ============ -->
-        <main id="tab-image" class="tab-content active">
-            <div class="input-group">
-                <textarea id="promptInput"
-                    placeholder="Describe the image you want to create... e.g., A cyberpunk city in neon rain"></textarea>
-                <div class="controls">
-                    <button id="generateBtn" onclick="generateImage()">
-                        <span id="btnText">Generate</span>
-                        <div class="spinner" id="loadingSpinner"></div>
-                    </button>
-                </div>
-            </div>
-
-            <div class="result-area" id="resultArea">
-                <div class="placeholder-text" id="placeholderApp">
-                    Your creation will appear here
-                </div>
-                <img id="generatedImage" src="" alt="Generated Image" style="display: none;">
-            </div>
-
-            <div id="errorMessage" class="error-message" style="display: none;"></div>
-        </main>
-
-        <!-- ============ VOICEOVER TAB ============ -->
-        <main id="tab-voiceover" class="tab-content">
-            <div class="input-group">
-                <label class="input-label">Style instructions</label>
-                <input type="text" id="styleInput" class="style-input"
-                    placeholder="Read aloud in a warm and friendly tone">
-
-                <label class="input-label">Text</label>
-                <textarea id="ttsTextInput" placeholder="Start writing or paste text here to generate speech..."
-                    rows="8"></textarea>
-
-                <div class="controls tts-controls">
-                    <div class="voice-selector">
-                        <label class="input-label" for="voiceSelect">Voice</label>
-                        <select id="voiceSelect">
-                            <option value="Zephyr">Zephyr — Bright, Higher pitch</option>
-                            <option value="Puck">Puck — Upbeat, Middle pitch</option>
-                            <option value="Charon">Charon — Informative, Lower pitch</option>
-                            <option value="Kore" selected>Kore — Firm, Middle pitch</option>
-                            <option value="Fenrir">Fenrir — Excitable, Lower middle</option>
-                            <option value="Aoede">Aoede — Breezy, Higher pitch</option>
-                            <option value="Leda">Leda — Youthful, Higher pitch</option>
-                            <option value="Orus">Orus — Firm, Lower pitch</option>
-                            <option value="Perseus">Perseus — Casual, Lower pitch</option>
-                            <option value="Schedar">Schedar — Even keeled, Lower pitch</option>
-                            <option value="Achernar">Achernar — Soft, Higher pitch</option>
-                            <option value="Gacrux">Gacrux — Mature, Lower pitch</option>
-                            <option value="Pulcherrima">Pulcherrima — Forward, Higher pitch</option>
-                            <option value="Vindemiatrix">Vindemiatrix — Gentle, Lower pitch</option>
-                            <option value="Sadachbia">Sadachbia — Lively, Higher pitch</option>
-                            <option value="Sadaltager">Sadaltager — Knowledgeable, Lower pitch</option>
-                            <option value="Sulafat">Sulafat — Warm, Middle pitch</option>
-                            <option value="Laomedeia">Laomedeia — Upbeat, Higher pitch</option>
-                            <option value="Callirrhoe">Callirrhoe — Easy-going, Middle pitch</option>
-                            <option value="Autonoe">Autonoe — Bright, Higher pitch</option>
-                            <option value="Enceladus">Enceladus — Breathy, Middle pitch</option>
-                            <option value="Iapetus">Iapetus — Clear, Middle pitch</option>
-                            <option value="Umbriel">Umbriel — Easy-going, Middle pitch</option>
-                            <option value="Algieba">Algieba — Smooth, Lower pitch</option>
-                            <option value="Despina">Despina — Smooth, Higher pitch</option>
-                            <option value="Erinome">Erinome — Clear, Higher pitch</option>
-                            <option value="Algenib">Algenib — Gravelly, Lower pitch</option>
-                            <option value="Rasalgethi">Rasalgethi — Informative, Middle pitch</option>
-                            <option value="Hyperion">Hyperion — Deliberate, Lower pitch</option>
-                            <option value="Mimas">Mimas — Flat, Lower pitch</option>
-                        </select>
+        <div class="container" id="appContainer">
+            <header>
+                <div class="header-row">
+                    <div>
+                        <h1>Gemini <span class="accent">Studio</span></h1>
+                        <p>Create images, voiceovers & scripts with Google's AI</p>
                     </div>
-                    <button id="ttsGenerateBtn" onclick="generateTTS()">
-                        <span id="ttsBtnText">Generate</span>
-                        <div class="spinner" id="ttsLoadingSpinner"></div>
-                    </button>
+                    <div class="user-info" id="userInfo" style="display: none;">
+                        <img id="userAvatar" class="user-avatar" src="" alt="User">
+                        <span id="userName" class="user-name"></span>
+                        <button class="btn-secondary signout-btn" onclick="signOut()">Sign Out</button>
+                    </div>
                 </div>
-            </div>
+            </header>
 
-            <!-- Audio Result -->
-            <div class="result-area audio-result-area" id="ttsResultArea">
-                <div class="placeholder-text" id="ttsPlaceholder">
-                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#444" stroke-width="1.5">
+            <!-- Tab Bar -->
+            <nav class="tab-bar">
+                <button class="tab active" data-tab="image" onclick="switchTab('image')">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <circle cx="8.5" cy="8.5" r="1.5" />
+                        <path d="m21 15-5-5L5 21" />
+                    </svg>
+                    Image
+                </button>
+                <button class="tab" data-tab="voiceover" onclick="switchTab('voiceover')">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
                         <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
                         <line x1="12" x2="12" y1="19" y2="22" />
                     </svg>
-                    <span>Your voiceover will appear here</span>
+                    Voiceover
+                </button>
+                <button class="tab" data-tab="visuals" onclick="switchTab('visuals')">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="23 7 16 12 23 17 23 7" />
+                        <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                    </svg>
+                    Visuals
+                </button>
+                <button class="tab" data-tab="research" onclick="switchTab('research')">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+                        <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+                    </svg>
+                    Research & Script
+                </button>
+            </nav>
+
+            <!-- ============ IMAGE TAB ============ -->
+            <main id="tab-image" class="tab-content active">
+                <div class="input-group">
+                    <textarea id="promptInput"
+                        placeholder="Describe the image you want to create... e.g., A cyberpunk city in neon rain"></textarea>
+                    <div class="param-row" style="margin-top: 8px;">
+                        <div class="param-field" style="flex: 1;">
+                            <label class="input-label" for="imageModelSelect">Image Model</label>
+                            <select id="imageModelSelect" onchange="updateImageCostBadge()">
+                                <option value="gemini-3-pro-image-preview">Gemini 3 Pro (Quality)</option>
+                                <option value="gemini-2.5-flash-image">Gemini 2.5 Flash (Fast)</option>
+                                <option value="imagen-4.0-generate-001" selected>Imagen 4 (Standard)</option>
+                                <option value="imagen-4.0-fast-generate-001">Imagen 4 Fast</option>
+                                <option value="imagen-4.0-ultra-generate-001">Imagen 4 Ultra</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="controls">
+                        <button id="generateBtn" onclick="generateImage()">
+                            <span id="btnText">Generate</span>
+                            <div class="spinner" id="loadingSpinner"></div>
+                        </button>
+                        <span class="cost-badge" id="imageCostBadge">~$0.04 / image</span>
+                    </div>
                 </div>
-                <div id="audioPlayerWrap" class="audio-player-wrap" style="display: none;">
-                    <audio id="audioPlayer" controls></audio>
-                    <a id="downloadBtn" class="download-btn" download="voiceover.wav">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                            <polyline points="7 10 12 15 17 10" />
-                            <line x1="12" x2="12" y1="15" y2="3" />
+
+                <div class="result-area" id="resultArea">
+                    <div class="placeholder-text" id="placeholderApp">
+                        Your creation will appear here
+                    </div>
+                    <img id="generatedImage" src="" alt="Generated Image" style="display: none;">
+                </div>
+
+                <div id="errorMessage" class="error-message" style="display: none;"></div>
+            </main>
+
+            <!-- ============ VOICEOVER TAB ============ -->
+            <main id="tab-voiceover" class="tab-content">
+                <div class="input-group">
+                    <label class="input-label">Style instructions</label>
+                    <input type="text" id="styleInput" class="style-input"
+                        placeholder="Read aloud in a warm and friendly tone">
+
+                    <label class="input-label">Text</label>
+                    <textarea id="ttsTextInput" placeholder="Start writing or paste text here to generate speech..."
+                        rows="8" oninput="updateTTSCostBadge()"></textarea>
+
+                    <div class="controls tts-controls">
+                        <div class="voice-selector">
+                            <label class="input-label" for="voiceSelect">Voice</label>
+                            <select id="voiceSelect">
+                                <option value="Zephyr">Zephyr — Bright, Higher pitch</option>
+                                <option value="Puck">Puck — Upbeat, Middle pitch</option>
+                                <option value="Charon">Charon — Informative, Lower pitch</option>
+                                <option value="Kore" selected>Kore — Firm, Middle pitch</option>
+                                <option value="Fenrir">Fenrir — Excitable, Lower middle</option>
+                                <option value="Aoede">Aoede — Breezy, Higher pitch</option>
+                                <option value="Leda">Leda — Youthful, Higher pitch</option>
+                                <option value="Orus">Orus — Firm, Lower pitch</option>
+                                <option value="Perseus">Perseus — Casual, Lower pitch</option>
+                                <option value="Schedar">Schedar — Even keeled, Lower pitch</option>
+                                <option value="Achernar">Achernar — Soft, Higher pitch</option>
+                                <option value="Gacrux">Gacrux — Mature, Lower pitch</option>
+                                <option value="Pulcherrima">Pulcherrima — Forward, Higher pitch</option>
+                                <option value="Vindemiatrix">Vindemiatrix — Gentle, Lower pitch</option>
+                                <option value="Sadachbia">Sadachbia — Lively, Higher pitch</option>
+                                <option value="Sadaltager">Sadaltager — Knowledgeable, Lower pitch</option>
+                                <option value="Sulafat">Sulafat — Warm, Middle pitch</option>
+                                <option value="Laomedeia">Laomedeia — Upbeat, Higher pitch</option>
+                                <option value="Callirrhoe">Callirrhoe — Easy-going, Middle pitch</option>
+                                <option value="Autonoe">Autonoe — Bright, Higher pitch</option>
+                                <option value="Enceladus">Enceladus — Breathy, Middle pitch</option>
+                                <option value="Iapetus">Iapetus — Clear, Middle pitch</option>
+                                <option value="Umbriel">Umbriel — Easy-going, Middle pitch</option>
+                                <option value="Algieba">Algieba — Smooth, Lower pitch</option>
+                                <option value="Despina">Despina — Smooth, Higher pitch</option>
+                                <option value="Erinome">Erinome — Clear, Higher pitch</option>
+                                <option value="Algenib">Algenib — Gravelly, Lower pitch</option>
+                                <option value="Rasalgethi">Rasalgethi — Informative, Middle pitch</option>
+                                <option value="Hyperion">Hyperion — Deliberate, Lower pitch</option>
+                                <option value="Mimas">Mimas — Flat, Lower pitch</option>
+                            </select>
+                        </div>
+                        <button id="ttsGenerateBtn" onclick="generateTTS()">
+                            <span id="ttsBtnText">Generate</span>
+                            <div class="spinner" id="ttsLoadingSpinner"></div>
+                        </button>
+                        <span class="cost-badge" id="ttsCostBadge">~$0.003 / min</span>
+                    </div>
+                </div>
+
+                <!-- Audio Result -->
+                <div class="result-area audio-result-area" id="ttsResultArea">
+                    <div class="placeholder-text" id="ttsPlaceholder">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#444" stroke-width="1.5">
+                            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                            <line x1="12" x2="12" y1="19" y2="22" />
                         </svg>
-                        Download WAV
-                    </a>
-                </div>
-            </div>
-
-            <div id="ttsErrorMessage" class="error-message" style="display: none;"></div>
-        </main>
-
-        <!-- ============ VISUALS TAB ============ -->
-        <main id="tab-visuals" class="tab-content">
-
-            <!-- Data Loading Section -->
-            <div class="visuals-data-section">
-                <h3 class="section-title">Load Production Data</h3>
-                <div class="input-mode-toggle">
-                    <button class="mode-btn active" id="visualsModeAuto" onclick="setVisualsDataMode('auto')">
-                        Auto-detect from Phase 3
-                    </button>
-                    <button class="mode-btn" id="visualsModeManual" onclick="setVisualsDataMode('manual')">
-                        Paste Production JSON
-                    </button>
-                </div>
-                <div id="visualsAutoLoad">
-                    <div class="source-badge" id="visualsLoadStatus">
-                        <span class="source-dot idle"></span>
-                        No production data loaded yet
+                        <span>Your voiceover will appear here</span>
                     </div>
-                    <button class="btn-secondary" onclick="loadLatestProductionTable()" id="loadProdTableBtn">
-                        Load Latest Production Table
-                    </button>
-                </div>
-                <div id="visualsManualLoad" style="display: none;">
-                    <textarea id="visualsPasteArea" class="paste-area" rows="6"
-                        placeholder='Paste production table JSON here... (the full JSON from Phase 3)'></textarea>
-                    <button class="btn-secondary" style="margin-top: 8px;" onclick="importVisualsJson()">
-                        Import JSON
-                    </button>
-                </div>
-            </div>
-
-            <!-- Visual Style Configuration -->
-            <div class="visuals-config-section" id="visualsConfigSection" style="display: none;">
-                <h3 class="section-title">Visual Style Configuration</h3>
-                <div class="param-row">
-                    <div class="param-field">
-                        <label class="input-label" for="visAspectRatio">Aspect Ratio</label>
-                        <select id="visAspectRatio" onchange="updateVisualsConfig()">
-                            <option value="16:9" selected>16:9 Landscape</option>
-                            <option value="9:16">9:16 Portrait</option>
-                            <option value="1:1">1:1 Square</option>
-                            <option value="3:4">3:4</option>
-                            <option value="4:3">4:3</option>
-                            <option value="4:5">4:5</option>
-                            <option value="5:4">5:4</option>
-                        </select>
-                    </div>
-                    <div class="param-field">
-                        <label class="input-label" for="visResolution">Resolution</label>
-                        <select id="visResolution" onchange="updateVisualsConfig()">
-                            <option value="1K">1K (Fast)</option>
-                            <option value="2K" selected>2K (Balanced)</option>
-                            <option value="4K">4K (High Quality)</option>
-                        </select>
-                    </div>
-                    <div class="param-field">
-                        <label class="input-label" for="visImageModel">Image Model</label>
-                        <select id="visImageModel" onchange="updateVisualsConfig()">
-                            <option value="gemini-3-pro-image-preview" selected>Gemini 3 Pro (Quality)</option>
-                            <option value="gemini-2.5-flash-image">Gemini Flash (Fast)</option>
-                        </select>
-                    </div>
-                    <div class="param-field">
-                        <label class="input-label" for="visVeoModel">Veo Model</label>
-                        <select id="visVeoModel" onchange="updateVisualsConfig()">
-                            <option value="veo-3.1-generate-preview" selected>Veo 3.1 (Quality + Audio)</option>
-                            <option value="veo-3.1-fast">Veo 3.1 Fast</option>
-                        </select>
+                    <div id="audioPlayerWrap" class="audio-player-wrap" style="display: none;">
+                        <audio id="audioPlayer" controls></audio>
+                        <a id="downloadBtn" class="download-btn" download="voiceover.wav">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                <polyline points="7 10 12 15 17 10" />
+                                <line x1="12" x2="12" y1="15" y2="3" />
+                            </svg>
+                            Download WAV
+                        </a>
                     </div>
                 </div>
 
-                <!-- Style Reference Images -->
-                <div class="visuals-style-images">
-                    <label class="input-label">Style Reference Images (1-4)</label>
-                    <p class="paste-hint">Upload images that define the visual style. These will be sent as references with every image generation.</p>
-                    <div class="image-upload-area">
-                        <input type="file" id="visStyleImageInput" accept="image/*" multiple style="display: none;"
-                            onchange="handleVisualsStyleUpload(event)">
-                        <button class="btn-secondary" onclick="document.getElementById('visStyleImageInput').click()">
-                            Upload Style Images (Max 4)
+                <div id="ttsErrorMessage" class="error-message" style="display: none;"></div>
+            </main>
+
+            <!-- ============ VISUALS TAB ============ -->
+            <main id="tab-visuals" class="tab-content">
+
+                <!-- Data Loading Section -->
+                <div class="visuals-data-section">
+                    <h3 class="section-title">Load Production Data</h3>
+                    <div class="input-mode-toggle">
+                        <button class="mode-btn active" id="visualsModeAuto" onclick="setVisualsDataMode('auto')">
+                            Auto-detect from Phase 3
                         </button>
-                        <button class="btn-secondary" onclick="clearVisualsStyleImages()" id="visClearStyleBtn" style="display: none;">
-                            Clear
+                        <button class="mode-btn" id="visualsModeManual" onclick="setVisualsDataMode('manual')">
+                            Paste Production JSON
                         </button>
                     </div>
-                    <div id="visStyleImagePreviews" class="image-previews"></div>
-                </div>
-
-                <!-- Additional Context -->
-                <div style="margin-top: 12px;">
-                    <label class="input-label" for="visAdditionalContext">Additional Context</label>
-                    <input type="text" id="visAdditionalContext" class="style-input"
-                        placeholder="e.g., 2D Cartoon Style, Anime, Photorealistic..." onchange="updateVisualsConfig()">
-                </div>
-            </div>
-
-            <!-- Character Management -->
-            <div class="visuals-characters-section" id="visualsCharactersSection" style="display: none;">
-                <h3 class="section-title">Characters</h3>
-                <p class="paste-hint">Define characters with reference images for consistent appearance across scenes.</p>
-                <div id="characterList" class="character-list"></div>
-                <button class="btn-secondary" onclick="openAddCharacterModal()">+ Add Character</button>
-            </div>
-
-            <!-- Character Modal -->
-            <div id="characterModal" class="modal-overlay" style="display: none;">
-                <div class="modal-card">
-                    <h2>Add Character</h2>
-                    <label class="input-label">Character Name</label>
-                    <input type="text" id="charNameInput" class="style-input" placeholder="e.g., Detective Miller">
-                    <label class="input-label" style="margin-top: 12px;">Reference Images (1-4)</label>
-                    <div class="image-upload-area">
-                        <input type="file" id="charImageInput" accept="image/*" multiple style="display: none;"
-                            onchange="handleCharImageUpload(event)">
-                        <button class="btn-secondary" onclick="document.getElementById('charImageInput').click()">
-                            Upload Images
+                    <div id="visualsAutoLoad">
+                        <div class="source-badge" id="visualsLoadStatus">
+                            <span class="source-dot idle"></span>
+                            No production data loaded yet
+                        </div>
+                        <button class="btn-secondary" onclick="loadLatestProductionTable()" id="loadProdTableBtn">
+                            Load Latest Production Table
                         </button>
                     </div>
-                    <div id="charImagePreviews" class="image-previews" style="margin-top: 8px;"></div>
-                    <div style="display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end;">
-                        <button class="btn-secondary" onclick="closeCharacterModal()">Cancel</button>
-                        <button onclick="saveCharacter()">Save Character</button>
+                    <div id="visualsManualLoad" style="display: none;">
+                        <textarea id="visualsPasteArea" class="paste-area" rows="6"
+                            placeholder='Paste production table JSON here... (the full JSON from Phase 3)'></textarea>
+                        <button class="btn-secondary" style="margin-top: 8px;" onclick="importVisualsJson()">
+                            Import JSON
+                        </button>
                     </div>
                 </div>
-            </div>
 
-            <!-- Scene List -->
-            <div id="visualsSceneList" class="visuals-scene-list" style="display: none;"></div>
-
-            <!-- Global Action Bar -->
-            <div class="visuals-action-bar" id="visualsActionBar" style="display: none;">
-                <div class="visuals-action-info">
-                    <span id="visualsSceneCount">0 scenes</span>
-                    <span id="visualsImageProgress" style="display: none;"></span>
-                    <span id="visualsVideoProgress" style="display: none;"></span>
-                </div>
-                <div class="visuals-action-buttons">
-                    <button id="generateAllImagesBtn" onclick="generateAllImages()">
-                        Generate All Images
-                    </button>
-                    <button id="animateAllBtn" onclick="animateAllScenes()" style="display: none;">
-                        Animate All Marked
-                    </button>
-                    <button class="btn-secondary" onclick="downloadAllAssets()">
-                        Download All Assets
-                    </button>
-                </div>
-            </div>
-
-            <div id="visualsError" class="error-message" style="display: none;"></div>
-        </main>
-
-        <!-- ============ RESEARCH & SCRIPT TAB ============ -->
-        <main id="tab-research" class="tab-content">
-
-            <!-- ═══════════════════════════════════
-                 PHASE 1: RESEARCH
-                 ═══════════════════════════════════ -->
-            <div class="phase-card" id="phase1Card">
-                <div class="phase-header">
-                    <div class="phase-number">1</div>
-                    <div class="phase-title-group">
-                        <h3 class="phase-title">📚 Research</h3>
-                        <p class="phase-subtitle">Gather facts, sources, and context on any topic</p>
-                    </div>
-                    <div class="phase-status" id="phase1Status">Not started</div>
-                </div>
-
-                <div class="phase-body" id="phase1Body">
-                    <!-- Template Selection -->
-                    <div id="templateSection">
-                        <label class="input-label">Choose a Template</label>
-                        <div class="template-grid" id="templateGrid">
-                            <!-- Populated by JS -->
+                <!-- Visual Style Configuration -->
+                <div class="visuals-config-section" id="visualsConfigSection" style="display: none;">
+                    <h3 class="section-title">Visual Style Configuration</h3>
+                    <div class="param-row">
+                        <div class="param-field">
+                            <label class="input-label" for="visAspectRatio">Aspect Ratio</label>
+                            <select id="visAspectRatio" onchange="updateVisualsConfig()">
+                                <option value="16:9" selected>16:9 Landscape</option>
+                                <option value="9:16">9:16 Portrait</option>
+                                <option value="1:1">1:1 Square</option>
+                                <option value="3:4">3:4</option>
+                                <option value="4:3">4:3</option>
+                                <option value="4:5">4:5</option>
+                                <option value="5:4">5:4</option>
+                            </select>
+                        </div>
+                        <div class="param-field">
+                            <label class="input-label" for="visResolution">Resolution</label>
+                            <select id="visResolution" onchange="updateVisualsConfig()">
+                                <option value="1K">1K (Fast)</option>
+                                <option value="2K" selected>2K (Balanced)</option>
+                                <option value="4K">4K (High Quality)</option>
+                            </select>
+                        </div>
+                        <div class="param-field">
+                            <label class="input-label" for="visImageModel">Image Model</label>
+                            <select id="visImageModel" onchange="updateVisualsConfig()">
+                                <option value="gemini-3-pro-image-preview" selected>Gemini 3 Pro (Quality) ~$0.13/img
+                                </option>
+                                <option value="gemini-2.5-flash-image">Gemini 2.5 Flash (Fast) ~$0.03/img</option>
+                                <option value="imagen-4.0-generate-001">Imagen 4 (Standard) $0.04/img</option>
+                                <option value="imagen-4.0-fast-generate-001">Imagen 4 Fast $0.02/img</option>
+                                <option value="imagen-4.0-ultra-generate-001">Imagen 4 Ultra $0.06/img</option>
+                            </select>
+                        </div>
+                        <div class="param-field">
+                            <label class="input-label" for="visVeoModel">Veo Model</label>
+                            <select id="visVeoModel" onchange="updateVisualsConfig()">
+                                <option value="veo-3.1-generate-preview" selected>Veo 3.1 (Quality + Audio) ~$2.40/6s
+                                </option>
+                                <option value="veo-3.1-fast-generate-preview">Veo 3.1 Fast ~$0.90/6s</option>
+                            </select>
                         </div>
                     </div>
 
-                    <!-- Research Parameters (shown after template selection) -->
-                    <div id="researchParams" style="display: none;">
-                        <div class="selected-template-badge" id="selectedBadge"></div>
-
-                        <label class="input-label">Topic / Idea</label>
-                        <textarea id="researchTopic" rows="3"
-                            placeholder="e.g., How the fast fashion industry exploits workers in developing countries"></textarea>
-
-                        <div class="param-row">
-                            <div class="param-field" style="flex: 1;">
-                                <label class="input-label" for="researchModelSelect">Research Depth</label>
-                                <select id="researchModelSelect">
-                                    <option value="fast">⚡ Fast (Gemini Flash)</option>
-                                    <option value="deep" selected>🧠 Deep (Gemini Pro + Search)</option>
-                                    <option value="deep_research_agent">🔬 Deep Research Agent (2-5 min)</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div class="controls">
-                            <button class="btn-secondary" onclick="resetTemplate()">← Back</button>
-                            <button id="researchBtn" onclick="startResearch()">
-                                <span id="researchBtnText">🔍 Start Research</span>
-                                <div class="spinner" id="researchSpinner"></div>
+                    <!-- Style Reference Images -->
+                    <div class="visuals-style-images">
+                        <label class="input-label">Style Reference Images (1-4)</label>
+                        <p class="paste-hint">Upload images that define the visual style. These will be sent as
+                            references with every image generation.</p>
+                        <div class="image-upload-area">
+                            <input type="file" id="visStyleImageInput" accept="image/*" multiple style="display: none;"
+                                onchange="handleVisualsStyleUpload(event)">
+                            <button class="btn-secondary"
+                                onclick="document.getElementById('visStyleImageInput').click()">
+                                Upload Style Images (Max 4)
+                            </button>
+                            <button class="btn-secondary" onclick="clearVisualsStyleImages()" id="visClearStyleBtn"
+                                style="display: none;">
+                                Clear
                             </button>
                         </div>
+                        <div id="visStyleImagePreviews" class="image-previews"></div>
                     </div>
 
-                    <!-- Research Results (shown after research completes) -->
-                    <div id="researchResults" style="display: none;">
-                        <div class="section-header" onclick="toggleCollapse('researchBody')">
-                            <label class="input-label">📄 Research Dossier</label>
-                            <span class="collapse-icon" id="researchBody-icon">▼</span>
-                        </div>
-                        <div id="researchBody" class="collapsible">
-                            <div class="research-summary" id="researchSummary"></div>
-                            <div class="key-facts" id="keyFacts"></div>
-                            <div class="sources-list" id="sourcesList"></div>
-                        </div>
+                    <!-- Additional Context -->
+                    <div style="margin-top: 12px;">
+                        <label class="input-label" for="visAdditionalContext">Additional Context</label>
+                        <input type="text" id="visAdditionalContext" class="style-input"
+                            placeholder="e.g., 2D Cartoon Style, Anime, Photorealistic..."
+                            onchange="updateVisualsConfig()">
                     </div>
-
                 </div>
 
-                <div id="phase1Error" class="error-message" style="display: none;"></div>
-            </div>
+                <!-- Character Management -->
+                <div class="visuals-characters-section" id="visualsCharactersSection" style="display: none;">
+                    <h3 class="section-title">Characters</h3>
+                    <p class="paste-hint">Define characters with reference images for consistent appearance across
+                        scenes.</p>
+                    <div id="characterList" class="character-list"></div>
+                    <button class="btn-secondary" onclick="openAddCharacterModal()">+ Add Character</button>
+                </div>
 
-            <!-- ═══════════════════════════════════
+                <!-- Character Modal -->
+                <div id="characterModal" class="modal-overlay" style="display: none;">
+                    <div class="modal-card">
+                        <h2>Add Character</h2>
+                        <label class="input-label">Character Name</label>
+                        <input type="text" id="charNameInput" class="style-input" placeholder="e.g., Detective Miller">
+                        <label class="input-label" style="margin-top: 12px;">Reference Images (1-4)</label>
+                        <div class="image-upload-area">
+                            <input type="file" id="charImageInput" accept="image/*" multiple style="display: none;"
+                                onchange="handleCharImageUpload(event)">
+                            <button class="btn-secondary" onclick="document.getElementById('charImageInput').click()">
+                                Upload Images
+                            </button>
+                        </div>
+                        <div id="charImagePreviews" class="image-previews" style="margin-top: 8px;"></div>
+                        <div style="display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end;">
+                            <button class="btn-secondary" onclick="closeCharacterModal()">Cancel</button>
+                            <button onclick="saveCharacter()">Save Character</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Scene List -->
+                <div id="visualsSceneList" class="visuals-scene-list" style="display: none;"></div>
+
+                <!-- Global Action Bar -->
+                <div class="visuals-action-bar" id="visualsActionBar" style="display: none;">
+                    <div class="visuals-action-info">
+                        <span id="visualsSceneCount">0 scenes</span>
+                        <span id="visualsImageProgress" style="display: none;"></span>
+                        <span id="visualsVideoProgress" style="display: none;"></span>
+                    </div>
+                    <div class="visuals-action-buttons">
+                        <button id="generateAllImagesBtn" onclick="generateAllImages()">
+                            Generate All Images
+                        </button>
+                        <span class="cost-badge" id="batchImageCostBadge"></span>
+                        <button id="animateAllBtn" onclick="animateAllScenes()" style="display: none;">
+                            Animate All Marked
+                        </button>
+                        <span class="cost-badge" id="batchVideoCostBadge"></span>
+                        <button class="btn-secondary" onclick="downloadAllAssets()">
+                            Download All Assets
+                        </button>
+                    </div>
+                </div>
+
+                <div id="visualsError" class="error-message" style="display: none;"></div>
+            </main>
+
+            <!-- ============ RESEARCH & SCRIPT TAB ============ -->
+            <main id="tab-research" class="tab-content">
+
+                <!-- ═══════════════════════════════════
+                 PHASE 1: RESEARCH
+                 ═══════════════════════════════════ -->
+                <div class="phase-card" id="phase1Card">
+                    <div class="phase-header">
+                        <div class="phase-number">1</div>
+                        <div class="phase-title-group">
+                            <h3 class="phase-title">📚 Research</h3>
+                            <p class="phase-subtitle">Gather facts, sources, and context on any topic</p>
+                        </div>
+                        <div class="phase-status" id="phase1Status">Not started</div>
+                    </div>
+
+                    <div class="phase-body" id="phase1Body">
+                        <!-- Template Selection -->
+                        <div id="templateSection">
+                            <label class="input-label">Choose a Template</label>
+                            <div class="template-grid" id="templateGrid">
+                                <!-- Populated by JS -->
+                            </div>
+                        </div>
+
+                        <!-- Research Parameters (shown after template selection) -->
+                        <div id="researchParams" style="display: none;">
+                            <div class="selected-template-badge" id="selectedBadge"></div>
+
+                            <label class="input-label">Topic / Idea</label>
+                            <textarea id="researchTopic" rows="3"
+                                placeholder="e.g., How the fast fashion industry exploits workers in developing countries"></textarea>
+
+                            <div class="param-row">
+                                <div class="param-field" style="flex: 1;">
+                                    <label class="input-label" for="researchModelSelect">Research Depth</label>
+                                    <select id="researchModelSelect" onchange="updateResearchCostBadge()">
+                                        <option value="fast">⚡ Fast (Gemini Flash)</option>
+                                        <option value="deep" selected>🧠 Deep (Gemini Pro + Search)</option>
+                                        <option value="deep_research_agent">🔬 Deep Research Agent (2-5 min)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="controls">
+                                <button class="btn-secondary" onclick="resetTemplate()">← Back</button>
+                                <button id="researchBtn" onclick="startResearch()">
+                                    <span id="researchBtnText">🔍 Start Research</span>
+                                    <div class="spinner" id="researchSpinner"></div>
+                                </button>
+                                <span class="cost-badge" id="researchCostBadge">~$0.10–0.30</span>
+                            </div>
+                        </div>
+
+                        <!-- Research Results (shown after research completes) -->
+                        <div id="researchResults" style="display: none;">
+                            <div class="section-header" onclick="toggleCollapse('researchBody')">
+                                <label class="input-label">📄 Research Dossier</label>
+                                <span class="collapse-icon" id="researchBody-icon">▼</span>
+                            </div>
+                            <div id="researchBody" class="collapsible">
+                                <div class="research-summary" id="researchSummary"></div>
+                                <div class="key-facts" id="keyFacts"></div>
+                                <div class="sources-list" id="sourcesList"></div>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <div id="phase1Error" class="error-message" style="display: none;"></div>
+                </div>
+
+                <!-- ═══════════════════════════════════
                  PHASE 2: NARRATION
                  ═══════════════════════════════════ -->
-            <div class="phase-card" id="phase2Card">
-                <div class="phase-header">
-                    <div class="phase-number">2</div>
-                    <div class="phase-title-group">
-                        <h3 class="phase-title">✍️ Narration</h3>
-                        <p class="phase-subtitle">Choose audience, angle & tone, then generate your narration</p>
-                    </div>
-                    <div class="phase-status" id="phase2Status">Waiting for input</div>
-                </div>
-
-                <div class="phase-body" id="phase2Body">
-                    <!-- Input Mode Toggle -->
-                    <div class="input-mode-toggle">
-                        <button class="mode-btn active" id="scriptModeAuto" onclick="setScriptInputMode('auto')">
-                            🔗 Use Research from Phase 1
-                        </button>
-                        <button class="mode-btn" id="scriptModeManual" onclick="setScriptInputMode('manual')">
-                            📋 Paste Your Own Script
-                        </button>
+                <div class="phase-card" id="phase2Card">
+                    <div class="phase-header">
+                        <div class="phase-number">2</div>
+                        <div class="phase-title-group">
+                            <h3 class="phase-title">✍️ Narration</h3>
+                            <p class="phase-subtitle">Choose audience, angle & tone, then generate your narration</p>
+                        </div>
+                        <div class="phase-status" id="phase2Status">Waiting for input</div>
                     </div>
 
-                    <!-- Auto mode: multi-step wizard -->
-                    <div id="scriptAutoInput">
-                        <div class="source-badge" id="scriptSourceBadge">
-                            <span class="source-dot idle"></span>
-                            No research loaded yet — complete Phase 1 or switch to manual mode
+                    <div class="phase-body" id="phase2Body">
+                        <!-- Input Mode Toggle -->
+                        <div class="input-mode-toggle">
+                            <button class="mode-btn active" id="scriptModeAuto" onclick="setScriptInputMode('auto')">
+                                🔗 Use Research from Phase 1
+                            </button>
+                            <button class="mode-btn" id="scriptModeManual" onclick="setScriptInputMode('manual')">
+                                📋 Paste Your Own Script
+                            </button>
                         </div>
 
-                        <!-- STEP A: Audience -->
-                        <div id="wizardStepA" class="wizard-step" style="display: none;">
-                            <label class="input-label">Step 1: Who is your audience?</label>
-                            <div class="param-row" style="align-items: flex-end;">
-                                <div class="param-field" style="flex: 1;">
-                                    <select id="audienceSelect">
-                                        <option value="General" selected>General</option>
-                                        <option value="Young Adults (18-25)">Young Adults (18-25)</option>
-                                        <option value="Professionals">Professionals</option>
-                                        <option value="Expert">Expert</option>
-                                    </select>
-                                </div>
-                                <button class="btn-secondary" onclick="confirmAudience()">Next →</button>
+                        <!-- Auto mode: multi-step wizard -->
+                        <div id="scriptAutoInput">
+                            <div class="source-badge" id="scriptSourceBadge">
+                                <span class="source-dot idle"></span>
+                                No research loaded yet — complete Phase 1 or switch to manual mode
                             </div>
-                        </div>
 
-                        <!-- STEP B: Title / Narrative Angle -->
-                        <div id="wizardStepB" class="wizard-step" style="display: none;">
-                            <label class="input-label">Step 2: Choose a narrative angle</label>
-                            <p class="paste-hint">Each title represents a different way to tell the story. Pick one, edit it, or write your own.</p>
-                            <div id="titleSpinnerWrap" style="display: none;">
-                                <div class="title-loading">
-                                    <div class="spinner" style="display: inline-block;"></div>
-                                    <span>Generating title suggestions...</span>
+                            <!-- STEP A: Audience -->
+                            <div id="wizardStepA" class="wizard-step" style="display: none;">
+                                <label class="input-label">Step 1: Who is your audience?</label>
+                                <div class="param-row" style="align-items: flex-end;">
+                                    <div class="param-field" style="flex: 1;">
+                                        <select id="audienceSelect" onchange="onAudienceChange()">
+                                            <option value="general" selected>🌍 General Public</option>
+                                            <!-- Dynamically populated from /api/script-options -->
+                                        </select>
+                                        <div id="customAudienceField" style="display: none; margin-top: 8px;">
+                                            <input type="text" id="customAudienceInput" class="style-input"
+                                                placeholder="e.g. Millennials who love tech and memes, or Parents of toddlers">
+                                            <p class="paste-hint" style="margin-top: 4px; font-size: 0.75rem;">Describe
+                                                your target viewer in a few words. The AI will adapt the script for
+                                                them.</p>
+                                        </div>
+                                    </div>
+                                    <button class="btn-secondary" onclick="confirmAudience()">Next →</button>
                                 </div>
                             </div>
-                            <div id="titleCards" class="title-cards-grid"></div>
-                            <div id="titleEditSection" style="display: none;">
-                                <label class="input-label" style="margin-top: 12px;">Your Title</label>
-                                <input type="text" id="titleEditInput" class="style-input title-edit-input"
-                                    placeholder="Type your own title or edit the selected one">
-                                <div style="margin-top: 8px;">
-                                    <button class="btn-secondary" onclick="confirmTitle()">Confirm Title →</button>
-                                </div>
-                                <div id="titleConfirmedBadge" class="source-badge" style="display: none;"></div>
-                            </div>
-                        </div>
 
-                        <!-- STEP C: Length, Tone, Focus -->
-                        <div id="wizardStepC" class="wizard-step" style="display: none;">
-                            <label class="input-label">Step 3: Script parameters</label>
-                            <div class="param-row">
-                                <div class="param-field">
-                                    <label class="input-label" for="durationSelect">Video Length</label>
-                                    <select id="durationSelect">
-                                        <option value="5">5 minutes</option>
-                                        <option value="10" selected>10 minutes</option>
-                                        <option value="15">15 minutes</option>
-                                        <option value="20">20 minutes</option>
-                                    </select>
+                            <!-- STEP B: Title / Narrative Angle -->
+                            <div id="wizardStepB" class="wizard-step" style="display: none;">
+                                <label class="input-label">Step 2: Choose a narrative angle</label>
+                                <p class="paste-hint">Each title represents a different way to tell the story. Pick one,
+                                    edit it, or write your own.</p>
+                                <div id="titleSpinnerWrap" style="display: none;">
+                                    <div class="title-loading">
+                                        <div class="spinner" style="display: inline-block;"></div>
+                                        <span>Generating title suggestions...</span>
+                                    </div>
                                 </div>
-                                <div class="param-field">
-                                    <label class="input-label" for="toneSelect">Tone</label>
-                                    <select id="toneSelect">
-                                        <option value="">Auto (from template)</option>
-                                        <option value="Investigative">Investigative</option>
-                                        <option value="Conversational">Conversational</option>
-                                        <option value="Confrontational">Confrontational</option>
-                                        <option value="Neutral">Neutral</option>
-                                        <option value="Educational">Educational</option>
-                                        <option value="Entertaining">Entertaining</option>
-                                    </select>
-                                    <div id="toneSuggestionBadge" class="tone-suggestion" style="display: none;"></div>
+                                <div id="titleCards" class="title-cards-grid"></div>
+                                <div id="titleEditSection" style="display: none;">
+                                    <label class="input-label" style="margin-top: 12px;">Your Title</label>
+                                    <input type="text" id="titleEditInput" class="style-input title-edit-input"
+                                        placeholder="Type your own title or edit the selected one">
+                                    <div style="margin-top: 8px;">
+                                        <button class="btn-secondary" onclick="confirmTitle()">Confirm Title →</button>
+                                    </div>
+                                    <div id="titleConfirmedBadge" class="source-badge" style="display: none;"></div>
                                 </div>
                             </div>
-                            <label class="input-label">Focus angle <span style="color:#555">(optional)</span></label>
-                            <input type="text" id="focusInput" class="style-input"
-                                placeholder="e.g., Focus on the environmental impact specifically">
 
-                            <!-- Script Style Selection -->
-                            <div style="margin-top: 12px;">
-                                <label class="input-label">Script Style</label>
-                                <div class="style-toggle">
-                                    <label>
-                                        <input type="radio" name="styleMode" value="template" checked
-                                            onclick="toggleStyleInput()">
-                                        <span>Use Template Default</span>
-                                    </label>
-                                    <label>
-                                        <input type="radio" name="styleMode" value="transcript"
-                                            onclick="toggleStyleInput()">
-                                        <span>Analyze Transcript Style</span>
-                                    </label>
+                            <!-- STEP C: Length, Tone, Focus -->
+                            <div id="wizardStepC" class="wizard-step" style="display: none;">
+                                <label class="input-label">Step 3: Script parameters</label>
+                                <div class="param-row">
+                                    <div class="param-field">
+                                        <label class="input-label" for="formatPresetSelect">Video Format</label>
+                                        <select id="formatPresetSelect" onchange="onFormatPresetChange()">
+                                            <option value="short_form">⚡ Short Form (5-7 min)</option>
+                                            <option value="standard" selected>📺 Standard (10-12 min)</option>
+                                            <option value="deep_dive">📖 Deep Dive (18-22 min)</option>
+                                            <option value="custom">🔢 Custom</option>
+                                            <!-- Dynamically populated from /api/script-options -->
+                                        </select>
+                                    </div>
+                                    <div class="param-field" id="customDurationField" style="display: none;">
+                                        <label class="input-label" for="customDurationInput">Minutes</label>
+                                        <input type="number" id="customDurationInput" class="style-input" min="1"
+                                            max="60" value="10" style="width: 80px;">
+                                    </div>
+                                    <div class="param-field">
+                                        <label class="input-label" for="toneSelect">Tone</label>
+                                        <select id="toneSelect" onchange="onToneChange()">
+                                            <option value="">Auto (from template)</option>
+                                            <!-- Dynamically populated from /api/script-options -->
+                                        </select>
+                                        <div id="toneSuggestionBadge" class="tone-suggestion" style="display: none;">
+                                        </div>
+                                        <div id="customToneField" style="display: none; margin-top: 8px;">
+                                            <input type="text" id="customToneInput" class="style-input"
+                                                placeholder="e.g. Playful but slightly dark, like a true crime comedy podcast">
+                                            <p class="paste-hint" style="margin-top: 4px; font-size: 0.75rem;">Describe
+                                                the vibe you want. The AI will shape the script's voice to match.</p>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div id="transcriptStyleInput" style="display: none; margin-top: 10px;">
-                                    <textarea id="styleTranscript" class="style-input" rows="6"
-                                        placeholder="Paste the beginning of a transcript here (first 5-10 minutes)...
+                                <div class="param-row" style="margin-top: 8px;">
+                                    <div class="param-field" style="flex: 1;">
+                                        <label class="input-label" for="viewerOutcomeSelect">Desired Viewer
+                                            Outcome</label>
+                                        <select id="viewerOutcomeSelect">
+                                            <option value="">Auto (from template)</option>
+                                            <!-- Dynamically populated from /api/script-options -->
+                                        </select>
+                                    </div>
+                                </div>
+                                <label class="input-label" style="margin-top: 10px;">Focus angle <span
+                                        style="color:#555">(optional)</span></label>
+                                <input type="text" id="focusInput" class="style-input"
+                                    placeholder="e.g., Focus on the environmental impact specifically">
+
+                                <!-- Script Style Selection -->
+                                <div style="margin-top: 12px;">
+                                    <label class="input-label">Script Style</label>
+                                    <div class="style-toggle">
+                                        <label>
+                                            <input type="radio" name="styleMode" value="template" checked
+                                                onclick="toggleStyleInput()">
+                                            <span>Use Template Default</span>
+                                        </label>
+                                        <label>
+                                            <input type="radio" name="styleMode" value="transcript"
+                                                onclick="toggleStyleInput()">
+                                            <span>Analyze Transcript Style</span>
+                                        </label>
+                                    </div>
+                                    <div id="transcriptStyleInput" style="display: none; margin-top: 10px;">
+                                        <textarea id="styleTranscript" class="style-input" rows="6" placeholder="Paste the beginning of a transcript here (first 5-10 minutes)...
 We'll analyze the pacing, tone, and structure to write YOUR script in this style."></textarea>
+                                        <div class="blend-mode-toggle"
+                                            style="margin-top: 10px; padding: 10px; background: rgba(255,255,255,0.03); border: 1px solid #333; border-radius: 8px;">
+                                            <label class="input-label"
+                                                style="margin-bottom: 6px; font-size: 0.85rem;">How should we use this
+                                                transcript?</label>
+                                            <div class="style-toggle">
+                                                <label>
+                                                    <input type="radio" name="styleBlendMode" value="clone" checked>
+                                                    <span>🎭 Full Clone</span>
+                                                </label>
+                                                <label>
+                                                    <input type="radio" name="styleBlendMode" value="blend">
+                                                    <span>🎨 Blend with My Settings</span>
+                                                </label>
+                                            </div>
+                                            <p id="blendModeHint" class="paste-hint"
+                                                style="margin-top: 6px; font-size: 0.78rem; line-height: 1.4;">
+                                                <strong>Full Clone:</strong> Copy this creator's entire style. Your tone
+                                                and audience choices above will be <em>ignored</em>.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="controls" style="margin-top: 12px;">
+                                    <button id="scriptBtn" onclick="generateNarration()">
+                                        <span id="scriptBtnText">✍️ Generate Narration</span>
+                                        <div class="spinner" id="scriptSpinner"></div>
+                                    </button>
+                                    <span class="cost-badge">~$0.05–0.15</span>
                                 </div>
                             </div>
 
-                            <div class="controls" style="margin-top: 12px;">
-                                <button id="scriptBtn" onclick="generateNarration()">
-                                    <span id="scriptBtnText">✍️ Generate Narration</span>
-                                    <div class="spinner" id="scriptSpinner"></div>
-                                </button>
+                            <!-- STEP D: Narration Display -->
+                            <div id="wizardStepD" class="wizard-step" style="display: none;">
+                                <label class="input-label">Your Narration <span id="narrationEditHint"
+                                        style="font-weight:400; color:#888; font-size:0.8rem;">(click any beat text to
+                                        edit inline)</span></label>
+                                <div id="narrationDisplay" class="narration-display"></div>
+                                <div class="controls script-actions">
+                                    <button class="btn-secondary" onclick="copyNarration()">📋 Copy</button>
+                                    <button class="btn-secondary" onclick="downloadNarration()">💾 Download</button>
+                                    <button id="lockNarrationBtn" class="btn-primary" onclick="lockNarration()">🔒 Lock
+                                        Narration & Continue to Phase 3</button>
+                                </div>
                             </div>
                         </div>
 
-                        <!-- STEP D: Narration Display -->
-                        <div id="wizardStepD" class="wizard-step" style="display: none;">
-                            <label class="input-label">Your Narration <span id="narrationEditHint" style="font-weight:400; color:#888; font-size:0.8rem;">(click any beat text to edit inline)</span></label>
-                            <div id="narrationDisplay" class="narration-display"></div>
-                            <div class="controls script-actions">
-                                <button class="btn-secondary" onclick="copyNarration()">📋 Copy</button>
-                                <button class="btn-secondary" onclick="downloadNarration()">💾 Download</button>
-                                <button id="lockNarrationBtn" class="btn-primary" onclick="lockNarration()">🔒 Lock Narration & Continue to Phase 3</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Manual mode: paste plain text or JSON -->
-                    <div id="scriptManualInput" style="display: none;">
-                        <label class="input-label">Paste Your Script</label>
-                        <p class="paste-hint">
-                            ✅ <strong>Paste your plain text script</strong> — the system will automatically break it
-                            down into scenes<br>
-                            <small style="color: #666;">Or paste structured JSON:
-                                <code>{ "script": [ { "scene": 1, ... } ] }</code></small>
-                        </p>
-                        <textarea id="scriptPasteArea" rows="8" class="paste-area" placeholder="Paste your script here as plain text...
+                        <!-- Manual mode: paste plain text or JSON -->
+                        <div id="scriptManualInput" style="display: none;">
+                            <label class="input-label">Paste Your Script</label>
+                            <p class="paste-hint">
+                                ✅ <strong>Paste your plain text script</strong> — the system will automatically break it
+                                down into scenes<br>
+                                <small style="color: #666;">Or paste structured JSON:
+                                    <code>{ "script": [ { "scene": 1, ... } ] }</code></small>
+                            </p>
+                            <textarea id="scriptPasteArea" rows="8" class="paste-area" placeholder="Paste your script here as plain text...
 
 The system will automatically:
 • Break it down into timed scenes
@@ -588,272 +692,279 @@ The system will automatically:
 
 No formatting needed — just paste your narration!"></textarea>
 
-                        <!-- Manual Style Input -->
-                        <div style="margin-top: 15px; border-top: 1px solid #333; padding-top: 10px;">
-                            <label class="input-label" style="display:flex; align-items:center; cursor:pointer;"
-                                onclick="toggleManualStyle()">
-                                <span>🎨 Apply Style from Transcript (Optional)</span>
-                                <span id="manualStyleToggleArrow"
-                                    style="margin-left:auto; transform: rotate(-90deg); transition: transform 0.2s;">▼</span>
-                            </label>
-                            <div id="manualStyleSection" style="display:none; margin-top: 8px;">
-                                <textarea id="manualStyleTranscript" class="style-input" rows="4"
-                                    placeholder="Paste a reference transcript here (first 5-10 mins). We'll analyze its pacing and Visual Style to break down YOUR script."></textarea>
+                            <!-- Manual Style Input -->
+                            <div style="margin-top: 15px; border-top: 1px solid #333; padding-top: 10px;">
+                                <label class="input-label" style="display:flex; align-items:center; cursor:pointer;"
+                                    onclick="toggleManualStyle()">
+                                    <span>🎨 Apply Style from Transcript (Optional)</span>
+                                    <span id="manualStyleToggleArrow"
+                                        style="margin-left:auto; transform: rotate(-90deg); transition: transform 0.2s;">▼</span>
+                                </label>
+                                <div id="manualStyleSection" style="display:none; margin-top: 8px;">
+                                    <textarea id="manualStyleTranscript" class="style-input" rows="4"
+                                        placeholder="Paste a reference transcript here (first 5-10 mins). We'll analyze its pacing and Visual Style to break down YOUR script."></textarea>
+                                </div>
+                            </div>
+                            <div class="controls" style="margin-top: 12px;">
+                                <button onclick="importScript()">
+                                    <span>📋 Import & Breakdown Script</span>
+                                </button>
                             </div>
                         </div>
-                        <div class="controls" style="margin-top: 12px;">
-                            <button onclick="importScript()">
-                                <span>📋 Import & Breakdown Script</span>
-                            </button>
+
+                        <!-- Script Results -->
+                        <div id="scriptResults" style="display: none;">
+                            <div class="script-header">
+                                <h3 id="scriptTitle" class="script-title"></h3>
+                                <div class="script-meta" id="scriptMeta"></div>
+                            </div>
+                            <div class="script-table-wrap">
+                                <table class="script-table" id="scriptTable">
+                                    <thead>
+                                        <tr>
+                                            <th>#</th>
+                                            <th>Time</th>
+                                            <th>Act / Beat</th>
+                                            <th>Narration</th>
+                                            <th>Visual</th>
+                                            <th>Emotion</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="scriptTableBody"></tbody>
+                                </table>
+                            </div>
+                            <div class="controls script-actions">
+                                <button class="btn-secondary" onclick="copyScript()">📋 Copy Script</button>
+                                <button class="btn-secondary" onclick="downloadScript()">💾 Download JSON</button>
+                            </div>
                         </div>
                     </div>
 
-                    <!-- Script Results -->
-                    <div id="scriptResults" style="display: none;">
-                        <div class="script-header">
-                            <h3 id="scriptTitle" class="script-title"></h3>
-                            <div class="script-meta" id="scriptMeta"></div>
-                        </div>
-                        <div class="script-table-wrap">
-                            <table class="script-table" id="scriptTable">
-                                <thead>
-                                    <tr>
-                                        <th>#</th>
-                                        <th>Time</th>
-                                        <th>Act / Beat</th>
-                                        <th>Narration</th>
-                                        <th>Visual</th>
-                                        <th>Emotion</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="scriptTableBody"></tbody>
-                            </table>
-                        </div>
-                        <div class="controls script-actions">
-                            <button class="btn-secondary" onclick="copyScript()">📋 Copy Script</button>
-                            <button class="btn-secondary" onclick="downloadScript()">💾 Download JSON</button>
-                        </div>
-                    </div>
+                    <div id="phase2Error" class="error-message" style="display: none;"></div>
                 </div>
 
-                <div id="phase2Error" class="error-message" style="display: none;"></div>
-            </div>
-
-            <!-- ═══════════════════════════════════
+                <!-- ═══════════════════════════════════
                  PHASE 3: PRODUCTION TABLE
                  ═══════════════════════════════════ -->
-            <div class="phase-card" id="phase3Card">
-                <div class="phase-header">
-                    <div class="phase-number">3</div>
-                    <div class="phase-title-group">
-                        <h3 class="phase-title">🎬 Production Table</h3>
-                        <p class="phase-subtitle">Generate AI-ready video prompts for every shot (Veo 3.1)</p>
+                <div class="phase-card" id="phase3Card">
+                    <div class="phase-header">
+                        <div class="phase-number">3</div>
+                        <div class="phase-title-group">
+                            <h3 class="phase-title">🎬 Production Table</h3>
+                            <p class="phase-subtitle">Generate AI-ready video prompts for every shot (Veo 3.1)</p>
+                        </div>
+                        <div class="phase-status" id="phase3Status">Waiting for input</div>
                     </div>
-                    <div class="phase-status" id="phase3Status">Waiting for input</div>
+
+                    <div class="phase-body" id="phase3Body">
+                        <!-- Input Mode Toggle -->
+                        <div class="input-mode-toggle">
+                            <button class="mode-btn active" id="prodModeAuto" onclick="setProdInputMode('auto')">
+                                🔗 Use Script from Phase 2
+                            </button>
+                            <button class="mode-btn" id="prodModeManual" onclick="setProdInputMode('manual')">
+                                📋 Paste Your Own Narration JSON
+                            </button>
+                        </div>
+
+                        <!-- Auto mode: uses script data -->
+                        <div id="prodAutoInput">
+                            <div class="source-badge" id="prodSourceBadge">
+                                <span class="source-dot idle"></span>
+                                No narration loaded yet — complete Phase 2 or switch to manual mode
+                            </div>
+                        </div>
+
+                        <!-- Manual mode: paste JSON -->
+                        <div id="prodManualInput" style="display: none;">
+                            <label class="input-label">Paste Narration JSON</label>
+                            <p class="paste-hint">Paste a JSON object with a <code>"narration"</code> array of
+                                acts/beats.
+                                Legacy <code>"script"</code> arrays are also accepted and will be converted.</p>
+                            <textarea id="prodPasteArea" rows="8" class="paste-area"
+                                placeholder='{ "title": "My Video", "narration": [ { "act": "ACT 1", "beat": "Hook", "text": "..." } ] }'></textarea>
+                            <div class="controls" style="margin-top: 12px;">
+                                <button onclick="importSceneBreakdown()">
+                                    <span>📋 Import Narration</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Style Reference Images -->
+                        <div class="style-images-section" id="styleImagesSection">
+                            <label class="input-label">Style Reference Images (Optional)</label>
+                            <p class="paste-hint">
+                                Upload 1-4 images to define a <strong>custom visual style</strong>. The AI will extract
+                                the <em>artistic intent</em> and recommend which prompt fields to use.
+                            </p>
+                            <div class="image-upload-area">
+                                <input type="file" id="styleImageInput" accept="image/*" multiple style="display: none;"
+                                    onchange="handleStyleImageUpload(event)">
+                                <button class="btn-secondary"
+                                    onclick="document.getElementById('styleImageInput').click()">
+                                    Upload Images (Max 4)
+                                </button>
+                                <button class="btn-secondary" onclick="clearStyleImages()" id="clearImagesBtn"
+                                    style="display: none;">
+                                    Clear Images
+                                </button>
+                            </div>
+                            <div id="styleImagePreviews" class="image-previews"></div>
+                            <div id="styleAnalysisResult" class="style-analysis-result" style="display: none;"></div>
+                        </div>
+
+                        <!-- Free-Text Style Input (alternative to images) -->
+                        <div class="style-text-section" id="styleTextSection">
+                            <label class="input-label">Or Describe Your Visual Style</label>
+                            <p class="paste-hint">
+                                No reference images? Describe the look you want in plain language.
+                            </p>
+                            <div style="display: flex; gap: 8px; align-items: flex-start;">
+                                <textarea id="styleTextInput" class="text-area" rows="2"
+                                    placeholder="e.g., 2D cartoon with bold outlines, bright primary colors, simple backgrounds, no shadows"
+                                    style="flex: 1;"></textarea>
+                                <button class="btn-secondary" onclick="analyzeStyleFromText()" id="analyzeTextBtn">
+                                    Analyze
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Style Review & Approval Panel -->
+                        <div id="styleReviewPanel" class="style-review-panel" style="display: none;">
+                            <div class="review-header">
+                                <label class="input-label">Style Review & Approval</label>
+                                <span id="styleApprovedBadge" class="style-approved-badge"
+                                    style="display: none;">Approved</span>
+                            </div>
+
+                            <div class="review-field">
+                                <label>Style Summary</label>
+                                <textarea id="reviewStyleSummary" rows="2" class="review-input"></textarea>
+                            </div>
+
+                            <div class="review-grid">
+                                <div class="review-field">
+                                    <label>Detail Level</label>
+                                    <input type="text" id="reviewDetailLevel" class="review-input">
+                                </div>
+                                <div class="review-field">
+                                    <label>Scene Complexity</label>
+                                    <input type="text" id="reviewSceneComplexity" class="review-input">
+                                </div>
+                                <div class="review-field">
+                                    <label>Camera Language</label>
+                                    <input type="text" id="reviewCameraLanguage" class="review-input">
+                                </div>
+                                <div class="review-field">
+                                    <label>Lighting Approach</label>
+                                    <input type="text" id="reviewLighting" class="review-input">
+                                </div>
+                                <div class="review-field">
+                                    <label>Subject Framing</label>
+                                    <input type="text" id="reviewSubjectFraming" class="review-input">
+                                </div>
+                                <div class="review-field">
+                                    <label>Writing Style</label>
+                                    <input type="text" id="reviewWritingStyle" class="review-input">
+                                </div>
+                                <div class="review-field">
+                                    <label>Color Palette</label>
+                                    <input type="text" id="reviewColorPalette" class="review-input">
+                                </div>
+                                <div class="review-field">
+                                    <label>Texture</label>
+                                    <input type="text" id="reviewTexture" class="review-input">
+                                </div>
+                                <div class="review-field">
+                                    <label>Default Mood</label>
+                                    <input type="text" id="reviewMoodDefault" class="review-input">
+                                </div>
+                            </div>
+
+                            <div class="review-field" style="margin-top: 12px;">
+                                <label>Prompt Schema — Which fields to include in production prompts</label>
+                                <div id="schemaFieldsChecklist" class="schema-checklist"></div>
+                            </div>
+
+                            <div class="review-field" style="margin-top: 12px;">
+                                <label>Aspect Ratio</label>
+                                <select id="reviewAspectRatio" class="review-input" style="width: auto;">
+                                    <option value="16:9" selected>16:9 Landscape</option>
+                                    <option value="9:16">9:16 Portrait</option>
+                                </select>
+                            </div>
+
+                            <div class="controls" style="margin-top: 12px;">
+                                <button class="btn-primary" onclick="approveStyle()">
+                                    Approve Style & Schema
+                                </button>
+                                <button class="btn-secondary" onclick="clearApprovedStyle()">
+                                    Reset
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="controls" style="margin-top: 16px;">
+                            <button id="productionBtn" onclick="generateProductionTable()">
+                                <span id="productionBtnText">Generate Production Table</span>
+                                <div class="spinner" id="productionSpinner"></div>
+                            </button>
+                            <span class="cost-badge">~$0.20–0.50</span>
+                        </div>
+
+                        <!-- Production Table Results -->
+                        <div id="productionResults" style="display: none;">
+                            <div class="production-header">
+                                <h3 class="script-title">Production Shots</h3>
+                                <div class="script-meta" id="productionMeta"></div>
+                            </div>
+                            <div class="production-table-wrap">
+                                <table class="production-table" id="productionTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Shot</th>
+                                            <th>Script / Beat</th>
+                                            <th>Dur</th>
+                                            <th>Director's Intent</th>
+                                            <th>First Frame Prompt</th>
+                                            <th>Last Frame Prompt</th>
+                                            <th>Veo 3.1 Prompt</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="productionTableBody"></tbody>
+                                </table>
+                            </div>
+
+                            <!-- Continuity Notes -->
+                            <div id="continuityNotes" style="display:none; margin-top:16px;">
+                                <div class="section-header" onclick="toggleCollapse('continuityBody')">
+                                    <label class="input-label">🔗 Continuity Notes</label>
+                                    <span class="collapse-icon" id="continuityBody-icon">▼</span>
+                                </div>
+                                <div id="continuityBody" class="collapsible">
+                                    <div id="continuityContent"></div>
+                                </div>
+                            </div>
+
+                            <div class="controls script-actions">
+                                <button class="btn-secondary" onclick="copyFirstFramePrompts()">🖼️ Copy All First Frame
+                                    Prompts</button>
+                                <button class="btn-secondary" onclick="copyLastFramePrompts()">🖼️ Copy All Last Frame
+                                    Prompts</button>
+                                <button class="btn-secondary" onclick="copyVeoPrompts()">🎬 Copy All Veo
+                                    Prompts</button>
+                                <button class="btn-secondary" onclick="copyAllPrompts()">📋 Copy All Prompts</button>
+                                <button class="btn-secondary" onclick="downloadProductionTable()">💾 Download
+                                    JSON</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="phase3Error" class="error-message" style="display: none;"></div>
                 </div>
 
-                <div class="phase-body" id="phase3Body">
-                    <!-- Input Mode Toggle -->
-                    <div class="input-mode-toggle">
-                        <button class="mode-btn active" id="prodModeAuto" onclick="setProdInputMode('auto')">
-                            🔗 Use Script from Phase 2
-                        </button>
-                        <button class="mode-btn" id="prodModeManual" onclick="setProdInputMode('manual')">
-                            📋 Paste Your Own Narration JSON
-                        </button>
-                    </div>
-
-                    <!-- Auto mode: uses script data -->
-                    <div id="prodAutoInput">
-                        <div class="source-badge" id="prodSourceBadge">
-                            <span class="source-dot idle"></span>
-                            No narration loaded yet — complete Phase 2 or switch to manual mode
-                        </div>
-                    </div>
-
-                    <!-- Manual mode: paste JSON -->
-                    <div id="prodManualInput" style="display: none;">
-                        <label class="input-label">Paste Narration JSON</label>
-                        <p class="paste-hint">Paste a JSON object with a <code>"narration"</code> array of acts/beats.
-                            Legacy <code>"script"</code> arrays are also accepted and will be converted.</p>
-                        <textarea id="prodPasteArea" rows="8" class="paste-area"
-                            placeholder='{ "title": "My Video", "narration": [ { "act": "ACT 1", "beat": "Hook", "text": "..." } ] }'></textarea>
-                        <div class="controls" style="margin-top: 12px;">
-                            <button onclick="importSceneBreakdown()">
-                                <span>📋 Import Narration</span>
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Style Reference Images -->
-                    <div class="style-images-section" id="styleImagesSection">
-                        <label class="input-label">Style Reference Images (Optional)</label>
-                        <p class="paste-hint">
-                            Upload 1-4 images to define a <strong>custom visual style</strong>. The AI will extract
-                            the <em>artistic intent</em> and recommend which prompt fields to use.
-                        </p>
-                        <div class="image-upload-area">
-                            <input type="file" id="styleImageInput" accept="image/*" multiple style="display: none;"
-                                onchange="handleStyleImageUpload(event)">
-                            <button class="btn-secondary" onclick="document.getElementById('styleImageInput').click()">
-                                Upload Images (Max 4)
-                            </button>
-                            <button class="btn-secondary" onclick="clearStyleImages()" id="clearImagesBtn"
-                                style="display: none;">
-                                Clear Images
-                            </button>
-                        </div>
-                        <div id="styleImagePreviews" class="image-previews"></div>
-                        <div id="styleAnalysisResult" class="style-analysis-result" style="display: none;"></div>
-                    </div>
-
-                    <!-- Free-Text Style Input (alternative to images) -->
-                    <div class="style-text-section" id="styleTextSection">
-                        <label class="input-label">Or Describe Your Visual Style</label>
-                        <p class="paste-hint">
-                            No reference images? Describe the look you want in plain language.
-                        </p>
-                        <div style="display: flex; gap: 8px; align-items: flex-start;">
-                            <textarea id="styleTextInput" class="text-area" rows="2"
-                                placeholder="e.g., 2D cartoon with bold outlines, bright primary colors, simple backgrounds, no shadows"
-                                style="flex: 1;"></textarea>
-                            <button class="btn-secondary" onclick="analyzeStyleFromText()" id="analyzeTextBtn">
-                                Analyze
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Style Review & Approval Panel -->
-                    <div id="styleReviewPanel" class="style-review-panel" style="display: none;">
-                        <div class="review-header">
-                            <label class="input-label">Style Review & Approval</label>
-                            <span id="styleApprovedBadge" class="style-approved-badge" style="display: none;">Approved</span>
-                        </div>
-
-                        <div class="review-field">
-                            <label>Style Summary</label>
-                            <textarea id="reviewStyleSummary" rows="2" class="review-input"></textarea>
-                        </div>
-
-                        <div class="review-grid">
-                            <div class="review-field">
-                                <label>Detail Level</label>
-                                <input type="text" id="reviewDetailLevel" class="review-input">
-                            </div>
-                            <div class="review-field">
-                                <label>Scene Complexity</label>
-                                <input type="text" id="reviewSceneComplexity" class="review-input">
-                            </div>
-                            <div class="review-field">
-                                <label>Camera Language</label>
-                                <input type="text" id="reviewCameraLanguage" class="review-input">
-                            </div>
-                            <div class="review-field">
-                                <label>Lighting Approach</label>
-                                <input type="text" id="reviewLighting" class="review-input">
-                            </div>
-                            <div class="review-field">
-                                <label>Subject Framing</label>
-                                <input type="text" id="reviewSubjectFraming" class="review-input">
-                            </div>
-                            <div class="review-field">
-                                <label>Writing Style</label>
-                                <input type="text" id="reviewWritingStyle" class="review-input">
-                            </div>
-                            <div class="review-field">
-                                <label>Color Palette</label>
-                                <input type="text" id="reviewColorPalette" class="review-input">
-                            </div>
-                            <div class="review-field">
-                                <label>Texture</label>
-                                <input type="text" id="reviewTexture" class="review-input">
-                            </div>
-                            <div class="review-field">
-                                <label>Default Mood</label>
-                                <input type="text" id="reviewMoodDefault" class="review-input">
-                            </div>
-                        </div>
-
-                        <div class="review-field" style="margin-top: 12px;">
-                            <label>Prompt Schema — Which fields to include in production prompts</label>
-                            <div id="schemaFieldsChecklist" class="schema-checklist"></div>
-                        </div>
-
-                        <div class="review-field" style="margin-top: 12px;">
-                            <label>Aspect Ratio</label>
-                            <select id="reviewAspectRatio" class="review-input" style="width: auto;">
-                                <option value="16:9" selected>16:9 Landscape</option>
-                                <option value="9:16">9:16 Portrait</option>
-                            </select>
-                        </div>
-
-                        <div class="controls" style="margin-top: 12px;">
-                            <button class="btn-primary" onclick="approveStyle()">
-                                Approve Style & Schema
-                            </button>
-                            <button class="btn-secondary" onclick="clearApprovedStyle()">
-                                Reset
-                            </button>
-                        </div>
-                    </div>
-
-                    <div class="controls" style="margin-top: 16px;">
-                        <button id="productionBtn" onclick="generateProductionTable()">
-                            <span id="productionBtnText">Generate Production Table</span>
-                            <div class="spinner" id="productionSpinner"></div>
-                        </button>
-                    </div>
-
-                    <!-- Production Table Results -->
-                    <div id="productionResults" style="display: none;">
-                        <div class="production-header">
-                            <h3 class="script-title">Production Shots</h3>
-                            <div class="script-meta" id="productionMeta"></div>
-                        </div>
-                        <div class="production-table-wrap">
-                            <table class="production-table" id="productionTable">
-                                <thead>
-                                    <tr>
-                                        <th>Shot</th>
-                                        <th>Script / Beat</th>
-                                        <th>Dur</th>
-                                        <th>Director's Intent</th>
-                                        <th>First Frame Prompt</th>
-                                        <th>Last Frame Prompt</th>
-                                        <th>Veo 3.1 Prompt</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="productionTableBody"></tbody>
-                            </table>
-                        </div>
-
-                        <!-- Continuity Notes -->
-                        <div id="continuityNotes" style="display:none; margin-top:16px;">
-                            <div class="section-header" onclick="toggleCollapse('continuityBody')">
-                                <label class="input-label">🔗 Continuity Notes</label>
-                                <span class="collapse-icon" id="continuityBody-icon">▼</span>
-                            </div>
-                            <div id="continuityBody" class="collapsible">
-                                <div id="continuityContent"></div>
-                            </div>
-                        </div>
-
-                        <div class="controls script-actions">
-                            <button class="btn-secondary" onclick="copyFirstFramePrompts()">🖼️ Copy All First Frame
-                                Prompts</button>
-                            <button class="btn-secondary" onclick="copyLastFramePrompts()">🖼️ Copy All Last Frame
-                                Prompts</button>
-                            <button class="btn-secondary" onclick="copyVeoPrompts()">🎬 Copy All Veo Prompts</button>
-                            <button class="btn-secondary" onclick="copyAllPrompts()">📋 Copy All Prompts</button>
-                            <button class="btn-secondary" onclick="downloadProductionTable()">💾 Download JSON</button>
-                        </div>
-                    </div>
-                </div>
-
-                <div id="phase3Error" class="error-message" style="display: none;"></div>
-            </div>
-
-        </main>
+            </main>
+        </div>
     </div>
 
     <script>
@@ -877,9 +988,28 @@ No formatting needed — just paste your narration!"></textarea>
 
         // Authenticated fetch wrapper — adds Authorization header to all API calls
         async function authFetch(url, options = {}) {
-            if (!idToken) throw new Error('Not authenticated');
+            const user = firebase.auth().currentUser;
+            if (!user) throw new Error('Not authenticated');
+
+            // Always get a fresh token (Firebase SDK caches it internally,
+            // only refreshes when actually near expiration)
+            idToken = await user.getIdToken();
+
             const headers = { ...(options.headers || {}), 'Authorization': `Bearer ${idToken}` };
-            return fetch(url, { ...options, headers });
+            const response = await fetch(url, { ...options, headers });
+
+            // Auto-retry on token expired (force refresh and try once more)
+            if (response.status === 401 || response.status === 403) {
+                const errBody = await response.clone().text();
+                if (errBody.includes('Token expired') || errBody.includes('token') || errBody.includes('auth')) {
+                    console.warn('[Auth] Token expired, force-refreshing and retrying...');
+                    idToken = await user.getIdToken(true); // Force refresh
+                    const retryHeaders = { ...(options.headers || {}), 'Authorization': `Bearer ${idToken}` };
+                    return fetch(url, { ...options, headers: retryHeaders });
+                }
+            }
+
+            return response;
         }
 
         // Auth state listener
@@ -964,19 +1094,20 @@ No formatting needed — just paste your narration!"></textarea>
         function showLogin() {
             document.getElementById('loginScreen').style.display = 'flex';
             document.getElementById('apiKeyModal').style.display = 'none';
-            document.getElementById('appContainer').style.display = 'none';
+            document.getElementById('appWrapper').style.display = 'none';
         }
 
         function showApiKeyModal() {
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('apiKeyModal').style.display = 'flex';
-            document.getElementById('appContainer').style.display = 'none';
+            document.getElementById('appWrapper').style.display = 'none';
         }
 
         function showApp() {
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('apiKeyModal').style.display = 'none';
-            document.getElementById('appContainer').style.display = 'flex';
+            document.getElementById('appWrapper').style.display = 'flex';
+            fetchProjects(true); // auto-load last project on first load
         }
 
         /* ══════════════════════════════════════
@@ -1011,8 +1142,74 @@ No formatting needed — just paste your narration!"></textarea>
             { key: 'made_out_of', label: 'Material / Texture', locked: false },
             { key: 'tags', label: 'Aesthetic Tags', locked: false },
         ];
-        let deepResearchInteractionId = null; // Interaction ID for async deep research
-        let deepResearchPollTimer = null; // Polling timer for deep research
+        // ── Per-project background operations tracking ──
+        // Map<projectId, { researchPollTimer, interactionId, topic, templateId }>
+        const backgroundOps = new Map();
+
+        function getBackgroundOp(projectId) {
+            return backgroundOps.get(projectId) || null;
+        }
+
+        function setBackgroundOp(projectId, op) {
+            backgroundOps.set(projectId, op);
+            updateGlobalNotifications();
+        }
+
+        function clearBackgroundOp(projectId) {
+            const op = backgroundOps.get(projectId);
+            if (op && op.researchPollTimer) clearInterval(op.researchPollTimer);
+            backgroundOps.delete(projectId);
+            updateGlobalNotifications();
+        }
+
+        // ── Global notification bar for cross-project events ──
+        function updateGlobalNotifications() {
+            const container = document.getElementById('globalNotifications');
+            if (!container) return;
+
+            const notifications = [];
+            for (const [projId, op] of backgroundOps.entries()) {
+                if (projId === currentProjectId) continue; // Don't notify for active project
+                if (op.status === 'completed') {
+                    const projTitle = _lastSavedProjects.find(p => p.id === projId)?.title || 'Project';
+                    notifications.push(`
+                        <div class="global-notification success" onclick="loadProject('${projId}')">
+                            <span>✅ <strong>${escapeHTML(projTitle)}</strong>: Research complete</span>
+                            <button class="notification-dismiss" onclick="event.stopPropagation(); dismissNotification('${projId}')">✕</button>
+                        </div>
+                    `);
+                } else if (op.status === 'failed') {
+                    const projTitle = _lastSavedProjects.find(p => p.id === projId)?.title || 'Project';
+                    notifications.push(`
+                        <div class="global-notification error" onclick="loadProject('${projId}')">
+                            <span>❌ <strong>${escapeHTML(projTitle)}</strong>: Research failed</span>
+                            <button class="notification-dismiss" onclick="event.stopPropagation(); dismissNotification('${projId}')">✕</button>
+                        </div>
+                    `);
+                } else if (op.status === 'in_progress') {
+                    const projTitle = _lastSavedProjects.find(p => p.id === projId)?.title || 'Project';
+                    notifications.push(`
+                        <div class="global-notification running" onclick="loadProject('${projId}')">
+                            <span>🔬 <strong>${escapeHTML(projTitle)}</strong>: Research running…</span>
+                        </div>
+                    `);
+                }
+            }
+            container.innerHTML = notifications.join('');
+        }
+
+        function dismissNotification(projectId) {
+            clearBackgroundOp(projectId);
+        }
+
+        // ── Warn before unload if background ops are active ──
+        window.addEventListener('beforeunload', (e) => {
+            const activeOps = [...backgroundOps.values()].filter(op => op.status === 'in_progress');
+            if (activeOps.length > 0) {
+                e.preventDefault();
+                e.returnValue = 'Research is still running in the background. Are you sure you want to leave?';
+            }
+        });
 
         /* ── Tab Switching ── */
         function switchTab(tabName) {
@@ -1024,6 +1221,7 @@ No formatting needed — just paste your narration!"></textarea>
             // Load templates when switching to research tab
             if (tabName === 'research' && !document.getElementById('templateGrid').children.length) {
                 loadTemplates();
+                loadScriptOptions();
             }
         }
 
@@ -1050,10 +1248,11 @@ No formatting needed — just paste your narration!"></textarea>
             placeholder.innerText = "Dreaming...";
 
             try {
+                const model = document.getElementById('imageModelSelect').value;
                 const response = await authFetch('/api/generate-image', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt }),
+                    body: JSON.stringify({ prompt, model }),
                 });
                 const data = await response.json();
 
@@ -1073,6 +1272,87 @@ No formatting needed — just paste your narration!"></textarea>
                 btn.disabled = false;
                 btnText.style.display = 'inline';
                 spinner.style.display = 'none';
+            }
+        }
+
+        /* ══════════════════════════════════════
+           PRICING CONFIG & COST BADGE HELPERS
+           ══════════════════════════════════════ */
+        const PRICING = {
+            image: {
+                'gemini-3-pro-image-preview': { cost: 0.134, label: '~$0.13 / image' },
+                'gemini-2.5-flash-image': { cost: 0.034, label: '~$0.03 / image' },
+                'imagen-4.0-generate-001': { cost: 0.04, label: '$0.04 / image' },
+                'imagen-4.0-fast-generate-001': { cost: 0.02, label: '$0.02 / image' },
+                'imagen-4.0-ultra-generate-001': { cost: 0.06, label: '$0.06 / image' },
+            },
+            video: {
+                'veo-3.1-generate-preview': { costPerSec: 0.40, label: '/s' },
+                'veo-3.1-fast-generate-preview': { costPerSec: 0.15, label: '/s' },
+            },
+            research: {
+                'fast': { label: '~$0.01–0.05' },
+                'deep': { label: '~$0.10–0.30' },
+                'deep_research_agent': { label: '~$0.50–2.00' },
+            },
+        };
+
+        function updateImageCostBadge() {
+            const model = document.getElementById('imageModelSelect').value;
+            const badge = document.getElementById('imageCostBadge');
+            const info = PRICING.image[model];
+            if (badge && info) badge.textContent = info.label;
+        }
+
+        function updateResearchCostBadge() {
+            const depth = document.getElementById('researchModelSelect').value;
+            const badge = document.getElementById('researchCostBadge');
+            const info = PRICING.research[depth];
+            if (badge && info) badge.textContent = info.label;
+        }
+
+        function updateBatchCostBadges() {
+            // Image batch cost
+            const imgModel = document.getElementById('visImageModel')?.value || 'gemini-3-pro-image-preview';
+            const imgInfo = PRICING.image[imgModel];
+            const sceneCount = document.querySelectorAll('.scene-card').length;
+            const imgBadge = document.getElementById('batchImageCostBadge');
+            if (imgBadge && imgInfo && sceneCount > 0) {
+                const total = (imgInfo.cost * sceneCount).toFixed(2);
+                imgBadge.textContent = `~$${total} (${sceneCount} × $${imgInfo.cost})`;
+            } else if (imgBadge) {
+                imgBadge.textContent = '';
+            }
+
+            // Video batch cost
+            const veoModel = document.getElementById('visVeoModel')?.value || 'veo-3.1-generate-preview';
+            const veoInfo = PRICING.video[veoModel];
+            const duration = parseInt(document.getElementById('visDuration')?.value || '6');
+            const animateBtn = document.getElementById('animateAllBtn');
+            const vidBadge = document.getElementById('batchVideoCostBadge');
+            if (vidBadge && veoInfo && animateBtn && animateBtn.style.display !== 'none') {
+                const animateCount = document.querySelectorAll('.scene-card[data-animate="true"]').length || sceneCount;
+                const perClip = (veoInfo.costPerSec * duration).toFixed(2);
+                const total = (veoInfo.costPerSec * duration * animateCount).toFixed(2);
+                vidBadge.textContent = `~$${total} (${animateCount} × $${perClip})`;
+            } else if (vidBadge) {
+                vidBadge.textContent = '';
+            }
+        }
+
+        function updateTTSCostBadge() {
+            const text = document.getElementById('ttsTextInput')?.value || '';
+            const badge = document.getElementById('ttsCostBadge');
+            if (badge) {
+                const charCount = text.length;
+                if (charCount > 0) {
+                    // ~150 chars per second of speech → chars / 150 = seconds → /60 = mins
+                    const estMins = Math.max(0.1, charCount / 150 / 60);
+                    const estCost = (estMins * 0.003).toFixed(4);
+                    badge.textContent = `~$${estCost} (~${estMins.toFixed(1)} min)`;
+                } else {
+                    badge.textContent = '~$0.003 / min';
+                }
             }
         }
 
@@ -1112,7 +1392,11 @@ No formatting needed — just paste your narration!"></textarea>
 
                 if (response.ok) {
                     audioPlayer.src = data.audio_url;
-                    downloadBtn.href = data.audio_url;
+                    downloadBtn.onclick = (e) => {
+                        e.preventDefault();
+                        downloadFirebaseFile(data.audio_url, 'voiceover.wav');
+                    };
+                    downloadBtn.href = data.audio_url; // fallback href
                     playerWrap.style.display = 'flex';
                     placeholder.style.display = 'none';
                     audioPlayer.play();
@@ -1230,6 +1514,74 @@ No formatting needed — just paste your narration!"></textarea>
             }
         }
 
+        async function loadScriptOptions() {
+            try {
+                const response = await authFetch('/api/script-options');
+                const data = await response.json();
+
+                // Populate Audience dropdown
+                const audienceSelect = document.getElementById('audienceSelect');
+                if (data.audiences && data.audiences.length) {
+                    audienceSelect.innerHTML = data.audiences.map(a =>
+                        `<option value="${a.id}" ${a.id === 'general' ? 'selected' : ''}>${a.label}</option>`
+                    ).join('') + '<option value="custom">✏️ Custom (describe your own)</option>';
+                }
+
+                // Populate Tone dropdown
+                const toneSelect = document.getElementById('toneSelect');
+                if (data.tones && data.tones.length) {
+                    toneSelect.innerHTML = '<option value="">Auto (from template)</option>' +
+                        data.tones.map(t => `<option value="${t.id}">${t.label}</option>`).join('') +
+                        '<option value="custom">✏️ Custom (describe your own)</option>';
+                }
+
+                // Populate Format Presets dropdown
+                const formatSelect = document.getElementById('formatPresetSelect');
+                if (data.format_presets && data.format_presets.length) {
+                    formatSelect.innerHTML = data.format_presets.map(f =>
+                        `<option value="${f.id}" ${f.id === 'standard' ? 'selected' : ''}>${f.label}</option>`
+                    ).join('');
+                }
+
+                // Populate Viewer Outcomes dropdown
+                const outcomeSelect = document.getElementById('viewerOutcomeSelect');
+                if (data.viewer_outcomes && data.viewer_outcomes.length) {
+                    outcomeSelect.innerHTML = '<option value="">Auto (from template)</option>' +
+                        data.viewer_outcomes.map(v => `<option value="${v.id}">${v.label}</option>`).join('');
+                }
+
+                console.log('[ScriptOptions] Loaded:', data.audiences?.length, 'audiences,', data.tones?.length, 'tones,', data.format_presets?.length, 'formats,', data.viewer_outcomes?.length, 'outcomes');
+            } catch (e) {
+                console.warn('[ScriptOptions] Failed to load script options:', e);
+            }
+        }
+
+        function onFormatPresetChange() {
+            const preset = document.getElementById('formatPresetSelect').value;
+            const customField = document.getElementById('customDurationField');
+            customField.style.display = preset === 'custom' ? 'block' : 'none';
+        }
+
+        function getSelectedDuration() {
+            const preset = document.getElementById('formatPresetSelect')?.value || 'standard';
+            if (preset === 'custom') {
+                return parseInt(document.getElementById('customDurationInput')?.value) || 10;
+            }
+            // Map presets to their default durations (server will override with FORMAT_PRESETS)
+            const presetDurations = { short_form: 5, standard: 10, deep_dive: 20 };
+            return presetDurations[preset] || 10;
+        }
+
+        function onAudienceChange() {
+            const val = document.getElementById('audienceSelect').value;
+            document.getElementById('customAudienceField').style.display = val === 'custom' ? 'block' : 'none';
+        }
+
+        function onToneChange() {
+            const val = document.getElementById('toneSelect').value;
+            document.getElementById('customToneField').style.display = val === 'custom' ? 'block' : 'none';
+        }
+
         function selectTemplate(templateId, el) {
             selectedTemplate = templateId;
             document.querySelectorAll('.template-card').forEach(c => c.classList.remove('selected'));
@@ -1254,6 +1606,9 @@ No formatting needed — just paste your narration!"></textarea>
             const topic = document.getElementById('researchTopic').value.trim();
             if (!topic) return alert('Please enter a topic.');
             if (!selectedTemplate) return alert('Please select a template first.');
+            if (!currentProjectId) return alert('Please create or select a project first.');
+
+            const projectId = currentProjectId; // Capture for closure safety
 
             const btn = document.getElementById('researchBtn');
             const btnText = document.getElementById('researchBtnText');
@@ -1267,11 +1622,8 @@ No formatting needed — just paste your narration!"></textarea>
             errorDiv.style.display = 'none';
             document.getElementById('researchResults').style.display = 'none';
 
-            // Clear any previous deep research polling
-            if (deepResearchPollTimer) {
-                clearInterval(deepResearchPollTimer);
-                deepResearchPollTimer = null;
-            }
+            // Clear any previous research for THIS project
+            clearBackgroundOp(projectId);
 
             updatePhaseStatus(1, researchModel === 'deep_research_agent' ? 'Starting Deep Research Agent…' : 'Researching…', 'running');
 
@@ -1289,22 +1641,29 @@ No formatting needed — just paste your narration!"></textarea>
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Research failed');
 
-                // Async deep research: start polling
+                // Async deep research: start project-scoped polling
                 if (data.async && data.interaction_id) {
-                    deepResearchInteractionId = data.interaction_id;
                     updatePhaseStatus(1, 'Deep Research running… (polling every 10s)', 'running');
                     btnText.textContent = '🔬 Researching…';
                     btnText.style.display = 'inline';
                     spinner.style.display = 'inline-block';
 
-                    deepResearchPollTimer = setInterval(() => {
-                        pollDeepResearch(topic);
+                    const pollTimer = setInterval(() => {
+                        pollDeepResearch(projectId, topic, selectedTemplate, data.interaction_id);
                     }, 10000);
+
+                    setBackgroundOp(projectId, {
+                        researchPollTimer: pollTimer,
+                        interactionId: data.interaction_id,
+                        topic: topic,
+                        templateId: selectedTemplate,
+                        status: 'in_progress',
+                    });
                     return; // Don't reset button — polling continues
                 }
 
                 // Synchronous result (fast/deep)
-                displayResearchResults(data);
+                displayResearchResults(data, projectId);
 
             } catch (error) {
                 errorDiv.innerText = error.message;
@@ -1317,16 +1676,15 @@ No formatting needed — just paste your narration!"></textarea>
             }
         }
 
-        async function pollDeepResearch(topic) {
-            const errorDiv = document.getElementById('phase1Error');
+        async function pollDeepResearch(projectId, topic, templateId, interactionId) {
             try {
                 const response = await authFetch('/api/research/poll', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        interaction_id: deepResearchInteractionId,
+                        interaction_id: interactionId,
                         topic: topic,
-                        template_id: selectedTemplate,
+                        template_id: templateId,
                     }),
                 });
 
@@ -1336,46 +1694,95 @@ No formatting needed — just paste your narration!"></textarea>
                     return; // Keep polling
                 }
 
-                // Stop polling
-                clearInterval(deepResearchPollTimer);
-                deepResearchPollTimer = null;
-                deepResearchInteractionId = null;
-
-                const btn = document.getElementById('researchBtn');
-                const btnText = document.getElementById('researchBtnText');
-                const spinner = document.getElementById('researchSpinner');
-                btn.disabled = false;
-                btnText.textContent = '🔍 Start Research';
-                btnText.style.display = 'inline';
-                spinner.style.display = 'none';
+                // Research finished — update the background op
+                const op = getBackgroundOp(projectId);
+                if (op && op.researchPollTimer) clearInterval(op.researchPollTimer);
 
                 if (data.error || data.status === 'failed') {
-                    throw new Error(data.error || 'Deep research failed');
+                    setBackgroundOp(projectId, {
+                        ...op,
+                        researchPollTimer: null,
+                        status: 'failed',
+                        error: data.error || 'Deep research failed',
+                    });
+
+                    // If this is the active project, update UI immediately
+                    if (projectId === currentProjectId) {
+                        const errorDiv = document.getElementById('phase1Error');
+                        const btn = document.getElementById('researchBtn');
+                        const btnText = document.getElementById('researchBtnText');
+                        const spinner = document.getElementById('researchSpinner');
+                        btn.disabled = false;
+                        btnText.textContent = '🔍 Start Research';
+                        btnText.style.display = 'inline';
+                        spinner.style.display = 'none';
+                        errorDiv.innerText = data.error || 'Deep research failed';
+                        errorDiv.style.display = 'block';
+                        updatePhaseStatus(1, 'Error', 'error');
+                    }
+                    return;
                 }
 
                 // Completed
-                displayResearchResults(data);
+                setBackgroundOp(projectId, {
+                    ...op,
+                    researchPollTimer: null,
+                    status: 'completed',
+                    data: data,
+                });
+
+                // If this is the active project, display results immediately
+                if (projectId === currentProjectId) {
+                    displayResearchResults(data, projectId);
+                } else {
+                    // Auto-save the results to the correct project in the background
+                    try {
+                        await authFetch(`/api/projects/${projectId}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                research_dossier: data.dossier || '',
+                                research_summary: data.summary || '',
+                                research_key_facts: data.key_facts || [],
+                                research_sources: data.sources || [],
+                            })
+                        });
+                        console.log(`Background research saved for project ${projectId}`);
+                    } catch (e) {
+                        console.error(`Failed to save background research for project ${projectId}:`, e);
+                    }
+                }
 
             } catch (error) {
-                clearInterval(deepResearchPollTimer);
-                deepResearchPollTimer = null;
-                deepResearchInteractionId = null;
+                const op = getBackgroundOp(projectId);
+                if (op && op.researchPollTimer) clearInterval(op.researchPollTimer);
+                setBackgroundOp(projectId, {
+                    ...op,
+                    researchPollTimer: null,
+                    status: 'failed',
+                    error: error.message,
+                });
 
-                const btn = document.getElementById('researchBtn');
-                const btnText = document.getElementById('researchBtnText');
-                const spinner = document.getElementById('researchSpinner');
-                btn.disabled = false;
-                btnText.textContent = '🔍 Start Research';
-                btnText.style.display = 'inline';
-                spinner.style.display = 'none';
-
-                errorDiv.innerText = error.message;
-                errorDiv.style.display = 'block';
-                updatePhaseStatus(1, 'Error', 'error');
+                if (projectId === currentProjectId) {
+                    const errorDiv = document.getElementById('phase1Error');
+                    const btn = document.getElementById('researchBtn');
+                    const btnText = document.getElementById('researchBtnText');
+                    const spinner = document.getElementById('researchSpinner');
+                    btn.disabled = false;
+                    btnText.textContent = '🔍 Start Research';
+                    btnText.style.display = 'inline';
+                    spinner.style.display = 'none';
+                    errorDiv.innerText = error.message;
+                    errorDiv.style.display = 'block';
+                    updatePhaseStatus(1, 'Error', 'error');
+                }
             }
         }
 
-        function displayResearchResults(data) {
+        function displayResearchResults(data, projectId) {
+            // Only update the UI if this is still the active project
+            if (projectId && projectId !== currentProjectId) return;
+
             currentDossier = data.dossier;
 
             // Display results
@@ -1414,6 +1821,12 @@ No formatting needed — just paste your narration!"></textarea>
 
             // Auto-update downstream Phase 2 source badge (shows wizardStepA)
             updateScriptSourceBadge();
+
+            // Auto-save after research completes
+            triggerAutosave();
+
+            // Clear the completed background op for this project
+            clearBackgroundOp(projectId || currentProjectId);
         }
 
         /* ── Title Suggestions (Phase 2 Wizard) ── */
@@ -1492,6 +1905,25 @@ No formatting needed — just paste your narration!"></textarea>
             document.getElementById('transcriptStyleInput').style.display = isTranscript ? 'block' : 'none';
         }
 
+        // Update the hint text when blend mode changes
+        function updateBlendModeHint() {
+            const hint = document.getElementById('blendModeHint');
+            if (!hint) return;
+            const mode = document.querySelector('input[name="styleBlendMode"]:checked')?.value || 'clone';
+            if (mode === 'clone') {
+                hint.innerHTML = '<strong>Full Clone:</strong> Copy this creator\'s entire style. Your tone and audience choices above will be <em>ignored</em>.';
+            } else {
+                hint.innerHTML = '<strong>Blend:</strong> Use this creator\'s structure and pacing, but <em>keep</em> your tone, audience, and viewer outcome settings.';
+            }
+        }
+
+        // Attach listeners for blend mode radios
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('input[name="styleBlendMode"]').forEach(r => {
+                r.addEventListener('change', updateBlendModeHint);
+            });
+        });
+
         function confirmAudience() {
             document.getElementById('wizardStepB').style.display = 'block';
             suggestTitles();
@@ -1506,6 +1938,7 @@ No formatting needed — just paste your narration!"></textarea>
             selectedTitle = titleInput;
             updateTitleConfirmBadge();
             autoSuggestTone();
+            triggerAutosave();
         }
 
         async function autoSuggestTone() {
@@ -1528,7 +1961,7 @@ No formatting needed — just paste your narration!"></textarea>
                 if (!response.ok) throw new Error(data.error || 'Tone suggestion failed');
 
                 const toneSelect = document.getElementById('toneSelect');
-                const suggestedTone = data.suggested_tone || 'Conversational';
+                const suggestedTone = data.suggested_tone || 'conversational';
                 const options = Array.from(toneSelect.options);
                 const match = options.find(o => o.value.toLowerCase() === suggestedTone.toLowerCase());
                 if (match) {
@@ -1537,7 +1970,8 @@ No formatting needed — just paste your narration!"></textarea>
                     toneSelect.value = '';
                 }
 
-                badge.innerHTML = `Suggested: <strong>${escapeHtml(suggestedTone)}</strong> — ${escapeHtml(data.reasoning || '')}`;
+                const displayLabel = match ? match.textContent : suggestedTone;
+                badge.innerHTML = `Suggested: <strong>${escapeHtml(displayLabel)}</strong> — ${escapeHtml(data.reasoning || '')}`;
 
             } catch (error) {
                 badge.innerHTML = `<span style="color:#888">Could not auto-suggest tone</span>`;
@@ -1571,6 +2005,24 @@ No formatting needed — just paste your narration!"></textarea>
             updatePhaseStatus(2, 'Writing narration…', 'running');
 
             try {
+                const formatPreset = document.getElementById('formatPresetSelect').value;
+                const customDuration = document.getElementById('customDurationInput').value;
+                const durationMinutes = formatPreset === 'custom' ? parseInt(customDuration) : 10;
+
+                const audienceVal = document.getElementById('audienceSelect').value;
+                const toneVal = document.getElementById('toneSelect').value;
+                const customAudience = audienceVal === 'custom' ? document.getElementById('customAudienceInput').value.trim() : '';
+                const customTone = toneVal === 'custom' ? document.getElementById('customToneInput').value.trim() : '';
+
+                if (audienceVal === 'custom' && !customAudience) {
+                    btn.disabled = false; btnText.style.display = 'inline'; spinner.style.display = 'none';
+                    return alert('You selected a custom audience — please describe who they are.');
+                }
+                if (toneVal === 'custom' && !customTone) {
+                    btn.disabled = false; btnText.style.display = 'inline'; spinner.style.display = 'none';
+                    return alert('You selected a custom tone — please describe the vibe you want.');
+                }
+
                 const response = await authFetch('/api/generate-script', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1578,11 +2030,16 @@ No formatting needed — just paste your narration!"></textarea>
                         topic,
                         template_id: selectedTemplate,
                         dossier: currentDossier,
-                        duration_minutes: document.getElementById('durationSelect').value,
-                        audience: document.getElementById('audienceSelect').value,
-                        tone: document.getElementById('toneSelect').value,
+                        duration_minutes: durationMinutes,
+                        format_preset: formatPreset,
+                        audience: audienceVal,
+                        custom_audience: customAudience,
+                        tone: toneVal,
+                        custom_tone: customTone,
                         focus: document.getElementById('focusInput').value,
+                        viewer_outcome: document.getElementById('viewerOutcomeSelect').value,
                         style_mode: styleMode,
+                        style_blend_mode: document.querySelector('input[name="styleBlendMode"]:checked')?.value || 'clone',
                         style_transcript: styleTranscript,
                         selected_title: selectedTitle || ''
                     }),
@@ -1604,6 +2061,9 @@ No formatting needed — just paste your narration!"></textarea>
                 }
                 updatePhaseStatus(2, `Narration complete (${actCount} acts, ${beatCount} beats)`, 'complete');
                 updateProdSourceBadge();
+
+                // Auto-save after narration completes
+                triggerAutosave();
 
             } catch (error) {
                 errorDiv.innerText = error.message;
@@ -1694,9 +2154,9 @@ No formatting needed — just paste your narration!"></textarea>
             if (beatEl) beatEl.classList.add('regenerating');
 
             try {
-                const resp = await fetch('/api/regenerate-beat', {
+                const resp = await authFetch('/api/regenerate-beat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await firebase.auth().currentUser.getIdToken()}` },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         topic: document.getElementById('topicInput')?.value || '',
                         template_id: selectedTemplate || 'educational_explainer',
@@ -1704,9 +2164,9 @@ No formatting needed — just paste your narration!"></textarea>
                         narration: currentNarration,
                         target_beat_indices: [beatIndex],
                         mode: mode,
-                        audience: document.getElementById('audienceSelect')?.value || 'General',
+                        audience: document.getElementById('audienceSelect')?.value || 'general',
                         tone: document.getElementById('toneSelect')?.value || '',
-                        duration_minutes: parseInt(document.getElementById('durationSelect')?.value) || 10,
+                        duration_minutes: getSelectedDuration(),
                     })
                 });
                 const data = await resp.json();
@@ -1733,9 +2193,9 @@ No formatting needed — just paste your narration!"></textarea>
             if (actEl) actEl.classList.add('regenerating');
 
             try {
-                const resp = await fetch('/api/regenerate-beat', {
+                const resp = await authFetch('/api/regenerate-beat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${await firebase.auth().currentUser.getIdToken()}` },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         topic: document.getElementById('topicInput')?.value || '',
                         template_id: selectedTemplate || 'educational_explainer',
@@ -1743,9 +2203,9 @@ No formatting needed — just paste your narration!"></textarea>
                         narration: currentNarration,
                         target_act: actName,
                         mode: mode,
-                        audience: document.getElementById('audienceSelect')?.value || 'General',
+                        audience: document.getElementById('audienceSelect')?.value || 'general',
                         tone: document.getElementById('toneSelect')?.value || '',
-                        duration_minutes: parseInt(document.getElementById('durationSelect')?.value) || 10,
+                        duration_minutes: getSelectedDuration(),
                     })
                 });
                 const data = await resp.json();
@@ -1880,7 +2340,7 @@ No formatting needed — just paste your narration!"></textarea>
                 // Plain text → wrap as narration
                 currentNarration = {
                     title: 'Manual Script',
-                    duration_minutes: parseInt(document.getElementById('durationSelect')?.value || '10'),
+                    duration_minutes: getSelectedDuration(),
                     narration: [{ act: 'MANUAL', beat: 'Full Script', text: rawValue }],
                 };
             }
@@ -1993,7 +2453,7 @@ No formatting needed — just paste your narration!"></textarea>
                 const requestBody = {
                     narration: currentNarration,
                     duration_minutes: currentNarration.duration_minutes
-                        || parseInt(document.getElementById('durationSelect').value) || 10,
+                        || getSelectedDuration(),
                 };
 
                 if (approvedStyle) {
@@ -2019,6 +2479,9 @@ No formatting needed — just paste your narration!"></textarea>
 
                 const shotCount = data.production_table?.total_shots || data.production_table?.shots?.length || '?';
                 updatePhaseStatus(3, `✅ Complete — ${shotCount} shots`, 'complete');
+
+                // Auto-save after production table completes
+                triggerAutosave();
 
             } catch (error) {
                 errorDiv.innerText = error.message;
@@ -2055,6 +2518,29 @@ No formatting needed — just paste your narration!"></textarea>
                     </tr>
                 `).join('');
             } else if (pt.raw_text) {
+                // Try to recover: parse raw_text as JSON (may have markdown fences)
+                try {
+                    let rt = pt.raw_text.trim();
+                    if (rt.startsWith('```')) {
+                        const rlines = rt.split('\n');
+                        rlines.shift();
+                        while (rlines.length && (rlines[rlines.length - 1].trim() === '```' || rlines[rlines.length - 1].trim() === '')) {
+                            if (rlines[rlines.length - 1].trim() === '```') { rlines.pop(); break; }
+                            rlines.pop();
+                        }
+                        rt = rlines.join('\n').trim();
+                    }
+                    if (!rt.startsWith('{')) {
+                        const fb = rt.indexOf('{'), lb = rt.lastIndexOf('}');
+                        if (fb !== -1 && lb > fb) rt = rt.substring(fb, lb + 1);
+                    }
+                    const recovered = JSON.parse(rt);
+                    if (recovered.shots && Array.isArray(recovered.shots)) {
+                        currentProductionData = { success: true, production_table: recovered };
+                        renderProductionTable(recovered);
+                        return;
+                    }
+                } catch (_) { /* recovery failed */ }
                 tbody.innerHTML = `<tr><td colspan="7" style="white-space:pre-wrap">${escapeHtml(pt.raw_text)}</td></tr>`;
             }
 
@@ -2116,7 +2602,13 @@ No formatting needed — just paste your narration!"></textarea>
 
         function downloadProductionTable() {
             if (!currentProductionData) return;
-            const blob = new Blob([JSON.stringify(currentProductionData, null, 2)], { type: 'application/json' });
+            // Export the clean production_table object, not the API wrapper
+            const pt = currentProductionData.production_table || currentProductionData;
+            if (!pt.shots || !Array.isArray(pt.shots)) {
+                alert('Production table does not have valid shots data to download.');
+                return;
+            }
+            const blob = new Blob([JSON.stringify(pt, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -2516,12 +3008,23 @@ No formatting needed — just paste your narration!"></textarea>
             statusEl.innerHTML = '<span class="source-dot active"></span> Loading...';
 
             try {
-                const res = await authFetch('/api/latest-production-table');
-                const data = await res.json();
+                // First: check if we already have production data in memory from Phase 3
+                let pt = null;
+                if (currentProductionData?.production_table?.shots?.length) {
+                    pt = currentProductionData.production_table;
+                    console.log('[Visuals] Using in-memory production data from Phase 3');
+                } else {
+                    // Fallback: fetch from server API
+                    const res = await authFetch('/api/latest-production-table');
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error || 'Failed to load production table');
+                    pt = data.production_table;
+                }
 
-                if (!res.ok) throw new Error(data.error || 'Failed to load production table');
+                if (!pt || !pt.shots || !Array.isArray(pt.shots)) {
+                    throw new Error('No valid production data found. Generate one in Phase 3 first.');
+                }
 
-                const pt = data.production_table;
                 initVisualsFromProductionTable(pt);
                 statusEl.innerHTML = `<span class="source-dot ready"></span> Loaded: "${pt.title || 'Untitled'}" (${visualsScenes.length} scenes)`;
             } catch (e) {
@@ -2531,8 +3034,28 @@ No formatting needed — just paste your narration!"></textarea>
 
         function importVisualsJson() {
             try {
-                const raw = document.getElementById('visualsPasteArea').value.trim();
+                let raw = document.getElementById('visualsPasteArea').value.trim();
                 if (!raw) { alert('Please paste production table JSON'); return; }
+
+                // Strip markdown code fences if present (```json ... ```)
+                if (raw.startsWith('```')) {
+                    const lines = raw.split('\n');
+                    lines.shift(); // Remove opening ```json line
+                    while (lines.length && lines[lines.length - 1].trim() === '```' || lines[lines.length - 1].trim() === '') {
+                        if (lines[lines.length - 1].trim() === '```') { lines.pop(); break; }
+                        lines.pop();
+                    }
+                    raw = lines.join('\n').trim();
+                }
+
+                // Fallback: try to extract JSON object if raw doesn't start with {
+                if (!raw.startsWith('{') && !raw.startsWith('[')) {
+                    const first = raw.indexOf('{');
+                    const last = raw.lastIndexOf('}');
+                    if (first !== -1 && last > first) {
+                        raw = raw.substring(first, last + 1);
+                    }
+                }
 
                 let data = JSON.parse(raw);
                 // Handle both wrapped and unwrapped formats
@@ -2596,6 +3119,7 @@ No formatting needed — just paste your narration!"></textarea>
             visualsConfig.imageModel = document.getElementById('visImageModel').value;
             visualsConfig.veoModel = document.getElementById('visVeoModel').value;
             visualsConfig.additionalContext = document.getElementById('visAdditionalContext').value;
+            updateBatchCostBadges();
         }
 
         // ── Style Image Upload ──
@@ -2746,11 +3270,14 @@ No formatting needed — just paste your narration!"></textarea>
                     <option value="" ${!s.imageModel ? 'selected' : ''}>Global</option>
                     <option value="gemini-3-pro-image-preview" ${s.imageModel === 'gemini-3-pro-image-preview' ? 'selected' : ''}>Pro (Quality)</option>
                     <option value="gemini-2.5-flash-image" ${s.imageModel === 'gemini-2.5-flash-image' ? 'selected' : ''}>Flash (Fast)</option>
+                    <option value="imagen-4.0-generate-001" ${s.imageModel === 'imagen-4.0-generate-001' ? 'selected' : ''}>Imagen 4</option>
+                    <option value="imagen-4.0-fast-generate-001" ${s.imageModel === 'imagen-4.0-fast-generate-001' ? 'selected' : ''}>Imagen 4 Fast</option>
+                    <option value="imagen-4.0-ultra-generate-001" ${s.imageModel === 'imagen-4.0-ultra-generate-001' ? 'selected' : ''}>Imagen 4 Ultra</option>
                 `;
                 const veoModelOptions = `
                     <option value="" ${!s.veoModel ? 'selected' : ''}>Global</option>
                     <option value="veo-3.1-generate-preview" ${s.veoModel === 'veo-3.1-generate-preview' ? 'selected' : ''}>Veo 3.1 (Quality)</option>
-                    <option value="veo-3.1-fast" ${s.veoModel === 'veo-3.1-fast' ? 'selected' : ''}>Veo Fast</option>
+                    <option value="veo-3.1-fast-generate-preview" ${s.veoModel === 'veo-3.1-fast-generate-preview' ? 'selected' : ''}>Veo Fast</option>
                 `;
 
                 return `
@@ -2775,12 +3302,12 @@ No formatting needed — just paste your narration!"></textarea>
                                 onchange="visualsScenes[${idx}].imagePrompt = this.value">${escapeHtml(s.imagePrompt)}</textarea>
                             <div class="scene-image-result" id="scene-img-result-${idx}">
                                 ${s.imageUrl
-                                    ? `<img src="${s.imageUrl}" alt="Scene ${s.shotNumber}"><div class="scene-image-actions">
+                        ? `<img src="${s.imageUrl}" alt="Scene ${s.shotNumber}"><div class="scene-image-actions">
                                         <button class="btn-small btn-secondary" onclick="regenerateSceneImage(${idx})">Regenerate</button>
-                                        <a class="btn-small btn-secondary" href="${s.imageUrl}" download>Download</a>
+                                        <a class="btn-small btn-secondary" href="javascript:void(0)" onclick="downloadFirebaseFile('${s.imageUrl}', 'scene_${idx}_image.png')">Download</a>
                                        </div>`
-                                    : `<div class="scene-placeholder">Image will appear here</div>`
-                                }
+                        : `<div class="scene-placeholder">Image will appear here</div>`
+                    }
                             </div>
                         </div>
                         <div class="scene-video-section">
@@ -2794,11 +3321,11 @@ No formatting needed — just paste your narration!"></textarea>
                                 onchange="visualsScenes[${idx}].veoPrompt = this.value">${escapeHtml(s.veoPrompt)}</textarea>
                             <div class="scene-video-result" id="scene-vid-result-${idx}">
                                 ${s.videoUrl
-                                    ? `<video src="${s.videoUrl}" controls></video><div class="scene-image-actions">
-                                        <a class="btn-small btn-secondary" href="${s.videoUrl}" download>Download</a>
+                        ? `<video src="${s.videoUrl}" controls></video><div class="scene-image-actions">
+                                        <a class="btn-small btn-secondary" href="javascript:void(0)" onclick="downloadFirebaseFile('${s.videoUrl}', 'scene_${idx}_video.mp4')">Download</a>
                                        </div>`
-                                    : `<div class="scene-placeholder">Video will appear here</div>`
-                                }
+                        : `<div class="scene-placeholder">Video will appear here</div>`
+                    }
                             </div>
                             <div class="scene-animation-controls">
                                 <label class="scene-animate-toggle">
@@ -2819,6 +3346,7 @@ No formatting needed — just paste your narration!"></textarea>
             }).join('');
 
             updateAnimateAllBtn();
+            updateBatchCostBadges();
         }
 
         function getStatusHtml(scene) {
@@ -2844,7 +3372,7 @@ No formatting needed — just paste your narration!"></textarea>
                         <img src="${s.imageUrl}" alt="Scene ${s.shotNumber}">
                         <div class="scene-image-actions">
                             <button class="btn-small btn-secondary" onclick="regenerateSceneImage(${idx})">Regenerate</button>
-                            <a class="btn-small btn-secondary" href="${s.imageUrl}" download>Download</a>
+                            <a class="btn-small btn-secondary" href="javascript:void(0)" onclick="downloadFirebaseFile('${s.imageUrl}', 'scene_${idx}_image.png')">Download</a>
                         </div>`;
                 } else if (s.imageStatus === 'generating') {
                     imgContainer.innerHTML = '<div class="scene-placeholder generating">Generating...</div>';
@@ -2857,7 +3385,7 @@ No formatting needed — just paste your narration!"></textarea>
                     vidContainer.innerHTML = `
                         <video src="${s.videoUrl}" controls></video>
                         <div class="scene-image-actions">
-                            <a class="btn-small btn-secondary" href="${s.videoUrl}" download>Download</a>
+                            <a class="btn-small btn-secondary" href="javascript:void(0)" onclick="downloadFirebaseFile('${s.videoUrl}', 'scene_${idx}_video.mp4')">Download</a>
                         </div>`;
                 } else if (s.videoStatus === 'generating' || s.videoStatus === 'polling') {
                     vidContainer.innerHTML = '<div class="scene-placeholder generating">Animating...</div>';
@@ -2952,6 +3480,8 @@ No formatting needed — just paste your narration!"></textarea>
 
                 s.imageStatus = 'complete';
                 s.imageUrl = data.image_url;
+                // Auto-save after image generation
+                triggerAutosave();
             } catch (e) {
                 s.imageStatus = 'error';
                 s.imageError = e.message;
@@ -3079,6 +3609,9 @@ No formatting needed — just paste your narration!"></textarea>
                     ? `Retry ${errors} Failed Image${errors > 1 ? 's' : ''}`
                     : 'All Images Generated';
                 visualsGenerationPhase = errors > 0 ? 'preview' : 'batch';
+
+                // Auto-save after batch generation
+                triggerAutosave();
             }
         }
 
@@ -3150,6 +3683,7 @@ No formatting needed — just paste your narration!"></textarea>
                         s.videoUrl = data.video_url;
                         updateSceneCard(idx);
                         updateVideoProgress();
+                        triggerAutosave();
                     } else if (data.status === 'failed') {
                         clearInterval(animationPollers[idx]);
                         delete animationPollers[idx];
@@ -3268,6 +3802,563 @@ No formatting needed — just paste your narration!"></textarea>
                 alert('Download failed: ' + e.message);
             }
         }
+
+        function escapeHTML(str) {
+            return (str || '').toString().replace(/[&<>'"]/g,
+                tag => ({
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    "'": '&#39;',
+                    '"': '&quot;'
+                }[tag]));
+        }
+
+        async function downloadFirebaseFile(url, defaultFilename) {
+            try {
+                // Use server proxy to avoid CORS issues with Firebase Storage
+                const proxyUrl = `/api/download-asset?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(defaultFilename)}`;
+                const response = await authFetch(proxyUrl);
+                if (!response.ok) throw new Error('Download failed');
+                const blob = await response.blob();
+                const blobUrl = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = blobUrl;
+                a.download = defaultFilename;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(blobUrl);
+                a.remove();
+            } catch (err) {
+                console.error("Download via proxy failed, trying direct fetch.", err);
+                // Fallback: try direct fetch
+                try {
+                    const response = await fetch(url);
+                    if (!response.ok) throw new Error('Direct fetch failed');
+                    const blob = await response.blob();
+                    const blobUrl = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = blobUrl;
+                    a.download = defaultFilename;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(blobUrl);
+                    a.remove();
+                } catch (err2) {
+                    console.error("All download methods failed.", err2);
+                    alert('Download failed. Please right-click the image and select "Save Image As..."');
+                }
+            }
+        }
+
+        // ══════════════════════════════════════
+        // PROJECTS API (PERSISTENCE)
+        // ══════════════════════════════════════
+        let currentProjectId = null;
+        let saveTimeout = null;
+        let _lastSavedProjects = []; // cache for re-renders
+
+        async function fetchProjects(autoLoadLast = false) {
+            try {
+                const res = await authFetch('/api/projects');
+                if (!res.ok) throw new Error('Failed to fetch projects');
+                const data = await res.json();
+                _lastSavedProjects = data.projects || [];
+                renderProjects(_lastSavedProjects);
+
+                // Auto-load last project on first load
+                if (autoLoadLast && !currentProjectId && _lastSavedProjects.length > 0) {
+                    await loadProject(_lastSavedProjects[0].id);
+                }
+            } catch (e) {
+                console.error(e);
+                document.getElementById('projectList').innerHTML = `<div class="error-message">Could not load projects.</div>`;
+            }
+        }
+
+        function renderProjects(projects) {
+            const list = document.getElementById('projectList');
+            if (!projects || projects.length === 0) {
+                list.innerHTML = `<div style="color: #666; font-size: 0.85rem; text-align: center; margin-top: 20px;">No projects yet. Click "+ New Project" to start.</div>`;
+                return;
+            }
+
+            list.innerHTML = projects.map(p => `
+                <div class="project-item ${p.id === currentProjectId ? 'active' : ''}" onclick="loadProject('${p.id}')">
+                    <div class="project-item-header">
+                        <div class="project-title">${escapeHTML(p.title) || 'Untitled Project'}</div>
+                        <button class="btn-secondary delete-project-btn" onclick="deleteProject('${p.id}', event)" title="Delete Project">&times;</button>
+                    </div>
+                    <div class="project-date" id="project-date-${p.id}">${p.last_updated_at ? new Date(p.last_updated_at).toLocaleString() : ''}</div>
+                </div>
+            `).join('');
+        }
+
+        // ── Create Project (with name modal) ──
+        function createNewProject() {
+            document.getElementById('projectNameModal').style.display = 'flex';
+            const input = document.getElementById('projectNameInput');
+            input.value = '';
+            input.focus();
+        }
+
+        function cancelNewProject() {
+            document.getElementById('projectNameModal').style.display = 'none';
+        }
+
+        async function confirmNewProject() {
+            const input = document.getElementById('projectNameInput');
+            const title = input.value.trim() || 'Untitled Project';
+            document.getElementById('projectNameModal').style.display = 'none';
+
+            try {
+                const res = await authFetch('/api/projects', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    currentProjectId = data.project_id;
+                    clearAppForNewProject();
+
+                    // Optimistically insert the new project into the sidebar immediately
+                    _lastSavedProjects.unshift({
+                        id: data.project_id,
+                        title: title,
+                        last_updated_at: new Date().toISOString(),
+                    });
+                    renderProjects(_lastSavedProjects);
+
+                    // Then fetch from server in background to sync timestamps
+                    fetchProjects();
+
+                    // Switch to Research tab for new project
+                    switchTab('research');
+                }
+            } catch (e) {
+                console.error("Error creating project:", e);
+                alert('Failed to create project: ' + e.message);
+            }
+        }
+
+        // ── Load Project (auto-saves current first) ──
+        async function loadProject(id) {
+            if (currentProjectId === id) return;
+
+            // Auto-save current project before switching
+            if (currentProjectId) {
+                await doSaveProject();
+            }
+
+            try {
+                const res = await authFetch(`/api/projects/${id}`);
+                const data = await res.json();
+                if (data.success) {
+                    currentProjectId = id;
+                    restoreProjectState(data.project);
+                    renderProjects(_lastSavedProjects); // re-render to highlight active
+
+                    // Restore research-in-progress UI if this project has a background op
+                    const op = getBackgroundOp(id);
+                    if (op) {
+                        if (op.status === 'in_progress') {
+                            // Show the research-in-progress UI
+                            const btn = document.getElementById('researchBtn');
+                            const btnText = document.getElementById('researchBtnText');
+                            const spinner = document.getElementById('researchSpinner');
+                            btn.disabled = true;
+                            btnText.textContent = '🔬 Researching…';
+                            btnText.style.display = 'inline';
+                            spinner.style.display = 'inline-block';
+                            updatePhaseStatus(1, 'Deep Research running… (polling every 10s)', 'running');
+                        } else if (op.status === 'completed' && op.data) {
+                            // Results arrived while viewing another project — display them now
+                            displayResearchResults(op.data, id);
+                        }
+                    }
+
+                    // Update global notifications (current project changed)
+                    updateGlobalNotifications();
+                }
+            } catch (e) {
+                console.error("Error loading project:", e);
+                alert('Failed to load project: ' + e.message);
+            }
+        }
+
+        async function deleteProject(id, event) {
+            event.stopPropagation();
+            if (!confirm("Are you sure you want to delete this project?")) return;
+            try {
+                const res = await authFetch(`/api/projects/${id}`, { method: 'DELETE' });
+                if (res.ok) {
+                    if (currentProjectId === id) {
+                        currentProjectId = null;
+                        clearAppForNewProject();
+                    }
+                    fetchProjects();
+                }
+            } catch (e) {
+                console.error("Error deleting project:", e);
+            }
+        }
+
+        function clearAppForNewProject() {
+            // Reset all global state
+            currentDossier = '';
+            currentNarration = null;
+            currentProductionData = null;
+            currentScriptData = null;
+            selectedTitle = null;
+            selectedTemplate = null;
+            currentDossierId = null;
+            approvedStyle = null;
+
+            // Reset UI fields
+            document.getElementById('researchTopic').value = '';
+            document.getElementById('researchResults').style.display = 'none';
+            document.getElementById('researchSummary').innerHTML = '';
+            document.getElementById('keyFacts').innerHTML = '';
+            document.getElementById('sourcesList').innerHTML = '';
+
+            // Reset wizard steps
+            const wizardSteps = ['wizardStepA', 'wizardStepB', 'wizardStepC', 'wizardStepD'];
+            wizardSteps.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = 'none';
+            });
+            const titleCards = document.getElementById('titleCards');
+            if (titleCards) titleCards.innerHTML = '';
+            const titleEdit = document.getElementById('titleEditInput');
+            if (titleEdit) titleEdit.value = '';
+            const titleBadge = document.getElementById('titleConfirmedBadge');
+            if (titleBadge) titleBadge.style.display = 'none';
+            const narrationDisplay = document.getElementById('narrationDisplay');
+            if (narrationDisplay) narrationDisplay.innerHTML = '';
+            const toneBadge = document.getElementById('toneSuggestionBadge');
+            if (toneBadge) toneBadge.style.display = 'none';
+
+            // Reset production
+            document.getElementById('productionTableBody').innerHTML = '';
+            document.getElementById('productionResults').style.display = 'none';
+            const continuityNotes = document.getElementById('continuityNotes');
+            if (continuityNotes) continuityNotes.style.display = 'none';
+
+            // Reset script results
+            document.getElementById('scriptResults').style.display = 'none';
+
+            // Reset visuals
+            visualsScenes = [];
+            visualsCharacters = [];
+            visualsConfig = {
+                aspectRatio: '16:9',
+                resolution: '2K',
+                imageModel: 'gemini-3-pro-image-preview',
+                veoModel: 'veo-3.1-generate-preview',
+                styleImages: [],
+                additionalContext: '',
+            };
+
+            // Hide visuals panels
+            document.getElementById('visualsConfigSection').style.display = 'none';
+            document.getElementById('visualsCharactersSection').style.display = 'none';
+            document.getElementById('visualsSceneList').style.display = 'none';
+            document.getElementById('visualsActionBar').style.display = 'none';
+
+            renderVisualsScenes();
+            renderVisualsStylePreviews();
+            renderCharacterList();
+
+            // Reset phase statuses
+            updatePhaseStatus(1, 'Not started', 'idle');
+            updatePhaseStatus(2, 'Waiting for input', 'idle');
+            updatePhaseStatus(3, 'Waiting for input', 'idle');
+
+            // Reset input modes
+            setScriptInputMode('auto');
+            setProdInputMode('auto');
+        }
+
+        function restoreProjectState(project) {
+            // First clear everything
+            clearAppForNewProject();
+
+            // Restore topic
+            document.getElementById('researchTopic').value = project.topic || '';
+
+            // Restore template selection
+            if (project.template_id) {
+                selectedTemplate = project.template_id;
+                // Highlight the template in the grid if loaded
+                document.querySelectorAll('.template-card').forEach(card => {
+                    card.classList.toggle('selected', card.dataset.templateId === project.template_id);
+                });
+            }
+
+            // Restore research dossier
+            if (project.research_dossier) {
+                currentDossier = project.research_dossier;
+
+                // Restore research display
+                const summaryEl = document.getElementById('researchSummary');
+                const keyFactsEl = document.getElementById('keyFacts');
+                const sourcesEl = document.getElementById('sourcesList');
+
+                if (project.research_summary) {
+                    summaryEl.innerHTML = `<h4>Summary</h4><p>${escapeHtml(project.research_summary)}</p>`;
+                } else {
+                    summaryEl.innerHTML = `<h4>Research Dossier</h4><p>${escapeHtml(project.research_dossier.substring(0, 2000))}${project.research_dossier.length > 2000 ? '...' : ''}</p>`;
+                }
+
+                if (project.research_key_facts && project.research_key_facts.length) {
+                    keyFactsEl.innerHTML = `<h4>Key Facts</h4><ul>${project.research_key_facts.map(f => `<li>${escapeHtml(f)}</li>`).join('')}</ul>`;
+                }
+
+                if (project.research_sources && project.research_sources.length) {
+                    sourcesEl.innerHTML = `<h4>Sources Referenced</h4><ul class="sources">${project.research_sources.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`;
+                }
+
+                document.getElementById('researchResults').style.display = 'block';
+                updatePhaseStatus(1, 'Research loaded', 'complete');
+
+                // Show wizard step A since research is done
+                const stepA = document.getElementById('wizardStepA');
+                if (stepA) stepA.style.display = 'block';
+            }
+
+            // Restore audience selection
+            if (project.audience) {
+                const audienceSelect = document.getElementById('audienceSelect');
+                if (audienceSelect) audienceSelect.value = project.audience;
+            }
+
+            // Restore selected title
+            if (project.selected_title) {
+                selectedTitle = project.selected_title;
+                const titleEdit = document.getElementById('titleEditInput');
+                if (titleEdit) titleEdit.value = project.selected_title;
+                const titleBadge = document.getElementById('titleConfirmedBadge');
+                if (titleBadge) titleBadge.style.display = 'inline-block';
+                // Show steps B and C since title is confirmed
+                const stepB = document.getElementById('wizardStepB');
+                if (stepB) stepB.style.display = 'block';
+                const stepC = document.getElementById('wizardStepC');
+                if (stepC) stepC.style.display = 'block';
+            }
+
+            // Restore tone
+            if (project.tone) {
+                const toneSelect = document.getElementById('toneSelect');
+                if (toneSelect) toneSelect.value = project.tone;
+            }
+
+            // Restore format preset / duration
+            if (project.format_preset) {
+                const formatSelect = document.getElementById('formatPresetSelect');
+                if (formatSelect) formatSelect.value = project.format_preset;
+                onFormatPresetChange();
+            }
+            if (project.custom_duration) {
+                const customInput = document.getElementById('customDurationInput');
+                if (customInput) customInput.value = project.custom_duration;
+            }
+            // Restore viewer outcome
+            if (project.viewer_outcome) {
+                const outcomeSelect = document.getElementById('viewerOutcomeSelect');
+                if (outcomeSelect) outcomeSelect.value = project.viewer_outcome;
+            }
+
+            // Restore focus
+            if (project.focus) {
+                const focusInput = document.getElementById('focusInput');
+                if (focusInput) focusInput.value = project.focus;
+            }
+
+            // Restore narration
+            if (project.narration_data) {
+                try {
+                    const data = typeof project.narration_data === 'string' ? JSON.parse(project.narration_data) : project.narration_data;
+                    currentNarration = data;
+                    renderNarration(data);
+                    document.getElementById('wizardStepD').style.display = 'block';
+
+                    const beats = data.narration || [];
+                    const actCount = new Set(beats.map(b => b.act)).size;
+                    updatePhaseStatus(2, `Narration loaded (${actCount} acts, ${beats.length} beats)`, 'complete');
+                } catch (e) { console.error("Restore narration error", e); }
+            }
+
+            // Restore production table
+            if (project.production_data) {
+                try {
+                    const data = typeof project.production_data === 'string' ? JSON.parse(project.production_data) : project.production_data;
+                    currentProductionData = data;
+                    const pt = data.production_table || data;
+                    renderProductionTable(pt);
+                    document.getElementById('productionResults').style.display = 'block';
+
+                    const shotCount = pt.total_shots || pt.shots?.length || '?';
+                    updatePhaseStatus(3, `Production loaded (${shotCount} shots)`, 'complete');
+                } catch (e) { console.error("Restore production error", e); }
+            }
+
+            // Restore visuals scenes (with image URLs from Firebase Storage)
+            if (project.visuals_scenes && project.visuals_scenes.length > 0) {
+                visualsScenes = project.visuals_scenes;
+            }
+
+            // Restore visuals config
+            if (project.visuals_config) {
+                visualsConfig = project.visuals_config;
+                // Update UI elements to match
+                const arSelect = document.getElementById('visAspectRatio');
+                if (arSelect) arSelect.value = visualsConfig.aspectRatio || '16:9';
+                const resSelect = document.getElementById('visResolution');
+                if (resSelect) resSelect.value = visualsConfig.resolution || '2K';
+                const imgModelSelect = document.getElementById('visImageModel');
+                if (imgModelSelect) imgModelSelect.value = visualsConfig.imageModel || 'gemini-3-pro-image-preview';
+                const veoModelSelect = document.getElementById('visVeoModel');
+                if (veoModelSelect) veoModelSelect.value = visualsConfig.veoModel || 'veo-3.1-generate-preview';
+                const contextTextarea = document.getElementById('visAdditionalContext');
+                if (contextTextarea) contextTextarea.value = visualsConfig.additionalContext || '';
+                renderVisualsStylePreviews();
+            }
+
+            // Restore visuals characters
+            if (project.visuals_characters) {
+                visualsCharacters = project.visuals_characters;
+                renderCharacterList();
+            }
+
+            // If we have scenes or production data, unhide the visuals panels
+            if ((project.visuals_scenes && project.visuals_scenes.length > 0) || currentProductionData) {
+                document.getElementById('visualsConfigSection').style.display = 'block';
+                document.getElementById('visualsCharactersSection').style.display = 'block';
+                document.getElementById('visualsSceneList').style.display = 'block';
+                document.getElementById('visualsActionBar').style.display = 'flex';
+                const vc = document.getElementById('visualsSceneCount');
+                if (vc) vc.textContent = `${visualsScenes.length} scenes`;
+                renderVisualsScenes();
+            }
+
+            // Switch to Research tab to show the project content
+            switchTab('research');
+        }
+
+        // ── Gather full project state for saving ──
+        function gatherProjectState() {
+            const topic = document.getElementById('researchTopic').value || '';
+
+            // Determine the best title
+            let title = selectedTitle || topic || 'Untitled Project';
+            if (currentNarration && currentNarration.title) {
+                title = currentNarration.title;
+            }
+
+            // Get audience from select dropdown
+            const audienceSelect = document.getElementById('audienceSelect');
+            let audience = audienceSelect ? audienceSelect.value : '';
+
+            // Get tone
+            const toneSelect = document.getElementById('toneSelect');
+            const tone = toneSelect ? toneSelect.value : '';
+
+            // Get format preset, duration, viewer outcome, and focus
+            const formatPresetSelect = document.getElementById('formatPresetSelect');
+            const formatPreset = formatPresetSelect ? formatPresetSelect.value : 'standard';
+            const customDurationInput = document.getElementById('customDurationInput');
+            const customDuration = customDurationInput ? customDurationInput.value : '10';
+            const viewerOutcomeSelect = document.getElementById('viewerOutcomeSelect');
+            const viewerOutcome = viewerOutcomeSelect ? viewerOutcomeSelect.value : '';
+            const focusInput = document.getElementById('focusInput');
+            const focus = focusInput ? focusInput.value : '';
+
+            return {
+                title,
+                topic,
+                template_id: selectedTemplate || '',
+                audience,
+                selected_title: selectedTitle || '',
+                tone,
+                format_preset: formatPreset,
+                custom_duration: customDuration,
+                viewer_outcome: viewerOutcome,
+                focus,
+                research_dossier: currentDossier || '',
+                research_summary: document.getElementById('researchSummary')?.innerText || '',
+                research_key_facts: [], // these are ephemeral display data - stored in dossier
+                research_sources: [],
+                narration_data: currentNarration || null,
+                production_data: currentProductionData || null,
+                visuals_scenes: visualsScenes || [],
+                visuals_config: visualsConfig || null,
+                visuals_characters: visualsCharacters || [],
+            };
+        }
+
+        // ── Immediate save (used before switching projects) ──
+        async function doSaveProject() {
+            if (!currentProjectId) return;
+            if (saveTimeout) clearTimeout(saveTimeout);
+
+            try {
+                const state = gatherProjectState();
+                await authFetch(`/api/projects/${currentProjectId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(state)
+                });
+                console.log("Saved project:", currentProjectId);
+            } catch (e) {
+                console.error("Save failed", e);
+            }
+        }
+
+        // ── Debounced auto-save ──
+        function triggerAutosave() {
+            if (!currentProjectId) return;
+            if (saveTimeout) clearTimeout(saveTimeout);
+
+            saveTimeout = setTimeout(async () => {
+                try {
+                    const state = gatherProjectState();
+
+                    await authFetch(`/api/projects/${currentProjectId}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(state)
+                    });
+                    console.log("Auto-saved project.");
+
+                    // Update sidebar UI locally
+                    const dateEl = document.getElementById(`project-date-${currentProjectId}`);
+                    if (dateEl) dateEl.innerText = new Date().toLocaleString();
+                    const titleEls = document.querySelectorAll(`.project-item.active .project-title`);
+                    if (titleEls.length > 0) titleEls[0].innerText = state.title;
+
+                } catch (e) {
+                    console.error("Auto-save failed", e);
+                }
+            }, 2000); // 2 second debounce
+        }
+
+        // ── Event listeners for auto-save on input changes ──
+        document.addEventListener('input', (e) => {
+            if (e.target.id === 'researchTopic' || e.target.classList.contains('style-input') || e.target.tagName.toLowerCase() === 'textarea') {
+                triggerAutosave();
+            }
+        });
+
+        // Listen for contenteditable changes (narration beat editing)
+        document.addEventListener('blur', (e) => {
+            if (e.target.getAttribute('contenteditable') === 'true') {
+                triggerAutosave();
+            }
+        }, true);
+
     </script>
 </body>
 

@@ -45,75 +45,108 @@ def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=Fal
         return f"Error: {str(e)}"
 
 
-def generate_image_content(prompt, api_key=None):
+def _generate_with_gemini_model(client, model_name, prompt, timestamp):
+    """Generate image using Gemini's native image generation (generate_content API)."""
+    print(f"[Image Gen] Trying Gemini model: {model_name}...")
+    response = client.models.generate_content(
+        model=model_name,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_modalities=["IMAGE", "TEXT"],
+        )
+    )
+    if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+        for part in response.candidates[0].content.parts:
+            if part.inline_data and part.inline_data.mime_type.startswith("image/"):
+                image_data = part.inline_data.data
+                ext = part.inline_data.mime_type.split("/")[-1]
+                filename = os.path.join(
+                    os.path.dirname(__file__), '..', 'generated_images',
+                    f"image_{timestamp}_0.{ext}"
+                )
+                with open(filename, "wb") as f:
+                    f.write(image_data)
+                print(f"[Image Gen] Success with {model_name}! Saved to {filename}")
+                return filename
+    return None
+
+
+def _generate_with_imagen_model(client, model_name, prompt, timestamp):
+    """Generate image using Imagen API (generate_images endpoint)."""
+    print(f"[Image Gen] Trying Imagen model: {model_name}...")
+    response = client.models.generate_images(
+        model=model_name,
+        prompt=prompt,
+        config=types.GenerateImagesConfig(
+            number_of_images=1,
+        )
+    )
+    if response.generated_images:
+        image_data = response.generated_images[0].image.image_bytes
+        filename = os.path.join(
+            os.path.dirname(__file__), '..', 'generated_images',
+            f"image_{timestamp}_0.png"
+        )
+        with open(filename, "wb") as f:
+            f.write(image_data)
+        print(f"[Image Gen] Success with {model_name}! Saved to {filename}")
+        return filename
+    return None
+
+
+def generate_image_content(prompt, model_name=None, api_key=None):
     """
-    Generate an image using Gemini's native image generation.
-    Uses gemini-2.0-flash-exp-image-generation which supports people,
-    unlike Imagen which blocks real person prompts.
-    Falls back to imagen-4.0-generate-001 if the first model fails.
+    Generate an image using the specified model.
+
+    Args:
+        prompt: Text prompt for image generation
+        model_name: One of:
+            - 'gemini-3-pro-image-preview' (Gemini 3 Pro, quality)
+            - 'gemini-2.5-flash-image' (Gemini Flash, fast)
+            - 'imagen-4.0-generate-001' (Imagen 4 Standard)
+            - 'imagen-4.0-fast-generate-001' (Imagen 4 Fast)
+            - 'imagen-4.0-ultra-generate-001' (Imagen 4 Ultra)
+            - None (auto: tries Gemini 3 Pro → Imagen 4 Standard fallback)
+        api_key: Gemini API key
+
+    Returns:
+        Path to saved image file, or error string starting with "Error:"
     """
     client = get_client(api_key)
     os.makedirs(os.path.join(os.path.dirname(__file__), '..', 'generated_images'), exist_ok=True)
     timestamp = int(time.time())
 
-    # --- Strategy 1: Gemini native image generation (supports people) ---
+    # Direct model selection — no fallback
+    if model_name:
+        try:
+            if model_name.startswith("imagen-"):
+                result = _generate_with_imagen_model(client, model_name, prompt, timestamp)
+            else:
+                result = _generate_with_gemini_model(client, model_name, prompt, timestamp)
+
+            if result:
+                return result
+            return f"Error: {model_name} returned no image. Try a different prompt."
+        except Exception as e:
+            print(f"[Image Gen] {model_name} failed: {e}")
+            return f"Error: {str(e)}"
+
+    # Auto mode (backward compat): Gemini 3 Pro → Imagen 4 fallback
     try:
-        print(f"[Strategy 1] Trying gemini-3-pro-image-preview...")
-        response = client.models.generate_content(
-            model="gemini-3-pro-image-preview",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE", "TEXT"],
-            )
-        )
-
-        # Extract image from response parts
-        if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
-            for part in response.candidates[0].content.parts:
-                if part.inline_data and part.inline_data.mime_type.startswith("image/"):
-                    image_data = part.inline_data.data
-                    ext = part.inline_data.mime_type.split("/")[-1]
-                    filename = os.path.join(
-                        os.path.dirname(__file__), '..', 'generated_images',
-                        f"image_{timestamp}_0.{ext}"
-                    )
-                    with open(filename, "wb") as f:
-                        f.write(image_data)
-                    print(f"[Strategy 1] Success! Saved to {filename}")
-                    return filename
-
-        print(f"[Strategy 1] No image in response. Trying Strategy 2...")
-
+        result = _generate_with_gemini_model(client, "gemini-3-pro-image-preview", prompt, timestamp)
+        if result:
+            return result
+        print(f"[Image Gen] Gemini 3 Pro returned no image. Trying Imagen fallback...")
     except Exception as e:
-        print(f"[Strategy 1] Failed: {e}. Trying Strategy 2...")
+        print(f"[Image Gen] Gemini 3 Pro failed: {e}. Trying Imagen fallback...")
 
-    # --- Strategy 2: Imagen model (faster, higher quality, but blocks people) ---
     try:
-        print(f"[Strategy 2] Trying imagen-4.0-generate-001...")
-        response = client.models.generate_images(
-            model="imagen-4.0-generate-001",
-            prompt=prompt,
-            config=types.GenerateImagesConfig(
-                number_of_images=1,
-            )
-        )
-
-        if response.generated_images:
-            image_data = response.generated_images[0].image.image_bytes
-            filename = os.path.join(
-                os.path.dirname(__file__), '..', 'generated_images',
-                f"image_{timestamp}_0.png"
-            )
-            with open(filename, "wb") as f:
-                f.write(image_data)
-            print(f"[Strategy 2] Success! Saved to {filename}")
-            return filename
-
-        print(f"[Strategy 2] No images generated. Full response: {response}")
+        result = _generate_with_imagen_model(client, "imagen-4.0-generate-001", prompt, timestamp)
+        if result:
+            return result
         return "Error: Both models failed to generate an image. Try a different prompt (avoid real person names)."
-
     except Exception as e:
-        print(f"[Strategy 2] Failed: {e}")
+        print(f"[Image Gen] Imagen fallback failed: {e}")
         return f"Error: {str(e)}"
 
 
@@ -430,16 +463,19 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                          style_images=None, character_images=None,
                          additional_context="", scene_id=None, api_key=None):
     """
-    Generate an image for a specific scene using Gemini's image generation models.
-    Supports style reference images and character reference images for consistency.
+    Generate an image for a specific scene using Gemini or Imagen models.
+    Supports style/character reference images for Gemini models.
+    Imagen models use text-only prompts (refs not supported).
 
     Args:
         prompt: The scene's first_frame_prompt
-        model_name: 'gemini-2.5-flash-image' (fast) or 'gemini-3-pro-image-preview' (quality)
+        model_name: Image model name. Gemini models support refs, Imagen models are text-only.
+            Gemini: 'gemini-3-pro-image-preview', 'gemini-2.5-flash-image'
+            Imagen: 'imagen-4.0-generate-001', 'imagen-4.0-fast-generate-001', 'imagen-4.0-ultra-generate-001'
         aspect_ratio: e.g. '16:9', '9:16', '1:1'
         resolution: '1K', '2K', or '4K'
-        style_images: List of base64 data URIs for style reference (max 4)
-        character_images: List of base64 data URIs for character reference (max 10)
+        style_images: List of base64 data URIs for style reference (max 4, Gemini only)
+        character_images: List of base64 data URIs for character reference (max 10, Gemini only)
         additional_context: Extra style notes (e.g. '2D Cartoon Style')
         scene_id: Identifier for the scene (used in filename)
         api_key: Gemini API key
@@ -451,8 +487,42 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
         client = get_client(api_key)
         os.makedirs(os.path.join(os.path.dirname(__file__), '..', 'generated_images'), exist_ok=True)
         timestamp = int(time.time())
+        safe_id = str(scene_id).replace("/", "_").replace(" ", "_")
 
-        # Build multipart contents list
+        # ── Imagen models: text-only, no multipart refs ──
+        if model_name.startswith("imagen-"):
+            full_prompt = prompt
+            if additional_context:
+                full_prompt = f"{prompt}\n\nStyle notes: {additional_context}"
+
+            print(f"[Scene Image] Generating scene {scene_id} with Imagen model {model_name}")
+            response = client.models.generate_images(
+                model=model_name,
+                prompt=full_prompt,
+                config=types.GenerateImagesConfig(
+                    number_of_images=1,
+                    aspect_ratio=aspect_ratio,
+                )
+            )
+
+            if response.generated_images:
+                image_data = response.generated_images[0].image.image_bytes
+                filename = f"scene_{safe_id}_{timestamp}.png"
+                filepath = os.path.join(
+                    os.path.dirname(__file__), '..', 'generated_images', filename
+                )
+                with open(filepath, "wb") as f:
+                    f.write(image_data)
+                print(f"[Scene Image] Scene {scene_id} saved to {filepath}")
+                return {
+                    "success": True,
+                    "image_url": f"/generated/{filename}",
+                    "scene_id": scene_id,
+                    "local_path": filepath,
+                }
+            return {"error": f"No image generated for scene {scene_id}. Imagen returned no image data."}
+
+        # ── Gemini models: support multipart style/character refs ──
         parts = []
 
         # 1. Add character reference images (First to define subjects)
@@ -469,7 +539,6 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                 parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
 
         # 2. Add style reference images (Second to apply style over subjects)
-        # Explicit text instruction to override character style
         if style_images:
             parts.append(types.Part(text="These are the style reference images. The final image MUST match this visual style exactly. Ignore the style of the character references above:"))
             for img_data in style_images[:4]:
@@ -510,7 +579,6 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                 if part.inline_data and part.inline_data.mime_type.startswith("image/"):
                     image_data = part.inline_data.data
                     ext = part.inline_data.mime_type.split("/")[-1]
-                    safe_id = str(scene_id).replace("/", "_").replace(" ", "_")
                     filename = f"scene_{safe_id}_{timestamp}.{ext}"
                     filepath = os.path.join(
                         os.path.dirname(__file__), '..', 'generated_images', filename
@@ -522,6 +590,7 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                         "success": True,
                         "image_url": f"/generated/{filename}",
                         "scene_id": scene_id,
+                        "local_path": filepath,
                     }
 
         return {"error": f"No image generated for scene {scene_id}. Model returned no image data."}
@@ -541,7 +610,7 @@ def start_video_generation(image_path, prompt, model_name="veo-3.1-generate-prev
     Args:
         image_path: Local path to the source image
         prompt: Animation/motion prompt (veo_prompt)
-        model_name: 'veo-3.1-generate-preview' (quality+audio) or 'veo-3.1-fast'
+        model_name: 'veo-3.1-generate-preview' (quality+audio) or 'veo-3.1-fast-generate-preview' (fast)
         aspect_ratio: '16:9' or '9:16'
         duration: 4, 6, or 8 (seconds)
         resolution: '720p', '1080p', or '4k'
@@ -650,6 +719,7 @@ def poll_video_generation(operation_name, scene_id=None, api_key=None):
                 "status": "completed",
                 "video_url": f"/video/{filename}",
                 "scene_id": scene_id,
+                "local_path": filepath,
             }
 
         # Operation done but no video (possibly blocked by safety filters)

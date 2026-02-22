@@ -17,7 +17,9 @@ from gemini_client import (generate_image_content, generate_tts, generate_conten
                            analyze_style_from_images, analyze_style_from_text,
                            generate_scene_image,
                            start_video_generation, poll_video_generation)
-from research_templates import get_all_templates_metadata, get_template, build_research_queries, build_title_suggestions_prompt
+from research_templates import (get_all_templates_metadata, get_template, build_research_queries,
+                                build_title_suggestions_prompt, AUDIENCE_PROFILES, TONE_DEFINITIONS,
+                                FORMAT_PRESETS, VIEWER_OUTCOMES)
 from research_scriptwriter import build_research_dossier, generate_narration, generate_production_table, auto_suggest_tone, regenerate_beats, start_deep_research, poll_deep_research
 from youtube_utils import get_transcript, analyze_style
 
@@ -32,14 +34,63 @@ TMP_DIR = os.path.join(PROJECT_DIR, ".tmp")
 
 # ── Firebase Initialization ──
 SERVICE_ACCOUNT_PATH = os.path.join(PROJECT_DIR, "firebase-service-account.json")
+try:
+    with open(SERVICE_ACCOUNT_PATH) as f:
+        _service_acc = json.load(f)
+        _project_id = _service_acc.get("project_id", "gen-lang-client-0854991687")
+except Exception:
+    _project_id = "gen-lang-client-0854991687"
+
+bucket_name = f"{_project_id}.firebasestorage.app"
+
 if os.path.exists(SERVICE_ACCOUNT_PATH):
     cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
-    firebase_admin.initialize_app(cred)
+    firebase_admin.initialize_app(cred, {'storageBucket': bucket_name})
 else:
     # Fall back to default credentials (e.g., on Cloud Run with GOOGLE_APPLICATION_CREDENTIALS)
-    firebase_admin.initialize_app()
+    firebase_admin.initialize_app(options={'storageBucket': bucket_name})
 
 db = firestore.client()
+
+try:
+    from firebase_admin import storage
+    bucket = storage.bucket()
+except Exception as e:
+    print(f"Warning: Could not initialize Firebase Storage: {e}")
+    bucket = None
+
+def upload_to_storage(local_path, remote_folder):
+    """Uploads a local file to Firebase Storage and returns the public URL."""
+    if not bucket or not os.path.exists(local_path):
+        return None
+    try:
+        filename = os.path.basename(local_path)
+        blob = bucket.blob(f"{remote_folder}/{filename}")
+        blob.upload_from_filename(local_path)
+        blob.make_public()
+        return blob.public_url
+    except Exception as e:
+        print(f"[Storage] Failed to upload {local_path}: {e}")
+        return None
+
+import urllib.request
+
+def ensure_local_image(image_url):
+    """Ensure the image exists locally. If remote, download it."""
+    filename = image_url.split("/")[-1].split("?")[0]
+    image_path = os.path.join(GENERATED_DIR, filename)
+    if not os.path.exists(image_path):
+        if image_url.startswith("http"):
+            try:
+                print(f"[Storage] Downloading missing local file from {image_url}")
+                urllib.request.urlretrieve(image_url, image_path)
+            except Exception as e:
+                print(f"[Storage] Failed to download {image_url}: {e}")
+                return None
+        else:
+            return None
+    return image_path
+
 
 app = Flask(__name__, static_url_path='', static_folder=UI_DIR, template_folder=UI_DIR)
 
@@ -123,16 +174,20 @@ def generate_image_route():
     try:
         data = request.json
         prompt = data.get('prompt')
+        model = data.get('model')  # optional: specific model selection
         if not prompt:
             return jsonify({'error': 'Prompt is required'}), 400
 
-        print(f"Generating image for prompt: {prompt}")
-        image_path = generate_image_content(prompt, api_key=g.api_key)
+        print(f"Generating image for prompt: {prompt} (model: {model or 'auto'})")
+        image_path = generate_image_content(prompt, model_name=model, api_key=g.api_key)
 
         if not image_path or (isinstance(image_path, str) and image_path.startswith("Error")):
             return jsonify({'error': image_path or 'Image generation returned no result'}), 500
 
-        return jsonify({'image_url': f'/generated/{os.path.basename(image_path)}'})
+        public_url = upload_to_storage(image_path, "images")
+        image_url = public_url if public_url else f'/generated/{os.path.basename(image_path)}'
+
+        return jsonify({'image_url': image_url})
 
     except Exception as e:
         traceback.print_exc()
@@ -166,7 +221,10 @@ def generate_tts_route():
         if not audio_path or (isinstance(audio_path, str) and audio_path.startswith("Error")):
             return jsonify({'error': audio_path or 'TTS generation returned no result'}), 500
 
-        return jsonify({'audio_url': f'/audio/{os.path.basename(audio_path)}'})
+        public_url = upload_to_storage(audio_path, "audio")
+        audio_url = public_url if public_url else f'/audio/{os.path.basename(audio_path)}'
+
+        return jsonify({'audio_url': audio_url})
 
     except Exception as e:
         traceback.print_exc()
@@ -262,6 +320,18 @@ def list_templates():
     return jsonify({'templates': get_all_templates_metadata()})
 
 
+@app.route('/api/script-options', methods=['GET'])
+@require_auth
+def get_script_options():
+    """Return all available audience profiles, tones, format presets, and viewer outcomes for the UI."""
+    return jsonify({
+        'audiences': [{"id": k, "label": v["label"]} for k, v in AUDIENCE_PROFILES.items()],
+        'tones': [{"id": k, "label": v["label"]} for k, v in TONE_DEFINITIONS.items()],
+        'format_presets': [{"id": k, "label": v["label"], "duration_minutes": v.get("duration_minutes")} for k, v in FORMAT_PRESETS.items()],
+        'viewer_outcomes': [{"id": k, "label": v["label"]} for k, v in VIEWER_OUTCOMES.items()],
+    })
+
+
 @app.route('/api/research', methods=['POST'])
 @require_auth
 def run_research():
@@ -330,28 +400,53 @@ def run_research():
         queries_text = chr(10).join(f'{i+1}. {q}' for i, q in enumerate(queries))
         questions_text = chr(10).join(f'{i+1}. {q}' for i, q in enumerate(analysis_questions))
 
+        # Extract source requirements from template
+        template = get_template(template_id)
+        if template and "research_config" in template:
+            min_sources = template["research_config"].get("min_sources", 10)
+            source_types_dict = template["research_config"].get("source_types", {})
+            source_reqs_text = chr(10).join(f"- {count}+ sources from: {stype.replace('_', ' ').title()}" for stype, count in source_types_dict.items())
+        else:
+            min_sources = 10
+            source_reqs_text = "- Diverse and credible sources"
+
         # Use Gemini to do comprehensive research
-        research_prompt = f"""You are a world-class research analyst. Conduct thorough research on the following topic.
+        research_prompt = f"""You are a world-class research analyst producing an EXHAUSTIVE research dossier. Your goal is MAXIMUM DEPTH AND DETAIL — not brevity.
 
 TOPIC: {topic}
 
-RESEARCH LAYERS (investigate each one):
+RESEARCH LAYERS (investigate each one thoroughly):
 {queries_text}
 
-ANALYSIS QUESTIONS (answer each one with specific facts, names, numbers, dates):
+SOURCE DIVERSITY REQUIREMENTS:
+You MUST search for and cite at least {min_sources} distinct sources.
+You MUST actively search for and include information from the following categories:
+{source_reqs_text}
+
+ANALYSIS QUESTIONS — Answer EACH question with a COMPREHENSIVE, multi-paragraph essay-style response:
 {questions_text}
+
+═══════ CRITICAL OUTPUT INSTRUCTIONS ═══════
+- Each answer MUST be at least 3-5 detailed paragraphs (NOT a brief summary)
+- Include specific names, exact dates, precise dollar amounts, percentages, and statistics in EVERY answer
+- DO NOT summarize or abbreviate — be EXHAUSTIVE
+- Use sub-headings, bullet points, and numbered lists within answers for organization
+- Every claim must reference its source context
+- If the question asks for N examples, provide AT LEAST N examples (more is better)
+- Write as if you are creating a reference document that will be used to write a 20-minute documentary
 
 Return a JSON object:
 {{
   "results": [
-    {{"question": "the analysis question", "answer": "detailed answer with specifics"}}
+    {{"question": "the analysis question", "answer": "A comprehensive, multi-paragraph essay-style answer. Include every relevant detail, specific data point, named source, and supporting evidence. DO NOT summarize — be exhaustive. Use sub-points and structured formatting within the answer."}}
   ],
-  "key_facts": ["fact1", "fact2", ...],
+  "key_facts": ["Include at least 15-20 specific, verifiable facts with exact numbers"],
   "sources_mentioned": ["source1", "source2", ...],
-  "summary": "2-3 paragraph executive summary of all findings"
+  "summary": "A thorough 3-5 paragraph executive summary synthesizing all major findings, key statistics, and critical insights"
 }}
 
-Be as specific as possible — include names, dates, amounts, percentages. No vague language.
+REMEMBER: You are building a COMPREHENSIVE RESEARCH DATABASE, not writing a brief overview.
+The more specific and detailed your answers, the better. No vague language. No approximations.
 Return ONLY the JSON."""
 
         print(f"[Research] Sending research prompt to Gemini...")
@@ -422,6 +517,121 @@ Return ONLY the JSON."""
         print(f"[Research Error] Full traceback:")
         print(error_trace)
         print(f"{'='*60}\n")
+        return jsonify({'error': str(e)}), 500
+
+
+# ────────────────────────────────────────────────────────────────
+#  PROJECTS API (PERSISTENCE)
+# ────────────────────────────────────────────────────────────────
+
+@app.route('/api/projects', methods=['GET'])
+@require_auth
+def list_projects():
+    """List all saved projects for the user."""
+    try:
+        docs = db.collection('users').document(g.uid).collection('projects') \
+                 .order_by('last_updated_at', direction=firestore.Query.DESCENDING).stream()
+                 
+        projects = []
+        for doc in docs:
+            d = doc.to_dict()
+            ts = d.get('last_updated_at')
+            projects.append({
+                'id': doc.id,
+                'title': d.get('title', 'Untitled Project'),
+                'topic': d.get('topic', ''),
+                'last_updated_at': ts.isoformat() if ts else None
+            })
+            
+        return jsonify({'projects': projects})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/projects', methods=['POST'])
+@require_auth
+def create_project():
+    """Create a new empty project."""
+    try:
+        data = request.json or {}
+        title = data.get('title', 'Untitled Project')
+        
+        project_ref = db.collection('users').document(g.uid).collection('projects').document()
+        new_project = {
+            'title': title,
+            'topic': data.get('topic', ''),
+            'settings': data.get('settings', {}),
+            'research_dossier': data.get('research_dossier', ''),
+            'narration_data': data.get('narration_data', None),
+            'production_table': data.get('production_table', None),
+            'created_at': firestore.SERVER_TIMESTAMP,
+            'last_updated_at': firestore.SERVER_TIMESTAMP,
+        }
+        project_ref.set(new_project)
+        
+        return jsonify({
+            'success': True,
+            'project_id': project_ref.id,
+            'project': new_project
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/projects/<project_id>', methods=['GET'])
+@require_auth
+def get_project(project_id):
+    """Load a specific project's full state."""
+    try:
+        doc = db.collection('users').document(g.uid).collection('projects').document(project_id).get()
+        if not doc.exists:
+            return jsonify({'error': 'Project not found'}), 404
+
+        project_data = doc.to_dict()
+        project_data['id'] = doc.id
+        # Convert Firestore timestamps to ISO strings for JSON serialization
+        for key in ('created_at', 'last_updated_at'):
+            if key in project_data and hasattr(project_data[key], 'isoformat'):
+                project_data[key] = project_data[key].isoformat()
+        return jsonify({'success': True, 'project': project_data})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/projects/<project_id>', methods=['PUT'])
+@require_auth
+def update_project(project_id):
+    """Auto-save / Update a specific project."""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+            
+        # Don't update timestamps provided from client, use server timestamp
+        if 'last_updated_at' in data:
+            del data['last_updated_at']
+        if 'created_at' in data:
+            del data['created_at']
+            
+        data['last_updated_at'] = firestore.SERVER_TIMESTAMP
+        
+        db.collection('users').document(g.uid).collection('projects').document(project_id).set(
+            data, merge=True
+        )
+        return jsonify({'success': True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/projects/<project_id>', methods=['DELETE'])
+@require_auth
+def delete_project(project_id):
+    """Delete a specific project."""
+    try:
+        db.collection('users').document(g.uid).collection('projects').document(project_id).delete()
+        return jsonify({'success': True})
+    except Exception as e:
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 
@@ -638,13 +848,18 @@ def generate_script_route():
         template_id = data.get('template_id', 'educational_explainer')
         dossier = data.get('dossier', '')
         duration = int(data.get('duration_minutes', 10))
-        audience = data.get('audience', 'General')
+        audience = data.get('audience', 'general')
         tone = data.get('tone', '')
         focus = data.get('focus', '')
         selected_title = data.get('selected_title', '')
+        format_preset = data.get('format_preset', '')
+        viewer_outcome = data.get('viewer_outcome', '')
+        custom_audience = data.get('custom_audience', '')
+        custom_tone = data.get('custom_tone', '')
 
         style_mode = data.get('style_mode', 'template')  # 'template' or 'transcript'
         style_transcript = data.get('style_transcript', '')
+        style_blend_mode = data.get('style_blend_mode', 'clone')  # 'clone' or 'blend'
 
         if not topic:
             return jsonify({'error': 'Topic is required'}), 400
@@ -658,9 +873,9 @@ def generate_script_route():
             if not style_guide or style_guide.startswith("Error:"):
                 print(f"[Narration] Style analysis failed: {style_guide}")
                 return jsonify({'error': f"Style analysis failed: {style_guide or 'empty response'}"}), 500
-            print(f"[Narration] Style analysis complete.")
+            print(f"[Narration] Style analysis complete (blend_mode={style_blend_mode}).")
 
-        print(f"[Narration] Generating narration for '{topic}' ({template_id}, {duration}min)")
+        print(f"[Narration] Generating narration for '{topic}' ({template_id}, {duration}min, audience={audience}, tone={tone})")
 
         result = generate_narration(
             topic=topic,
@@ -672,6 +887,11 @@ def generate_script_route():
             focus=focus,
             style_guide=style_guide,
             selected_title=selected_title,
+            format_preset=format_preset,
+            viewer_outcome=viewer_outcome,
+            style_blend_mode=style_blend_mode,
+            custom_audience=custom_audience,
+            custom_tone=custom_tone,
             api_key=g.api_key,
         )
 
@@ -873,6 +1093,12 @@ def visuals_generate_image():
         if "error" in result:
             return jsonify({'error': result['error']}), 500
 
+        if result.get("success") and "local_path" in result:
+            public_url = upload_to_storage(result["local_path"], "images")
+            if public_url:
+                result["image_url"] = public_url
+            del result["local_path"]
+
         return jsonify(result)
 
     except Exception as e:
@@ -914,7 +1140,13 @@ def visuals_generate_batch_images():
             futures = {executor.submit(generate_one, s): s for s in scenes}
             for future in as_completed(futures):
                 try:
-                    results.append(future.result())
+                    res = future.result()
+                    if res.get("success") and "local_path" in res:
+                        public_url = upload_to_storage(res["local_path"], "images")
+                        if public_url:
+                            res["image_url"] = public_url
+                        del res["local_path"]
+                    results.append(res)
                 except Exception as exc:
                     scene = futures[future]
                     results.append({"error": str(exc), "scene_id": scene.get('scene_id')})
@@ -949,10 +1181,9 @@ def visuals_start_animation():
             return jsonify({'error': 'Animation prompt is required'}), 400
 
         # Resolve image URL to local file path
-        filename = os.path.basename(image_url)
-        image_path = os.path.join(GENERATED_DIR, filename)
-        if not os.path.exists(image_path):
-            return jsonify({'error': f'Image file not found: {filename}'}), 404
+        image_path = ensure_local_image(image_url)
+        if not image_path:
+            return jsonify({'error': f'Image file could not be downloaded/resolved: {image_url}'}), 404
 
         model = data.get('model', 'veo-3.1-generate-preview')
         aspect_ratio = data.get('aspect_ratio', '16:9')
@@ -1002,6 +1233,12 @@ def visuals_poll_animation():
         if result.get('status') == 'failed':
             return jsonify(result), 500
 
+        if result.get('status') == 'completed' and "local_path" in result:
+            public_url = upload_to_storage(result["local_path"], "videos")
+            if public_url:
+                result["video_url"] = public_url
+            del result["local_path"]
+
         return jsonify(result)
 
     except Exception as e:
@@ -1026,11 +1263,10 @@ def visuals_start_batch_animation():
         def start_one(scene):
             sid = scene.get('scene_id')
             image_url = scene.get('image_url', '')
-            filename = os.path.basename(image_url)
-            image_path = os.path.join(GENERATED_DIR, filename)
+            image_path = ensure_local_image(image_url)
 
-            if not os.path.exists(image_path):
-                return {"error": f"Image not found: {filename}", "scene_id": sid}
+            if not image_path:
+                return {"error": f"Image could not be resolved: {image_url}", "scene_id": sid}
 
             return start_video_generation(
                 image_path=image_path,
@@ -1069,6 +1305,43 @@ def visuals_start_batch_animation():
 def serve_video_file(filename):
     """Serve generated video files."""
     return send_from_directory(VIDEO_DIR, filename)
+
+
+@app.route('/api/download-asset', methods=['GET'])
+@require_auth
+def download_asset():
+    """Proxy download for Firebase Storage files.
+    Fetches the file from the given URL and serves it as a download.
+    This avoids CORS issues when downloading from Firebase Storage.
+    """
+    try:
+        url = request.args.get('url', '')
+        filename = request.args.get('filename', 'download')
+
+        if not url:
+            return jsonify({'error': 'url parameter is required'}), 400
+
+        # Only allow downloading from our Firebase Storage bucket
+        if not (url.startswith('https://storage.googleapis.com/') or
+                url.startswith('https://firebasestorage.googleapis.com/')):
+            return jsonify({'error': 'Invalid download URL'}), 400
+
+        # Fetch the file
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req) as response:
+            file_data = response.read()
+            content_type = response.headers.get('Content-Type', 'application/octet-stream')
+
+        return send_file(
+            io.BytesIO(file_data),
+            mimetype=content_type,
+            as_attachment=True,
+            download_name=filename,
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/visuals/download-all', methods=['GET'])
