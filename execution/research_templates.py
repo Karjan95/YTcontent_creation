@@ -1406,9 +1406,53 @@ Return ONLY the JSON array. Begin."""
 #  PHASE 3: PRODUCTION TABLE
 # ═══════════════════════════════════════════════════════════════════
 
+# Speech pacing constant
+WORDS_PER_SECOND = 2.5
+
+# Pacing instructions per tier (used by both single-call and 3-phase pipeline)
+PACING_INSTRUCTIONS = {
+    "Meditative": (
+        "PACING TARGET: ~6-8 seconds per shot.\n"
+        "CRITICAL CUTTING RULE: Do NOT cut frequently. Let the narrator speak full, multi-sentence paragraphs "
+        "over a single, highly-detailed, evolving visual. Combine smaller beats into single, long-held shots. "
+        "Focus the visual prompts on deep atmosphere and mood rather than rapid action."
+    ),
+    "Relaxed": (
+        "PACING TARGET: ~4-6 seconds per shot.\n"
+        "CRITICAL CUTTING RULE: Use longer takes. Allow for complete thoughts to finish before cutting to a new visual. "
+        "Prioritize smooth narrative flow over frequent angle changes."
+    ),
+    "Standard": (
+        "PACING TARGET: ~3-4 seconds per shot.\n"
+        "CRITICAL CUTTING RULE: Use standard documentary or cinematic pacing. Cut when sentences end or when "
+        "the visual subject matter clearly shifts."
+    ),
+    "High Energy": (
+        "PACING TARGET: ~2 seconds per shot.\n"
+        "CRITICAL CUTTING RULE: Keep the pacing fast. Cut often, even mid-paragraph, if there is a natural pause "
+        "or a shift in the tone. Use varied camera angles to keep the visual momentum high."
+    ),
+    "Frenetic": (
+        "PACING TARGET: ~1-2 seconds per shot.\n"
+        "CRITICAL CUTTING RULE: You must perform frequent micro-cuts *within* single sentences. To do this, "
+        "break long sentences into smaller text fragments across multiple shots. Keep visuals rapidly evolving "
+        "even if the core subject remains the same. Do not worry about strict physical continuity between "
+        "every micro-shot; focus on dynamic, montage-style visual energy."
+    )
+}
+
+# Words per shot target for each pacing tier
+WORDS_PER_SHOT_TARGETS = {
+    "Meditative": 15,
+    "Relaxed": 11,
+    "Standard": 9,
+    "High Energy": 5,
+    "Frenetic": 3
+}
+
 # Default cinematic prompt schema (used when no style analysis is provided)
 DEFAULT_PROMPT_SCHEMA = {
-    "always_include": ["shot_size", "subject", "arrangement", "background", "mood"],
+    "always_include": ["shot_size", "subject", "expression", "wardrobe", "arrangement", "background", "photography", "mood"],
     "include": ["lighting", "lighting_direction", "camera_lens", "camera_aperture",
                  "dof", "film_stock", "color_restriction", "output_style",
                  "room_objects", "made_out_of"],
@@ -1417,72 +1461,250 @@ DEFAULT_PROMPT_SCHEMA = {
 
 # Maps schema field keys to prompt bracket instructions
 _FIELD_TO_PROMPT = {
-    "shot_size":           ("[SHOT SIZE]", "Camera framing: wide, medium, close-up, extreme close-up"),
-    "subject":             ("[SUBJECT: detailed physical description, age, features, wardrobe]", "Full character/object description"),
-    "arrangement":         ("[POSE/ACTION], [EXPRESSION]", "Body position, gesture, facial expression, camera angle relative to subject"),
-    "background":          ("[BACKGROUND/ENVIRONMENT: specific location, key visual details]", "Setting and backdrop"),
-    "mood":                ("[MOOD: emotional atmosphere]", "The feeling this frame should evoke"),
-    "lighting":            ("[LIGHTING: quality, setup, softness/hardness]", "Overall lighting approach"),
-    "lighting_direction":  ("[LIGHTING DIRECTION: key light position, fill, color temperature]", "Technical lighting specs"),
-    "camera_lens":         ("[CAMERA LENS: focal length in mm]", "e.g., 35mm, 85mm, 200mm"),
-    "camera_aperture":     ("[APERTURE: f-stop]", "e.g., f/1.4, f/2.8, f/8"),
-    "dof":                 ("[DEPTH OF FIELD]", "Shallow bokeh vs deep focus"),
-    "film_stock":          ("[FILM STOCK/TEXTURE]", "Grain, analog feel, digital clean"),
-    "color_restriction":   ("[COLOR PALETTE: primary and accent colors]", "Color rules and restrictions"),
-    "output_style":        ("[STYLE/AESTHETIC: overall look]", "e.g., photorealistic 8k, watercolor, pixel art, cel animation"),
-    "room_objects":        ("[PROPS/OBJECTS in scene]", "Important items visible in frame"),
-    "made_out_of":         ("[MATERIAL/TEXTURE of subject]", "What the subject is made of or looks like"),
-    "tags":                ("[AESTHETIC TAGS]", "Keyword descriptors for the overall feel"),
+    "shot_size":           ("SHOT SIZE: [Framing: Close-up/Wide-shot/Medium-shot/Macro]", "Framing: Close-up/Wide-shot/Medium-shot/Macro"),
+    "subject":             ("SUBJECT CORE: [Age, gender, body type, and overall character archetype]", "Age, gender, body type, and overall character archetype"),
+    "expression":          ("FACIAL EXPRESSION: [Eyes, Mouth, Brows, Overall Energy]", "Highly granular breakdown of the character's acting/emotion (e.g. 'Doe eyes looking up, soft pout, faux innocent energy')"),
+    "wardrobe":            ("WARDROBE & FIT: [Specific clothing items, materials, and EXACTLY how they fit/drape]", "Specific clothing items, materials, and EXACTLY how they fit/drape on the character"),
+    "arrangement":         ("POSE/ACTION & RELATIONSHIPS: [Body language, posture, and spatial relationship to camera/environment]", "Body language, posture, and spatial relationship to camera/environment"),
+    "background":          ("ENVIRONMENT DIORAMA: [Specific scene elements, time of day, and set dressing]", "Specific scene elements, time of day, and set dressing"),
+    "photography":         ("CAMERA/PHOTOGRAPHY STYLE: [The philosophy of the shot (e.g., Casual iPhone selfie, Gritty documentary, Slick Hollywood cinematic)]", "The philosophy of the shot (e.g., 'Casual iPhone selfie', 'Gritty documentary', 'Slick Hollywood cinematic')"),
+    "mood":                ("VIBE/ENERGY: [The contrast, the core emotion, the psychological weight]", "The 'whole game' of the shot — the contrast, the core emotion, the psychological weight"),
+    
+    # Technical fields (used only if photography style demands it)
+    "lighting":            ("LIGHTING SOURCE & QUALITY: [Sunlight/Artificial/Mixed, and Hard/Soft/Diffused]", "Sunlight/Artificial/Mixed, and Hard/Soft/Diffused"),
+    "lighting_direction":  ("LIGHTING DIRECTION & COLOR TEMP: [Top-down/Backlit/etc, and Warm/Cool/Neutral]", "Top-down/Backlit/etc, and Warm/Cool/Neutral"),
+    "camera_lens":         ("LENS FX: [Specific lens distortions, focal length, or depth of field]", "Specific lens distortions, focal length, or depth of field"),
+    "camera_aperture":     ("APERTURE: [f-stop]", "e.g., f/1.4, f/2.8, f/8"),
+    "dof":                 ("DEPTH OF FIELD: [Shallow (blurry background) vs Deep (everything in focus)]", "Shallow (blurry background) vs Deep (everything in focus)"),
+    "film_stock":          ("TEXTURE/IMPERFECTIONS: [Film grain, digital noise, dust, scratches, brush strokes]", "Film grain, digital noise, dust, scratches, brush strokes"),
+    "color_restriction":   ("COLOR PALETTE: [Dominant colors, accents, and contrast logic]", "Dominant colors, accents, and contrast logic"),
+    "output_style":        ("OUTPUT AESTHETIC: [Overall rendering pipeline (2D vector, Photoreal, 3D Render)]", "Overall rendering pipeline (2D vector, Photoreal, 3D Render)"),
+    "room_objects":        ("PROMINENT OBJECTS: [Key items in Foreground/Background]", "Key items in Foreground/Background"),
+    "made_out_of":         ("MATERIAL COMPOSITION: [Wood/Plastic/Skin/Fabric/etc]", "Wood/Plastic/Skin/Fabric/etc"),
+    "tags":                ("AESTHETIC TAGS: [Keyword descriptors for the overall feel]", "Keyword descriptors for the overall feel"),
 }
 
 
-def _build_prompt_format_instructions(schema: dict, aspect_ratio: str) -> str:
+def _build_character_section(intent: dict) -> str:
+    """Build the dual-layer rendering identity section (character + optional environment)."""
+    character_desc = intent.get('character_description', '')
+    environment_desc = intent.get('environment_description', '')
+    rendering_split = intent.get('rendering_split', 'unified')
+
+    if not character_desc and not environment_desc:
+        return ""
+
+    section = ""
+
+    if character_desc:
+        section += f"""
+⚠️⚠️⚠️ CHARACTER RENDERING IDENTITY (MANDATORY) ⚠️⚠️⚠️
+ALL characters in EVERY prompt MUST be described using this template:
+"{character_desc}"
+
+STRICT RULES:
+- Do NOT use generic human terms like "man", "woman", "person", "young man", "elderly male", "girl", "boy".
+- EVERY time a character appears in a prompt, describe them using the character rendering style above.
+- If the narration says "a man walks in", write the CHARACTER DESCRIPTION walking in, NOT "a man walking in".
+- Differentiate characters by clothing color, accessories, or size — NOT by realistic facial features.
+- The character description defines the RENDERING STYLE. The narration defines WHAT THEY DO and WHERE."""
+
+    if environment_desc and rendering_split == 'hybrid':
+        char_short = character_desc[:80] if character_desc else 'the character style'
+        section += f"""
+
+⚠️⚠️⚠️ ENVIRONMENT RENDERING IDENTITY (MANDATORY — HYBRID STYLE) ⚠️⚠️⚠️
+Environments and backgrounds MUST be rendered using this approach:
+"{environment_desc}"
+
+CRITICAL — DUAL-LAYER RENDERING RULES:
+- Characters are rendered in ONE style (above) and environments in ANOTHER style (this section).
+- Technical camera fields (APERTURE, DOF, LIGHTING) apply to the ENVIRONMENT/BACKGROUND, not to the character rendering.
+- When writing APERTURE, DOF, LENS — describe how the ENVIRONMENT looks through that lens, not the character.
+- The character exists IN the environment but is rendered as: {char_short}...
+- Example: "APERTURE: f/2.8 — shallow depth of field on the background cityscape behind the stick figure"
+- Example: "LIGHTING: Warm golden hour sunlight illuminating the detailed environment; the stick figure character is rendered with flat lighting as per character style"
+- DO NOT apply photorealistic skin, fabric textures, or camera-specific rendering to the characters.
+- DO NOT apply flat/minimalist rendering to the environments.
+- Think of it like a 2D animated character composited into a richly rendered background."""
+    elif environment_desc:
+        section += f"""
+
+ENVIRONMENT RENDERING:
+Environments and backgrounds should be rendered as: "{environment_desc}"
+Environments are rendered in the SAME overall visual style as the characters."""
+
+    return section
+
+
+def _build_creative_direction_section(creative_direction: dict, agent_role: str) -> str:
+    """Build a creative direction preamble tailored to each agent's role.
+
+    Args:
+        creative_direction: The expanded creative direction dict
+        agent_role: One of 'director', 'storyboard', 'dp', 'combined'
+    Returns:
+        Prompt section string, or empty string if creative_direction is None.
+    """
+    if not creative_direction:
+        return ""
+
+    summary = creative_direction.get('direction_summary', '')
+    video_format = creative_direction.get('video_format', '')
+    visual_language = creative_direction.get('visual_language', '')
+    narrative_approach = creative_direction.get('narrative_approach', '')
+    pacing_philosophy = creative_direction.get('pacing_philosophy', '')
+    world_building = creative_direction.get('world_building', '')
+    character_approach = creative_direction.get('character_approach', '')
+    tone_and_feel = creative_direction.get('tone_and_feel', '')
+
+    # Common header
+    section = f"""
+═══════ CREATIVE DIRECTION (MANDATORY) ═══════
+This video has a specific creative vision. ALL decisions must serve this direction:
+"{summary}"
+
+Video Format: {video_format}
+Tone & Feel: {tone_and_feel}
+"""
+
+    if agent_role == 'director':
+        section += f"""
+YOUR EDITORIAL DECISIONS must reflect this creative vision:
+- Narrative Approach: {narrative_approach}
+- Pacing Philosophy: {pacing_philosophy}
+- When deciding WHERE to cut: consider the "{video_format}" format.
+  For example, if this is an "explainer," cut at idea boundaries.
+  If this is a "documentary," allow longer observational shots.
+- Match your cutting rationale to the tone: "{tone_and_feel}"
+"""
+    elif agent_role == 'storyboard':
+        section += f"""
+YOUR VISUAL COMPOSITIONS must reflect this creative vision:
+- Visual Language: {visual_language}
+- World Building: {world_building}
+- Character Approach: {character_approach}
+- When designing what each shot SHOWS: think about what a "{video_format}" looks like.
+  For example, if this is a "stick figure explainer," scenes should be simple with one focal point.
+  If this is a "documentary," scenes should feel observational and grounded.
+"""
+    elif agent_role in ('dp', 'combined'):
+        section += f"""
+YOUR PROMPTS must produce imagery consistent with this creative vision:
+- Visual Language: {visual_language}
+- World Building: {world_building}
+- Character Approach: {character_approach}
+- Narrative Approach: {narrative_approach}
+- Every prompt should look like it belongs in a "{video_format}".
+- The overall feel should be: {tone_and_feel}
+"""
+
+    return section
+
+
+def _build_prompt_format_instructions(schema: dict, aspect_ratio: str,
+                                      character_description: str = "",
+                                      style_summary: str = "",
+                                      environment_description: str = "",
+                                      rendering_split: str = "unified") -> str:
     """
     Build the PROMPT FORMATS section dynamically based on the approved schema.
     Only includes fields that are in always_include + include, and explicitly
     tells the AI NOT to use excluded fields.
+
+    When character_description is provided, the SUBJECT CORE field is overridden
+    to embed the character rendering identity directly, preventing Gemini from
+    defaulting to realistic human descriptions.
+
+    When style_summary is provided, the OUTPUT AESTHETIC field is overridden
+    to embed the actual style instead of letting Gemini default to "Photoreal".
+
+    When rendering_split is "hybrid", environment-only fields (camera_aperture,
+    dof, etc.) are annotated with "apply to ENVIRONMENT only" instructions.
     """
     always = schema.get("always_include", [])
     include = schema.get("include", [])
     exclude = schema.get("exclude", [])
     active_fields = always + include
 
+    # Build field overrides based on style context
+    field_overrides = {}
+    if character_description:
+        field_overrides["subject"] = (
+            f"SUBJECT CORE: [{character_description} — differentiate characters by clothing color, accessories, or size ONLY. Do NOT use 'man', 'woman', 'person', or any realistic human descriptors]",
+            f"Character rendered as: {character_description}"
+        )
+    if style_summary:
+        field_overrides["output_style"] = (
+            f"OUTPUT AESTHETIC: [{style_summary}]",
+            f"Rendering style: {style_summary}"
+        )
+
+    # For hybrid styles, annotate environment-only fields so Gemini knows
+    # these apply to the background, not the character rendering
+    if rendering_split == 'hybrid' and environment_description:
+        env_only_fields = ["camera_aperture", "dof", "camera_lens", "film_stock",
+                           "lighting", "lighting_direction"]
+        for field in env_only_fields:
+            if field in active_fields and field not in field_overrides:
+                if field in _FIELD_TO_PROMPT:
+                    orig_bracket, orig_desc = _FIELD_TO_PROMPT[field]
+                    label = orig_bracket.split(':')[0].strip()
+                    field_overrides[field] = (
+                        f"{label}: [ENVIRONMENT ONLY — describe how the background/environment looks, NOT the 2D character. {orig_desc}]",
+                        f"{orig_desc} (environment layer only in hybrid style)"
+                    )
+
     # Build first frame template lines
     first_frame_lines = []
     for field in active_fields:
-        if field in _FIELD_TO_PROMPT:
+        if field in field_overrides:
+            bracket, _ = field_overrides[field]
+            first_frame_lines.append(bracket)
+        elif field in _FIELD_TO_PROMPT:
             bracket, _ = _FIELD_TO_PROMPT[field]
             first_frame_lines.append(bracket)
 
     first_frame_template = "\n".join(first_frame_lines)
-    first_frame_template += f"\n[ASPECT RATIO: {aspect_ratio}]"
+    first_frame_template += f"\nASPECT RATIO: [{aspect_ratio}]"
     first_frame_template += "\n--\nExclude: [specific exclusions for this scene]"
 
     # Build last frame template (mirrors first frame with END state)
     last_frame_lines = []
     for field in active_fields:
-        if field in _FIELD_TO_PROMPT:
+        # Use overrides if available, otherwise default field definitions
+        if field in field_overrides:
+            bracket, _ = field_overrides[field]
+        elif field in _FIELD_TO_PROMPT:
             bracket, _ = _FIELD_TO_PROMPT[field]
-            if field == "arrangement":
-                last_frame_lines.append("[END POSE/ACTION], [END EXPRESSION]")
-            elif field in ("subject", "background", "lighting", "lighting_direction",
-                           "color_restriction", "output_style", "film_stock", "mood"):
-                last_frame_lines.append(f"[SAME {bracket.strip('[]').split(':')[0]}]")
-            else:
-                last_frame_lines.append(bracket)
+        else:
+            continue
+        label = bracket.split(':')[0].strip()
+
+        if field == "arrangement":
+            last_frame_lines.append(f"{label}: [END POSE/ACTION]")
+        elif field == "expression":
+            last_frame_lines.append(f"{label}: [END FACIAL EXPRESSION]")
+        elif field in ("subject", "wardrobe", "background", "photography", "lighting", "lighting_direction",
+                       "color_restriction", "output_style", "film_stock", "mood"):
+            last_frame_lines.append(f"{label}: [SAME AS FIRST FRAME]")
+        else:
+            last_frame_lines.append(bracket)
 
     last_frame_template = "\n".join(last_frame_lines)
-    last_frame_template += f"\n[ASPECT RATIO: {aspect_ratio}]"
+    last_frame_template += f"\nASPECT RATIO: [{aspect_ratio}]"
     last_frame_template += "\n--\nExclude: [specific exclusions]"
 
     # Build Veo template
-    veo_lines = ["[Shot size] of [subject] [TRANSITIONAL ACTION — what happens between first and last frame] in [background]."]
+    subject_hint = f"[character described using: {character_description[:80]}...]" if character_description else "[subject]"
+    veo_lines = [f"[Shot size] of {subject_hint} [TRANSITIONAL ACTION — what happens between first and last frame] in [background]."]
     if "lighting" in active_fields or "lighting_direction" in active_fields:
         veo_lines.append("Lighting: [conditions, any changes].")
     veo_lines.append("Camera: [movement type, speed, motivation].")
     veo_lines.append("Audio: [ambient], [SFX], [dialogue if any].")
     if "output_style" in active_fields:
-        veo_lines.append("Style: [aesthetic reference].")
+        style_hint = f"Style: {style_summary}." if style_summary else "Style: [aesthetic reference]."
+        veo_lines.append(style_hint)
     veo_lines.append("--")
     veo_lines.append("negative prompt: no text overlays, no watermarks, no logos, [scene-specific exclusions]")
     veo_template = "\n".join(veo_lines)
@@ -1505,7 +1727,10 @@ These fields are NOT relevant for the current visual style. Including them will 
     # Build field reference guide
     field_guide_lines = []
     for field in active_fields:
-        if field in _FIELD_TO_PROMPT:
+        if field in field_overrides:
+            _, desc = field_overrides[field]
+            field_guide_lines.append(f"  - {field}: {desc}")
+        elif field in _FIELD_TO_PROMPT:
             bracket, desc = _FIELD_TO_PROMPT[field]
             field_guide_lines.append(f"  - {field}: {desc}")
 
@@ -1533,7 +1758,10 @@ VEO 3.1 VIDEO PROMPT format:
 
 def build_production_prompt(narration_json: dict, duration_minutes: int = 10,
                             style_analysis: dict = None,
-                            aspect_ratio: str = "16:9") -> str:
+                            aspect_ratio: str = "16:9",
+                            shot_start_number: int = 1,
+                            pacing_tier: str = "Standard",
+                            creative_direction: dict = None) -> str:
     """
     Build prompt for the unified Production Table with dynamic style support.
 
@@ -1547,6 +1775,8 @@ def build_production_prompt(narration_json: dict, duration_minutes: int = 10,
         duration_minutes: Target video length
         style_analysis: Structured style dict {style_summary, style_intent, prompt_schema}
         aspect_ratio: Video aspect ratio (Veo hardware constraint)
+        shot_start_number: The number to start shot numbering from (important for batching)
+        pacing_tier: Pacing speed (Meditative, Relaxed, Standard, High Energy, Frenetic)
     """
     # Extract narration beats
     beats = narration_json.get("narration", [])
@@ -1561,10 +1791,12 @@ def build_production_prompt(narration_json: dict, duration_minutes: int = 10,
         text = beat.get("text", beat.get("narration", ""))
         narration_text += f"\n[BEAT {i+1}] Act: {act} | Beat: {beat_name}\n{text}\n"
 
-    # Speech pacing constants
-    WORDS_PER_SECOND = 2.5
+    # Use module-level pacing constants
     total_words = sum(len(b.get("text", b.get("narration", "")).split()) for b in beats)
-    estimated_shots = max(1, int(total_words / (WORDS_PER_SECOND * 3.5)))
+    pacing_instruction = PACING_INSTRUCTIONS.get(pacing_tier, PACING_INSTRUCTIONS["Standard"])
+    WORDS_PER_SHOT_TARGET = WORDS_PER_SHOT_TARGETS.get(pacing_tier, 9)
+
+    estimated_shots = max(1, int(total_words / WORDS_PER_SHOT_TARGET))
 
     # Build visual style section from structured style analysis
     if style_analysis and isinstance(style_analysis, dict):
@@ -1572,8 +1804,19 @@ def build_production_prompt(narration_json: dict, duration_minutes: int = 10,
         schema = style_analysis.get("prompt_schema", DEFAULT_PROMPT_SCHEMA)
         style_summary = style_analysis.get("style_summary", "Custom style")
 
+        character_section = _build_character_section(intent)
+        env_desc = intent.get('environment_description', '')
+        rendering_split = intent.get('rendering_split', 'unified')
+
         visual_style_section = f"""═══════ VISUAL STYLE & CREATIVE DIRECTION ═══════
-Style: {style_summary}
+⚠️ READ THIS SECTION CAREFULLY — IT CONTROLS HOW EVERY PROMPT IS WRITTEN ⚠️
+
+MASTER STYLE: {style_summary}
+Rendering Mode: {"HYBRID — characters and environments use DIFFERENT rendering" if rendering_split == "hybrid" else "UNIFIED — same rendering for everything"}
+
+CHARACTER RENDERING: {intent.get('character_description', 'Standard')}
+ENVIRONMENT RENDERING: {env_desc or 'Same as character rendering'}
+
 Detail Level: {intent.get('detail_level', 'Standard')}
 Scene Complexity: {intent.get('scene_complexity', 'Standard')}
 Camera Language: {intent.get('camera_language', 'Standard cinematography')}
@@ -1583,19 +1826,29 @@ Writing Style: {intent.get('writing_style', 'Descriptive')}
 Color Palette: {intent.get('color_palette', 'As appropriate')}
 Texture: {intent.get('texture', 'As appropriate')}
 Default Mood: {intent.get('mood_default', 'As appropriate')}
-
+{character_section}
 ⚠️ CRITICAL STYLE RULES:
 - MATCH the style description above in EVERY prompt you write.
-- If Detail Level is 'Minimalist', keep prompts short and simple. Do NOT add cinematic details.
+- If Detail Level is 'Minimalist', character descriptions should be short.{" Environment descriptions can still be rich because this is HYBRID mode." if rendering_split == "hybrid" else " Do NOT add cinematic details."}
 - If Scene Complexity is 'Empty Backgrounds', do NOT describe detailed environments.
 - If Writing Style is 'Concise', use short direct sentences. No flowery language.
 - Do NOT hallucinate details that contradict the style (e.g., don't add '4k photorealistic' to a cartoon style).
 - Follow the Camera Language instructions — if it says 'simple flat framing', do NOT use lens mm or DOF.
-
+{"" if rendering_split != "hybrid" else f'''
+⚠️ HYBRID RENDERING MODE — DUAL-LAYER RULES (CRITICAL):
+- Characters: Use the CHARACTER RENDERING description above. Keep character rendering minimalist/simple.
+- Environments: Use the ENVIRONMENT RENDERING description above. Environments CAN be detailed/cinematic.
+- Technical camera fields (APERTURE, DOF, LIGHTING) describe the ENVIRONMENT, not the character.
+- DO NOT write: "gritty documentary footage of a stick figure" or "photorealistic stick figure."
+- DO NOT write: "a man standing in..." — ALWAYS use the character rendering template.
+- INSTEAD write: "A [character per style] standing in a richly detailed [environment per style]."
+- WRONG: "A man in a cinematic alleyway"
+- WRONG: "A stick figure in a flat white void" (when environment style says rich/cinematic)
+- RIGHT: "A stick figure character with circle head and dot eyes [character style] standing in a moody, rain-slicked alleyway with neon reflections and volumetric fog [environment style]"
+'''}
 ⚠️ STORY SCENE RULES (CRITICAL):
 - The style describes HOW CHARACTERS ARE RENDERED, not the scene setting.
 - Characters must be placed in STORY-APPROPRIATE ENVIRONMENTS (forests, houses, streets, etc.) — not studio backdrops.
-- Environments should be rendered in the SAME visual style as the characters.
 - Each prompt must depict WHAT IS HAPPENING in the narration at that moment.
 - Characters must be DOING things (actions from the story), NOT posing statically for display.
 - NEVER describe the scene as "product photography", "studio showcase", or "display figure"."""
@@ -1615,7 +1868,25 @@ Texture: Cinematic film grain
 Default Mood: As appropriate for the narrative"""
 
     # Build dynamic prompt format instructions from schema
-    prompt_formats = _build_prompt_format_instructions(schema, aspect_ratio)
+    # Pass character_description and style_summary so field templates embed them directly
+    character_desc = ""
+    env_desc_for_schema = ""
+    rendering_split_for_schema = "unified"
+    if style_analysis and isinstance(style_analysis, dict):
+        intent_for_schema = style_analysis.get("style_intent", {})
+        character_desc = intent_for_schema.get("character_description", "")
+        env_desc_for_schema = intent_for_schema.get("environment_description", "")
+        rendering_split_for_schema = intent_for_schema.get("rendering_split", "unified")
+    prompt_formats = _build_prompt_format_instructions(
+        schema, aspect_ratio,
+        character_description=character_desc,
+        style_summary=style_summary,
+        environment_description=env_desc_for_schema,
+        rendering_split=rendering_split_for_schema
+    )
+
+    # Build creative direction section for combined/fast mode
+    creative_direction_section = _build_creative_direction_section(creative_direction, 'combined')
 
     prompt = f"""You are a professional production team creating a VIDEO that tells a STORY:
 1. THE DIRECTOR — story, emotion, performance, pacing, editorial decisions
@@ -1625,7 +1896,7 @@ Default Mood: As appropriate for the narrative"""
 Your job has TWO parts:
 A) CREATIVELY SPLIT the narration into production shots
 B) CREATE production prompts (first-frame, last-frame, Veo 3.1) for each shot — these must depict STORY SCENES, not static character showcases
-
+{creative_direction_section}
 ═══════ PROJECT INFO ═══════
 Title: {title}
 Hook Type: {hook_type}
@@ -1641,6 +1912,8 @@ Aspect Ratio: {aspect_ratio}
 {narration_text}
 
 ═══════ CREATIVE SCENE CUTTING ═══════
+
+{pacing_instruction}
 
 You are making CREATIVE EDITORIAL DECISIONS about where to cut. This is NOT a mechanical word-count exercise.
 
@@ -1727,6 +2000,15 @@ FRAME COMPATIBILITY (MUST MATCH between first & last frame):
 
 {prompt_formats}
 
+═══════ PER-SHOT STYLE COMPLIANCE CHECK ═══════
+Before writing each shot's prompts, silently verify:
+✓ Does the SUBJECT CORE use the character rendering template (not generic "man"/"woman"/"person")?
+✓ Does the ENVIRONMENT match the story (not a studio/void unless the story is set there)?
+✓ Does the CAMERA/PHOTOGRAPHY STYLE match the style guide (not defaulting to cinematic for a cartoon style)?
+{"✓ Are technical camera fields (APERTURE, DOF, LIGHTING) applied to the environment only, not the character? (HYBRID mode)" if style_analysis and isinstance(style_analysis, dict) and style_analysis.get("style_intent", {}).get("rendering_split") == "hybrid" else ""}
+✓ Does the overall prompt match the style summary: "{style_summary}"?
+If any check fails, REWRITE the prompt before including it in the JSON.
+
 ═══════ OUTPUT FORMAT ═══════
 
 Return a JSON object with this EXACT structure:
@@ -1737,7 +2019,7 @@ Return a JSON object with this EXACT structure:
   "total_shots": <number>,
   "shots": [
     {{{{
-      "shot_number": "1",
+      "shot_number": "{shot_start_number}",
       "timestamp": "00:00-00:04",
       "script_beat": "The exact narration text for this shot (5-15 words)",
       "act": "ACT 1",
@@ -1754,8 +2036,8 @@ Return a JSON object with this EXACT structure:
   ],
   "continuity_notes": [
     {{{{
-      "from_shot": "1",
-      "to_shot": "2",
+      "from_shot": "{shot_start_number}",
+      "to_shot": "{shot_start_number + 1}",
       "visual_bridge": "How these connect visually",
       "audio_bridge": "Sound continuity",
       "potential_issue": "If any"
@@ -1795,5 +2077,497 @@ CRITICAL: You MUST generate VALID JSON with correct syntax:
 5. Check your JSON is valid before returning it
 
 Return ONLY the JSON. Begin."""
+
+    return prompt
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  THREE-PHASE PRODUCTION PIPELINE (Max Quality Mode)
+# ═══════════════════════════════════════════════════════════════════
+
+def build_director_prompt(narration_json: dict, duration_minutes: int = 10,
+                          shot_start_number: int = 1,
+                          pacing_tier: str = "Standard",
+                          creative_direction: dict = None) -> str:
+    """
+    Phase 1 of 3: THE DIRECTOR — Editorial Pass.
+
+    Focuses ONLY on cutting decisions: where to split the narration into shots,
+    shot duration, emotional intent, and editorial rationale.
+
+    NO visual descriptions, NO prompts, NO style — purely editorial.
+    """
+    beats = narration_json.get("narration", [])
+    title = narration_json.get("title", "Untitled")
+    hook_type = narration_json.get("hook_type", "")
+
+    # Format narration beats
+    narration_text = ""
+    for i, beat in enumerate(beats):
+        act = beat.get("act", "")
+        beat_name = beat.get("beat", "")
+        text = beat.get("text", beat.get("narration", ""))
+        narration_text += f"\n[BEAT {i+1}] Act: {act} | Beat: {beat_name}\n{text}\n"
+
+    total_words = sum(len(b.get("text", b.get("narration", "")).split()) for b in beats)
+    pacing_instruction = PACING_INSTRUCTIONS.get(pacing_tier, PACING_INSTRUCTIONS["Standard"])
+    words_per_shot = WORDS_PER_SHOT_TARGETS.get(pacing_tier, 9)
+    estimated_shots = max(1, int(total_words / words_per_shot))
+
+    # Build creative direction section for director
+    creative_direction_section = _build_creative_direction_section(creative_direction, 'director')
+
+    prompt = f"""You are THE DIRECTOR for a video production. Your ONLY job is editorial:
+decide where to cut the narration into shots.
+
+You do NOT design visuals. You do NOT write image prompts. You do NOT describe what the shot looks like.
+You ONLY make cutting decisions — where each shot starts, where it ends, how long it lasts, and WHY.
+{creative_direction_section}
+═══════ PROJECT INFO ═══════
+Title: {title}
+Hook Type: {hook_type}
+Duration: {duration_minutes} minutes
+Total Narration Words: ~{total_words}
+Estimated Shots: ~{estimated_shots}
+
+═══════ NARRATION TO SPLIT ═══════
+⚠️ USE THESE EXACT WORDS — DO NOT REWRITE, PARAPHRASE, OR DROP ANY TEXT ⚠️
+{narration_text}
+
+═══════ EDITORIAL DECISIONS ═══════
+
+{pacing_instruction}
+
+You are making CREATIVE EDITORIAL DECISIONS about where to cut. This is NOT a mechanical word-count exercise.
+
+CONSIDER THESE FACTORS WHEN DECIDING WHERE TO CUT:
+1. NARRATIVE BEATS: Cut when the idea shifts, a new claim begins, or a new subject is introduced
+2. EMOTIONAL SHIFTS: Cut when the emotion changes (curiosity → surprise, tension → release)
+3. VISUAL LOGIC: Cut when what the audience should SEE would naturally change (new location, new subject, new angle)
+4. DRAMATIC TIMING: Use shorter shots (4s) for high-impact moments, longer shots (6-8s) for contemplation
+5. BREATHING ROOM: Not every cut must align with a word boundary — consider dramatic pauses
+
+GUIDELINES:
+- Target 5-15 words per shot, but allow 3-4 words for dramatic emphasis shots
+- Average speech rate is ~{WORDS_PER_SECOND} words/sec — use this to ESTIMATE duration
+- Duration MUST be exactly 4s, 6s, or 8s (Veo hardware constraint)
+- EVERY word from the narration must appear in exactly one shot's script_beat
+- Split sentences at natural pause points (commas, periods, em-dashes, semicolons)
+
+EXAMPLE of creative cutting:
+  Original: "Imagine a world where your word is law, your wealth immense, and your enemies silenced."
+
+  CREATIVE split:
+  Shot 1 | 4s | "Imagine a world where your word is law," | rationale: "Opening invitation — wide establishing"
+  Shot 2 | 4s | "your wealth immense," | rationale: "Brief flash of opulence — CUT for impact"
+  Shot 3 | 4s | "and your enemies silenced." | rationale: "Dark turn — shift in tone"
+
+═══════ OUTPUT FORMAT ═══════
+
+Return a JSON object:
+{{{{
+  "shots": [
+    {{{{
+      "shot_number": "{shot_start_number}",
+      "script_beat": "The exact narration text for this shot (5-15 words)",
+      "duration": "4s",
+      "act": "ACT 1",
+      "beat": "Hook",
+      "emotion": "Curiosity",
+      "directors_intent": "What the audience should feel at this moment",
+      "cutting_rationale": "Why the cut happens here (narrative shift, emotion change, visual logic, etc.)"
+    }}}}
+  ]
+}}}}
+
+═══════════════════════════════════════════════════════
+CRITICAL RULES:
+═══════════════════════════════════════════════════════
+1. Use the EXACT narration words in script_beat. Do not paraphrase or rewrite.
+2. Every word from the narration must appear in exactly one shot's script_beat.
+3. Each script_beat: 5-15 words (3-4 allowed for dramatic emphasis).
+4. Every duration MUST be exactly 4s, 6s, or 8s.
+5. Include a cutting_rationale for every shot explaining the editorial decision.
+6. Do NOT include any visual descriptions, prompts, or style information.
+
+⚠️⚠️⚠️ JSON SYNTAX VALIDATION ⚠️⚠️⚠️
+CRITICAL: You MUST generate VALID JSON with correct syntax:
+1. Every field MUST end with a comma EXCEPT the last field in an object
+2. All string values MUST be properly escaped (use \\" for quotes, \\\\ for backslashes)
+3. Do NOT put commas after the last field in an object
+4. ALWAYS put a comma after every object in the "shots" array EXCEPT the last one
+
+⚠️ Return ONLY valid JSON. No commentary. Begin."""
+
+    return prompt
+
+
+def build_storyboard_prompt(director_shots: list, narration_json: dict,
+                            style_intent: dict = None,
+                            creative_direction: dict = None) -> str:
+    """
+    Phase 2 of 3: THE STORYBOARD ARTIST — Visual Composition.
+
+    Takes the Director's shot list and designs what each shot LOOKS LIKE.
+    Also receives the full original narration for story arc context.
+
+    Does NOT write final prompts — just visual direction, shot sizes, and continuity.
+    """
+    import json as _json
+
+    # Format the full narration for story arc context
+    beats = narration_json.get("narration", [])
+    full_narration_text = ""
+    for i, beat in enumerate(beats):
+        act = beat.get("act", "")
+        beat_name = beat.get("beat", "")
+        text = beat.get("text", beat.get("narration", ""))
+        full_narration_text += f"\n[BEAT {i+1}] Act: {act} | Beat: {beat_name}\n{text}\n"
+
+    # Format director's shot list as JSON
+    formatted_shots = _json.dumps(director_shots, indent=2, ensure_ascii=False)
+
+    # Build creative direction section for storyboard
+    creative_direction_section = _build_creative_direction_section(creative_direction, 'storyboard')
+
+    # Build style direction section
+    intent = style_intent or {}
+    character_section = _build_character_section(intent)
+    style_direction = f"""═══════ STYLE DIRECTION ═══════
+Detail Level: {intent.get('detail_level', 'Standard')}
+Scene Complexity: {intent.get('scene_complexity', 'Standard')}
+Camera Language: {intent.get('camera_language', 'Standard cinematography')}
+Lighting Approach: {intent.get('lighting_instruction', 'As appropriate')}
+Subject Framing: {intent.get('subject_framing', 'Varied')}
+Writing Style: {intent.get('writing_style', 'Descriptive')}
+Color Palette: {intent.get('color_palette', 'As appropriate')}
+Texture: {intent.get('texture', 'As appropriate')}
+Default Mood: {intent.get('mood_default', 'As appropriate')}
+{character_section}"""
+
+    prompt = f"""You are THE STORYBOARD ARTIST for a video production. The Director has already
+decided the cuts — where each shot starts and ends, how long it lasts, and what emotion it carries.
+
+Your job is to design what each shot LOOKS LIKE. You add visual composition and staging.
+
+You do NOT change any of the Director's decisions (cuts, timing, script_beat, emotion, intent).
+You do NOT write final image or video generation prompts.
+You ONLY design visual direction: what the audience SEES.
+
+{creative_direction_section}
+{style_direction}
+
+═══════ FULL STORY CONTEXT ═══════
+Read this first to understand the complete story arc, themes, and character journey
+BEFORE designing visuals for individual shots:
+{full_narration_text}
+
+═══════ DIRECTOR'S SHOT LIST ═══════
+These are the locked editorial decisions. Do NOT modify any existing fields.
+{formatted_shots}
+
+═══════ YOUR TASK ═══════
+
+For EACH shot in the list above, ADD these three new fields:
+
+1. "visual": A 1-2 sentence description of what this shot SHOWS. What is the scene?
+   What is the character doing? What does the environment look like? This must come
+   from the narration — depict the STORY MOMENT happening at that point.
+
+2. "shot_size": One of: Extreme Wide, Wide, Medium Wide, Medium, Medium Close-Up,
+   Close-Up, Extreme Close-Up, Macro. Choose based on the emotion and visual logic:
+   - Use Wide/Extreme Wide for establishing shots and showing the world
+   - Use Medium for character actions and dialogue
+   - Use Close-Up/Extreme Close-Up for emotional moments and reactions
+   - Use Macro for important objects or details
+   - VARY your choices — do not use the same shot size repeatedly
+
+3. "visual_continuity_notes": How this shot connects to the previous and next shot.
+   What must stay consistent? Note any subject, environment, lighting, or wardrobe
+   that must be maintained across shots.
+
+CRITICAL RULES:
+1. EVERY shot must depict what the narration describes. Read the script_beat carefully.
+2. Characters must be DOING things (walking, talking, reacting, holding objects), NOT posing statically.
+3. Backgrounds come from the STORY (forest, room, street, battlefield), NOT "studio backdrops" or "seamless backgrounds."
+4. Vary shot sizes — use the full range to tell the story visually.
+5. Maintain visual consistency: same character looks the same across all shots.
+6. Do NOT add "first_frame_prompt", "last_frame_prompt", or "veo_prompt" fields.
+7. CARRY FORWARD every existing field exactly as given: shot_number, script_beat, duration, act, beat, emotion, directors_intent, cutting_rationale. Do NOT modify any of them.
+
+═══════ OUTPUT FORMAT ═══════
+
+Return a JSON object:
+{{
+  "shots": [
+    {{
+      "shot_number": "<same as input>",
+      "script_beat": "<same as input>",
+      "duration": "<same as input>",
+      "act": "<same as input>",
+      "beat": "<same as input>",
+      "emotion": "<same as input>",
+      "directors_intent": "<same as input>",
+      "cutting_rationale": "<same as input>",
+      "visual": "Description of what this shot shows — the story moment",
+      "shot_size": "Medium Close-Up",
+      "visual_continuity_notes": "What must stay consistent with adjacent shots"
+    }}
+  ]
+}}
+
+⚠️⚠️⚠️ JSON SYNTAX VALIDATION ⚠️⚠️⚠️
+CRITICAL: You MUST generate VALID JSON with correct syntax:
+1. Every field MUST end with a comma EXCEPT the last field in an object
+2. All string values MUST be properly escaped
+3. Do NOT put commas after the last field in an object
+4. ALWAYS put a comma after every object in the "shots" array EXCEPT the last one
+
+⚠️ Return ONLY valid JSON. No commentary. Begin."""
+
+    return prompt
+
+
+def build_dp_prompt(storyboard_shots: list, style_analysis: dict = None,
+                    aspect_ratio: str = "16:9", title: str = "Untitled",
+                    creative_direction: dict = None) -> str:
+    """
+    Phase 3 of 3: THE DIRECTOR OF PHOTOGRAPHY — Prompt Writer.
+
+    Takes the storyboarded shots (with visual direction) and writes the final
+    first_frame_prompt, last_frame_prompt, and veo_prompt for each shot.
+
+    Uses the approved style analysis and prompt schema.
+    """
+    import json as _json
+
+    # Format storyboard shots as JSON
+    formatted_shots = _json.dumps(storyboard_shots, indent=2, ensure_ascii=False)
+
+    # Build visual style section (reuse pattern from build_production_prompt)
+    if style_analysis and isinstance(style_analysis, dict):
+        intent = style_analysis.get("style_intent", {})
+        schema = style_analysis.get("prompt_schema", DEFAULT_PROMPT_SCHEMA)
+        style_summary = style_analysis.get("style_summary", "Custom style")
+
+        character_section = _build_character_section(intent)
+        env_desc = intent.get('environment_description', '')
+        rendering_split = intent.get('rendering_split', 'unified')
+
+        visual_style_section = f"""═══════ VISUAL STYLE & CREATIVE DIRECTION ═══════
+⚠️ READ THIS SECTION CAREFULLY — IT CONTROLS HOW EVERY PROMPT IS WRITTEN ⚠️
+
+MASTER STYLE: {style_summary}
+Rendering Mode: {"HYBRID — characters and environments use DIFFERENT rendering" if rendering_split == "hybrid" else "UNIFIED — same rendering for everything"}
+
+CHARACTER RENDERING: {intent.get('character_description', 'Standard')}
+ENVIRONMENT RENDERING: {env_desc or 'Same as character rendering'}
+
+Detail Level: {intent.get('detail_level', 'Standard')}
+Scene Complexity: {intent.get('scene_complexity', 'Standard')}
+Camera Language: {intent.get('camera_language', 'Standard cinematography')}
+Lighting Approach: {intent.get('lighting_instruction', 'As appropriate')}
+Subject Framing: {intent.get('subject_framing', 'Varied')}
+Writing Style: {intent.get('writing_style', 'Descriptive')}
+Color Palette: {intent.get('color_palette', 'As appropriate')}
+Texture: {intent.get('texture', 'As appropriate')}
+Default Mood: {intent.get('mood_default', 'As appropriate')}
+{character_section}
+⚠️ CRITICAL STYLE RULES:
+- MATCH the style description above in EVERY prompt you write.
+- If Detail Level is 'Minimalist', character descriptions should be short.{" Environment descriptions can still be rich because this is HYBRID mode." if rendering_split == "hybrid" else " Do NOT add cinematic details."}
+- If Scene Complexity is 'Empty Backgrounds', do NOT describe detailed environments.
+- If Writing Style is 'Concise', use short direct sentences. No flowery language.
+- Do NOT hallucinate details that contradict the style (e.g., don't add '4k photorealistic' to a cartoon style).
+- Follow the Camera Language instructions — if it says 'simple flat framing', do NOT use lens mm or DOF.
+{"" if rendering_split != "hybrid" else f'''
+⚠️ HYBRID RENDERING MODE — DUAL-LAYER RULES (CRITICAL):
+- Characters: Use the CHARACTER RENDERING description above. Keep character rendering minimalist/simple.
+- Environments: Use the ENVIRONMENT RENDERING description above. Environments CAN be detailed/cinematic.
+- Technical camera fields (APERTURE, DOF, LIGHTING) describe the ENVIRONMENT, not the character.
+- DO NOT write: "gritty documentary footage of a stick figure" or "photorealistic stick figure."
+- DO NOT write: "a man standing in..." — ALWAYS use the character rendering template.
+- INSTEAD write: "A [character per style] standing in a richly detailed [environment per style]."
+'''}
+⚠️ STORY SCENE RULES (CRITICAL):
+- The style describes HOW CHARACTERS ARE RENDERED, not the scene setting.
+- Characters must be placed in STORY-APPROPRIATE ENVIRONMENTS — not studio backdrops.
+- Each prompt must depict WHAT IS HAPPENING in the narration at that moment.
+- Characters must be DOING things (actions from the story), NOT posing statically for display."""
+    else:
+        schema = DEFAULT_PROMPT_SCHEMA
+        style_summary = "Cinematic (default)"
+        visual_style_section = """═══════ VISUAL STYLE & CREATIVE DIRECTION ═══════
+Style: Cinematic Drama (default — no custom style provided)
+Detail Level: High Detail
+Scene Complexity: Complex Environments
+Camera Language: Use cinematic wide angles, depth of field, and motivated camera movement
+Lighting Approach: Dramatic, motivated lighting with attention to direction and quality
+Subject Framing: Varied — match the emotional beat
+Writing Style: Descriptive and technical
+Color Palette: Neutral with motivated accents
+Texture: Cinematic film grain
+Default Mood: As appropriate for the narrative"""
+
+    # Build dynamic prompt format instructions from schema
+    # Pass character_description and style_summary so field templates embed them directly
+    character_desc = ""
+    env_desc_for_schema = ""
+    rendering_split_for_schema = "unified"
+    if style_analysis and isinstance(style_analysis, dict):
+        intent_for_schema = style_analysis.get("style_intent", {})
+        character_desc = intent_for_schema.get("character_description", "")
+        env_desc_for_schema = intent_for_schema.get("environment_description", "")
+        rendering_split_for_schema = intent_for_schema.get("rendering_split", "unified")
+    prompt_formats = _build_prompt_format_instructions(
+        schema, aspect_ratio,
+        character_description=character_desc,
+        style_summary=style_summary,
+        environment_description=env_desc_for_schema,
+        rendering_split=rendering_split_for_schema
+    )
+
+    # Build creative direction section for DP
+    creative_direction_section = _build_creative_direction_section(creative_direction, 'dp')
+
+    prompt = f"""You are THE DIRECTOR OF PHOTOGRAPHY for a video production. The Director chose the cuts.
+The Storyboard Artist designed the visual composition. Your job is to write the final
+generation prompts: first_frame_prompt, last_frame_prompt, and veo_prompt.
+
+You do NOT change the cuts, timing, emotions, or visual descriptions.
+You ONLY write technically precise prompts following the approved style and schema.
+{creative_direction_section}
+═══════ PROJECT INFO ═══════
+Title: {title}
+Aspect Ratio: {aspect_ratio}
+
+{visual_style_section}
+
+═══════ STORYBOARDED SHOTS ═══════
+Each shot already has: shot_number, script_beat, duration, act, beat, emotion,
+directors_intent, cutting_rationale, visual, shot_size, visual_continuity_notes.
+
+Use the "visual" field as your guide for WHAT to depict in the prompts.
+Use the "emotion" and "directors_intent" to guide the MOOD of the prompts.
+Use the "shot_size" to guide your framing.
+
+{formatted_shots}
+
+{prompt_formats}
+
+═══════ YOUR TASK ═══════
+
+For EACH shot above, write these three fields using the prompt schema templates above:
+
+1. "first_frame_prompt": Full structured first frame prompt using the active schema fields.
+   Describe the SCENE from the "visual" field using the exact bracket format specified above.
+   This is the starting state of the shot.
+
+2. "last_frame_prompt": Full structured last frame prompt. SAME subject, wardrobe, and
+   environment as first frame, but with END pose and END expression.
+   Use [SAME AS FIRST FRAME] for unchanging fields.
+
+3. "veo_prompt": Full Veo 3.1 video prompt describing the MOTION/TRANSITION between
+   first and last frame. Include camera movement, audio, and action.
+
+Also generate a "timestamp" field with sequential timestamps based on duration.
+
+═══════ VEO 3.1 TECHNICAL CONSTRAINTS ═══════
+
+DURATION: Only 4s, 6s, or 8s per clip. Maximum 8 seconds.
+- Simple motion (expression change, subtle shift) → 4s
+- Moderate motion (gesture, slow pan) → 6s
+- Complex motion (walk, full camera move) → 8s
+
+RESOLUTION & ASPECT:
+- 16:9: 1920x1080 | 9:16: 1080x1920
+- First & Last frame MUST match exactly
+
+ACHIEVABLE MOTION (within timeframe):
+- Subtle weight shifts (4s), head turns (4s), hand gestures (4-6s)
+- Standing to sitting (6-8s), walking few steps (4-8s)
+- Subtle camera push/pull (4-8s), pan up to 90 degrees (6-8s)
+- Impossible: location changes, day-to-night, wardrobe changes, 180+ degree camera moves
+
+FRAME COMPATIBILITY (MUST MATCH between first & last frame):
+- Subject: identical features, build, face
+- Wardrobe: exact same clothing
+- Environment: same location, same visible elements
+- Style: same aesthetic
+- Aspect ratio: identical
+
+═══════ PER-SHOT STYLE COMPLIANCE CHECK ═══════
+Before writing each shot's prompts, silently verify:
+✓ Does the SUBJECT CORE use the character rendering template (not generic "man"/"woman"/"person")?
+✓ Does the ENVIRONMENT match the story (not a studio/void unless the story is set there)?
+✓ Does the CAMERA/PHOTOGRAPHY STYLE match the style guide?
+{"✓ Are technical camera fields (APERTURE, DOF, LIGHTING) applied to the environment only, not the character? (HYBRID mode)" if style_analysis and isinstance(style_analysis, dict) and style_analysis.get("style_intent", {}).get("rendering_split") == "hybrid" else ""}
+✓ Does the overall prompt match the style summary: "{style_summary}"?
+If any check fails, REWRITE the prompt before including it in the JSON.
+
+═══════ OUTPUT FORMAT ═══════
+
+Return a JSON object with this EXACT structure:
+{{
+  "title": "{title}",
+  "aspect_ratio": "{aspect_ratio}",
+  "style_summary": "{style_summary}",
+  "total_shots": <number>,
+  "shots": [
+    {{
+      "shot_number": "<from input>",
+      "timestamp": "00:00-00:04",
+      "script_beat": "<from input>",
+      "act": "<from input>",
+      "beat": "<from input>",
+      "duration": "<from input>",
+      "visual": "<from input>",
+      "emotion": "<from input>",
+      "directors_intent": "<from input>",
+      "cutting_rationale": "<from input>",
+      "shot_size": "<from input>",
+      "visual_continuity_notes": "<from input>",
+      "first_frame_prompt": "Full structured first frame prompt using approved schema",
+      "last_frame_prompt": "Full structured last frame prompt using approved schema",
+      "veo_prompt": "Full Veo 3.1 video prompt with motion and audio"
+    }}
+  ],
+  "continuity_notes": [
+    {{
+      "from_shot": "<N>",
+      "to_shot": "<N+1>",
+      "visual_bridge": "How these connect visually",
+      "audio_bridge": "Sound continuity",
+      "potential_issue": "If any"
+    }}
+  ],
+  "production_notes": {{
+    "challenging_shots": ["Any shots needing extra iterations"],
+    "recommended_workflow": "Suggested order of generation",
+    "post_production": "Color grading, audio sweetening, transitions"
+  }}
+}}
+
+═══════════════════════════════════════════════════════
+CRITICAL RULES:
+═══════════════════════════════════════════════════════
+1. Follow the prompt schema EXACTLY. Use only the active fields listed above.
+2. Do NOT include excluded fields in your prompts.
+3. Style must match: "{style_summary}". Apply it consistently to EVERY prompt.
+4. First and last frame MUST describe the SAME subject, wardrobe, and environment.
+5. The only difference between frames: pose, expression, and camera position.
+6. CARRY FORWARD every existing field from the storyboard. Do NOT remove any.
+7. Be SPECIFIC in prompts — no vague descriptions.
+8. Backgrounds MUST match what the narration describes, rendered in the visual style.
+
+⚠️⚠️⚠️ JSON SYNTAX VALIDATION ⚠️⚠️⚠️
+CRITICAL: You MUST generate VALID JSON with correct syntax:
+1. Every field MUST end with a comma EXCEPT the last field in an object
+2. All string values MUST be properly escaped (use \\" for quotes, \\\\ for backslashes)
+3. Do NOT put commas after the last field in an object
+4. ALWAYS put a comma after every object in the "shots" array EXCEPT the last one
+5. Check your JSON is valid before returning it
+
+⚠️ Return ONLY valid JSON. No commentary. Begin."""
 
     return prompt

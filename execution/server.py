@@ -15,6 +15,7 @@ from firebase_admin import credentials, auth, firestore
 sys.path.insert(0, os.path.dirname(__file__))
 from gemini_client import (generate_image_content, generate_tts, generate_content,
                            analyze_style_from_images, analyze_style_from_text,
+                           expand_creative_direction, refine_creative_direction,
                            generate_scene_image,
                            start_video_generation, poll_video_generation)
 from research_templates import (get_all_templates_metadata, get_template, build_research_queries,
@@ -31,6 +32,7 @@ GENERATED_DIR = os.path.join(PROJECT_DIR, "generated_images")
 AUDIO_DIR = os.path.join(PROJECT_DIR, "generated_audio")
 VIDEO_DIR = os.path.join(PROJECT_DIR, "generated_videos")
 TMP_DIR = os.path.join(PROJECT_DIR, ".tmp")
+DEBUG_SAVE_TMP = os.environ.get('DEBUG_SAVE_TMP', 'true').lower() == 'true'
 
 # ── Firebase Initialization ──
 SERVICE_ACCOUNT_PATH = os.path.join(PROJECT_DIR, "firebase-service-account.json")
@@ -59,13 +61,14 @@ except Exception as e:
     print(f"Warning: Could not initialize Firebase Storage: {e}")
     bucket = None
 
-def upload_to_storage(local_path, remote_folder):
+def upload_to_storage(local_path, remote_folder, project_id=None):
     """Uploads a local file to Firebase Storage and returns the public URL."""
     if not bucket or not os.path.exists(local_path):
         return None
     try:
         filename = os.path.basename(local_path)
-        blob = bucket.blob(f"{remote_folder}/{filename}")
+        path_prefix = f"{remote_folder}/{project_id}" if project_id else remote_folder
+        blob = bucket.blob(f"{path_prefix}/{filename}")
         blob.upload_from_filename(local_path)
         blob.make_public()
         return blob.public_url
@@ -184,7 +187,8 @@ def generate_image_route():
         if not image_path or (isinstance(image_path, str) and image_path.startswith("Error")):
             return jsonify({'error': image_path or 'Image generation returned no result'}), 500
 
-        public_url = upload_to_storage(image_path, "images")
+        project_id = data.get('project_id')
+        public_url = upload_to_storage(image_path, "images", project_id=project_id)
         image_url = public_url if public_url else f'/generated/{os.path.basename(image_path)}'
 
         return jsonify({'image_url': image_url})
@@ -221,7 +225,8 @@ def generate_tts_route():
         if not audio_path or (isinstance(audio_path, str) and audio_path.startswith("Error")):
             return jsonify({'error': audio_path or 'TTS generation returned no result'}), 500
 
-        public_url = upload_to_storage(audio_path, "audio")
+        project_id = data.get('project_id')
+        public_url = upload_to_storage(audio_path, "audio", project_id=project_id)
         audio_url = public_url if public_url else f'/audio/{os.path.basename(audio_path)}'
 
         return jsonify({'audio_url': audio_url})
@@ -310,6 +315,82 @@ def analyze_style_text_route():
 
 
 # ────────────────────────────────────────────────────────────────
+#  CREATIVE DIRECTION
+# ────────────────────────────────────────────────────────────────
+
+@app.route('/api/expand-creative-direction', methods=['POST'])
+@require_auth
+def expand_creative_direction_route():
+    """
+    Expand user's free-form creative direction into structured guidance + style defaults.
+    Accepts: { direction: "stick figure explainer", narration_context: {...} }
+    Returns: { creative_direction: {direction_summary, ..., suggested_style_defaults} }
+    """
+    try:
+        data = request.json
+        direction = data.get('direction', '').strip()
+        narration_context = data.get('narration_context')
+
+        if not direction:
+            return jsonify({'error': 'Creative direction description is required'}), 400
+
+        print(f"[Creative Direction] Expanding: '{direction[:80]}...'")
+        result = expand_creative_direction(
+            user_direction=direction,
+            narration_context=narration_context,
+            api_key=g.api_key
+        )
+
+        if isinstance(result, str) and result.startswith("Error"):
+            return jsonify({'error': result}), 500
+
+        print(f"[Creative Direction] Expanded: {result.get('direction_summary', '')[:80]}")
+        return jsonify({'success': True, 'creative_direction': result})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/refine-creative-direction', methods=['POST'])
+@require_auth
+def refine_creative_direction_route():
+    """
+    Refine an already-expanded creative direction based on user feedback.
+    Accepts: { current_direction: {...}, feedback: "make it more playful", narration_context: {...} }
+    Returns: { creative_direction: {direction_summary, ..., suggested_style_defaults} }
+    """
+    try:
+        data = request.json
+        current = data.get('current_direction')
+        feedback = data.get('feedback', '').strip()
+        narration_context = data.get('narration_context')
+
+        if not current:
+            return jsonify({'error': 'Current direction is required'}), 400
+        if not feedback:
+            return jsonify({'error': 'Feedback is required'}), 400
+
+        print(f"[Creative Direction] Refining with feedback: '{feedback[:80]}...'")
+        result = refine_creative_direction(
+            current_direction=current,
+            user_feedback=feedback,
+            narration_context=narration_context,
+            api_key=g.api_key
+        )
+
+        if isinstance(result, str) and result.startswith("Error"):
+            return jsonify({'error': result}), 500
+
+        print(f"[Creative Direction] Refined: {result.get('direction_summary', '')[:80]}")
+        return jsonify({'success': True, 'creative_direction': result})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+# ────────────────────────────────────────────────────────────────
 #  RESEARCH & SCRIPT WRITING
 # ────────────────────────────────────────────────────────────────
 
@@ -349,6 +430,7 @@ def run_research():
         topic = data.get('topic', '').strip()
         template_id = data.get('template_id', 'educational_explainer')
         research_model = data.get('research_model', 'fast')  # 'fast', 'deep', or 'deep_research_agent'
+        project_id = data.get('project_id')
 
         if not topic:
             return jsonify({'error': 'Topic is required'}), 400
@@ -452,6 +534,12 @@ Return ONLY the JSON."""
         print(f"[Research] Sending research prompt to Gemini...")
         raw = generate_content(research_prompt, model_name=model_name, use_search=use_search, api_key=g.api_key)
 
+        # Fallback: if Deep (Pro) failed, retry with Flash + Search
+        if raw and raw.startswith("Error:") and model_name != "gemini-3-flash-preview":
+            fallback_model = "gemini-3-flash-preview"
+            print(f"[Research] Primary model failed. Falling back to {fallback_model} + Search...")
+            raw = generate_content(research_prompt, model_name=fallback_model, use_search=True, api_key=g.api_key)
+
         if not raw or raw.startswith("Error:"):
             return jsonify({'error': raw or 'Research query returned no result'}), 500
 
@@ -477,12 +565,31 @@ Return ONLY the JSON."""
         )
 
         # Save to .tmp for reference
-        os.makedirs(TMP_DIR, exist_ok=True)
-        safe_topic = "".join(c if c.isalnum() or c in " -_" else "" for c in topic)[:50]
-        dossier_path = os.path.join(TMP_DIR, f"research_{safe_topic}.md")
-        with open(dossier_path, "w") as f:
-            f.write(dossier)
-        print(f"[Research] Dossier saved to {dossier_path}")
+        if DEBUG_SAVE_TMP:
+            save_dir = TMP_DIR
+            if project_id:
+                save_dir = os.path.join(TMP_DIR, project_id)
+            os.makedirs(save_dir, exist_ok=True)
+            safe_topic = "".join(c if c.isalnum() or c in " -_" else "" for c in topic)[:50]
+            dossier_path = os.path.join(save_dir, f"research_{safe_topic}.md")
+            with open(dossier_path, "w") as f:
+                f.write(dossier)
+            print(f"[Research] Dossier saved to {dossier_path}")
+
+        # Save dossier to Project Firestore document
+        if project_id:
+            try:
+                project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
+                project_ref.set({
+                    'research_dossier': dossier,
+                    'research_summary': research_data.get("summary", ""),
+                    'research_key_facts': research_data.get("key_facts", []),
+                    'research_sources': research_data.get("sources_mentioned", []),
+                    'updated_at': firestore.SERVER_TIMESTAMP
+                }, merge=True)
+                print(f"[Research] Saved to project document {project_id}")
+            except Exception as e:
+                print(f"[Research] Warning: Failed to save to project document: {e}")
 
         # Save dossier to Firestore for persistence/reuse
         try:
@@ -687,8 +794,9 @@ def poll_research():
     try:
         data = request.json
         interaction_id = data.get('interaction_id')
-        topic = data.get('topic', '')
+        topic = data.get('topic', 'unknown_topic')
         template_id = data.get('template_id', 'educational_explainer')
+        project_id = data.get('project_id')
 
         if not interaction_id:
             return jsonify({'error': 'interaction_id is required'}), 400
@@ -728,12 +836,31 @@ def poll_research():
             print(f"[Deep Research] Warning: Firestore save failed: {fs_err}")
 
         # Save to .tmp
-        os.makedirs(TMP_DIR, exist_ok=True)
-        safe_topic = "".join(c if c.isalnum() or c in " -_" else "" for c in topic)[:50]
-        dossier_path = os.path.join(TMP_DIR, f"research_{safe_topic}_deep.md")
-        with open(dossier_path, "w") as f:
-            f.write(dossier)
-        print(f"[Deep Research] Dossier saved to {dossier_path}")
+        if DEBUG_SAVE_TMP:
+            save_dir = TMP_DIR
+            if project_id:
+                save_dir = os.path.join(TMP_DIR, project_id)
+            os.makedirs(save_dir, exist_ok=True)
+            safe_topic = "".join(c if c.isalnum() or c in " -_" else "" for c in topic)[:50]
+            dossier_path = os.path.join(save_dir, f"research_{safe_topic}_deep.md")
+            with open(dossier_path, "w") as f:
+                f.write(dossier)
+            print(f"[Deep Research] Dossier saved to {dossier_path}")
+
+        # Save to Project Firestore document
+        if project_id:
+            try:
+                project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
+                project_ref.set({
+                    'research_dossier': dossier,
+                    'research_summary': research_text[:500],
+                    'research_key_facts': [],
+                    'research_sources': [],
+                    'updated_at': firestore.SERVER_TIMESTAMP
+                }, merge=True)
+                print(f"[Deep Research] Saved to project document {project_id}")
+            except Exception as e:
+                print(f"[Deep Research] Warning: Failed to save to project document: {e}")
 
         return jsonify({
             'status': 'completed',
@@ -856,6 +983,7 @@ def generate_script_route():
         viewer_outcome = data.get('viewer_outcome', '')
         custom_audience = data.get('custom_audience', '')
         custom_tone = data.get('custom_tone', '')
+        project_id = data.get('project_id')
 
         style_mode = data.get('style_mode', 'template')  # 'template' or 'transcript'
         style_transcript = data.get('style_transcript', '')
@@ -898,13 +1026,29 @@ def generate_script_route():
         if "error" in result:
             return jsonify({'error': result["error"]}), 500
 
+        # Save to Project Firestore document
+        if project_id:
+            try:
+                project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
+                project_ref.set({
+                    'narration_data': result,
+                    'updated_at': firestore.SERVER_TIMESTAMP
+                }, merge=True)
+                print(f"[Narration] Saved to project document {project_id}")
+            except Exception as e:
+                print(f"[Narration] Warning: Failed to save to project document: {e}")
+
         # Save narration to .tmp
-        os.makedirs(TMP_DIR, exist_ok=True)
-        safe_topic = "".join(c if c.isalnum() or c in " -_" else "" for c in topic)[:50]
-        narration_path = os.path.join(TMP_DIR, f"narration_{safe_topic}.json")
-        with open(narration_path, "w") as f:
-            json.dump(result, f, indent=2)
-        print(f"[Narration] Saved to {narration_path}")
+        if DEBUG_SAVE_TMP:
+            save_dir = TMP_DIR
+            if project_id:
+                save_dir = os.path.join(TMP_DIR, project_id)
+            os.makedirs(save_dir, exist_ok=True)
+            safe_topic = "".join(c if c.isalnum() or c in " -_" else "" for c in topic)[:50]
+            narration_path = os.path.join(save_dir, f"narration_{safe_topic}.json")
+            with open(narration_path, "w") as f:
+                json.dump(result, f, indent=2)
+            print(f"[Narration] Saved to {narration_path}")
 
         return jsonify(result)
 
@@ -981,6 +1125,7 @@ def generate_production_table_route():
         data = request.json
         narration = data.get('narration')
         duration_minutes = int(data.get('duration_minutes', 10))
+        project_id = data.get('project_id')
 
         if not narration:
             return jsonify({'error': 'Narration is required. Generate narration first.'}), 400
@@ -992,6 +1137,8 @@ def generate_production_table_route():
         # Check for structured style analysis (from images or text)
         style_analysis = data.get('style_analysis')
         aspect_ratio = data.get('aspect_ratio', '16:9')
+        pacing_tier = data.get('pacing_tier', 'Standard')
+        quality_mode = data.get('quality_mode', 'fast')
 
         if style_analysis:
             summary = style_analysis.get('style_summary', 'custom') if isinstance(style_analysis, dict) else 'custom'
@@ -999,25 +1146,50 @@ def generate_production_table_route():
         else:
             print(f"[Production] No style analysis — using default cinematic style")
 
+        # Check for creative direction
+        creative_direction = data.get('creative_direction')
+        if creative_direction:
+            dir_summary = creative_direction.get('direction_summary', '')[:80]
+            print(f"[Production] Using creative direction: {dir_summary}")
+
         result = generate_production_table(
             narration_json=narration,
             duration_minutes=duration_minutes,
             style_analysis=style_analysis,
             aspect_ratio=aspect_ratio,
             api_key=g.api_key,
+            pacing_tier=pacing_tier,
+            quality_mode=quality_mode,
+            creative_direction=creative_direction
         )
 
         if "error" in result:
             return jsonify({'error': result['error']}), 500
 
+        # Save to Project Firestore document
+        if project_id:
+            try:
+                project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
+                project_ref.set({
+                    'production_data': result,
+                    'updated_at': firestore.SERVER_TIMESTAMP
+                }, merge=True)
+                print(f"[Production] Saved to project document {project_id}")
+            except Exception as e:
+                print(f"[Production] Warning: Failed to save to project document: {e}")
+
         # Save to .tmp
-        os.makedirs(TMP_DIR, exist_ok=True)
-        title = narration.get('title', 'untitled')
-        safe_title = "".join(c if c.isalnum() or c in " -_" else "" for c in title)[:50]
-        pt_path = os.path.join(TMP_DIR, f"production_table_{safe_title}.json")
-        with open(pt_path, "w") as f:
-            json.dump(result, f, indent=2)
-        print(f"[Production] Saved to {pt_path}")
+        if DEBUG_SAVE_TMP:
+            save_dir = TMP_DIR
+            if project_id:
+                save_dir = os.path.join(TMP_DIR, project_id)
+            os.makedirs(save_dir, exist_ok=True)
+            title = narration.get('title', 'untitled')
+            safe_title = "".join(c if c.isalnum() or c in " -_" else "" for c in title)[:50]
+            pt_path = os.path.join(save_dir, f"production_table_{safe_title}.json")
+            with open(pt_path, "w") as f:
+                json.dump(result, f, indent=2)
+            print(f"[Production] Saved to {pt_path}")
 
         return jsonify(result)
 
@@ -1035,7 +1207,9 @@ def generate_production_table_route():
 def get_latest_production_table():
     """Return the most recently saved production table JSON from .tmp/."""
     try:
-        pattern = os.path.join(TMP_DIR, "production_table_*.json")
+        project_id = request.args.get('project_id')
+        search_dir = os.path.join(TMP_DIR, project_id) if project_id else TMP_DIR
+        pattern = os.path.join(search_dir, "production_table_*.json")
         files = glob_module.glob(pattern)
         if not files:
             return jsonify({'error': 'No production table found. Generate one in Phase 3 first.'}), 404
@@ -1050,6 +1224,122 @@ def get_latest_production_table():
 
         print(f"[Visuals] Loaded latest production table: {os.path.basename(latest)}")
         return jsonify({'success': True, 'production_table': pt})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/visuals/sync-storage-images', methods=['POST'])
+@require_auth
+def visuals_sync_storage_images():
+    """Scan Firebase Storage for orphaned images and link them back to project scenes.
+    
+    Accepts: { scene_ids: ["1", "2", ...] }
+    Returns: { matches: { "1": "https://...", "2": "https://..." } }
+    
+    For each scene_id, searches for blobs matching 'images/scene_{id}_*' and returns
+    the most recent one (by name/timestamp). This recovers images that were uploaded
+    to Storage but whose URLs were never saved to the database (e.g., page refresh
+    during batch generation).
+    """
+    try:
+        if not bucket:
+            return jsonify({'error': 'Firebase Storage not configured'}), 500
+
+        data = request.json
+        scene_ids = data.get('scene_ids', [])
+        project_id = data.get('project_id')
+        
+        if not scene_ids:
+            return jsonify({'matches': {}})
+
+        matches = {}
+        # List all blobs in images/ prefix (scoped by project if provided)
+        search_prefix = f"images/{project_id}/scene_" if project_id else "images/scene_"
+        all_blobs = list(bucket.list_blobs(prefix=search_prefix))
+
+        for sid in scene_ids:
+            safe_id = str(sid).replace("/", "_").replace(" ", "_")
+            prefix = f"scene_{safe_id}_"
+            # Find all blobs matching this scene
+            scene_blobs = [b for b in all_blobs if b.name.split('/')[-1].startswith(prefix)]
+            if scene_blobs:
+                # Sort by name (contains timestamp) → last = most recent
+                scene_blobs.sort(key=lambda b: b.name)
+                latest = scene_blobs[-1]
+                # Ensure it's public and get the URL
+                try:
+                    latest.make_public()
+                except Exception:
+                    pass  # May already be public
+                matches[str(sid)] = latest.public_url
+
+        print(f"[Sync] Found {len(matches)} orphaned images for {len(scene_ids)} scene IDs")
+        return jsonify({'matches': matches})
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/visuals/scene-image-history', methods=['POST'])
+@require_auth
+def visuals_scene_image_history():
+    """Return ALL generated images per scene from Firebase Storage.
+
+    Accepts: { scene_ids: ["1", "2", ...], project_id: "optional" }
+    Returns: { history: { "1": [{url, timestamp, filename}, ...], "2": [...] } }
+
+    Images are sorted newest-first. The timestamp is extracted from the filename
+    pattern: scene_{safe_id}_{unix_timestamp}.{ext}
+    """
+    try:
+        if not bucket:
+            return jsonify({'error': 'Firebase Storage not configured'}), 500
+
+        data = request.json
+        scene_ids = data.get('scene_ids', [])
+        project_id = data.get('project_id')
+
+        if not scene_ids:
+            return jsonify({'history': {}})
+
+        history = {}
+        search_prefix = f"images/{project_id}/scene_" if project_id else "images/scene_"
+        all_blobs = list(bucket.list_blobs(prefix=search_prefix))
+
+        for sid in scene_ids:
+            safe_id = str(sid).replace("/", "_").replace(" ", "_")
+            prefix = f"scene_{safe_id}_"
+            scene_blobs = [b for b in all_blobs if b.name.split('/')[-1].startswith(prefix)]
+
+            if scene_blobs:
+                # Sort by name (contains timestamp) descending -> newest first
+                scene_blobs.sort(key=lambda b: b.name, reverse=True)
+                entries = []
+                for blob in scene_blobs:
+                    try:
+                        blob.make_public()
+                    except Exception:
+                        pass
+                    filename = blob.name.split('/')[-1]
+                    # Extract timestamp from filename: scene_{safe_id}_{timestamp}.{ext}
+                    ts_part = filename.replace(f"scene_{safe_id}_", "").rsplit(".", 1)[0]
+                    try:
+                        timestamp = int(ts_part)
+                    except ValueError:
+                        timestamp = 0
+                    entries.append({
+                        'url': blob.public_url,
+                        'timestamp': timestamp,
+                        'filename': filename,
+                    })
+                history[str(sid)] = entries
+
+        total_images = sum(len(v) for v in history.values())
+        print(f"[History] Returned image history for {len(history)} scenes ({total_images} total images)")
+        return jsonify({'history': history})
 
     except Exception as e:
         traceback.print_exc()
@@ -1074,18 +1364,27 @@ def visuals_generate_image():
         aspect_ratio = data.get('aspect_ratio', '16:9')
         resolution = data.get('resolution', '2K')
         style_images = data.get('style_images', [])
+        characters = data.get('characters', [])
         character_images = data.get('character_images', [])
         additional_context = data.get('additional_context', '')
+        style_mode = data.get('style_mode', 'art_only')
 
-        print(f"[Visuals] Generating image for scene {scene_id}")
+        char_count = len(characters) if characters else 0
+        char_img_count = sum(len(c.get('images', [])) for c in characters) if characters else len(character_images or [])
+        print(f"[Visuals] Generating image for scene {scene_id}: "
+              f"{len(style_images or [])} style refs, {char_count} characters "
+              f"({char_img_count} char images), style_mode={style_mode}"
+              f"{', context=' + repr(additional_context[:50]) if additional_context else ''}")
         result = generate_scene_image(
             prompt=prompt,
             model_name=model,
             aspect_ratio=aspect_ratio,
             resolution=resolution,
             style_images=style_images or None,
+            characters=characters or None,
             character_images=character_images or None,
             additional_context=additional_context,
+            style_mode=style_mode,
             scene_id=scene_id,
             api_key=g.api_key,
         )
@@ -1093,8 +1392,9 @@ def visuals_generate_image():
         if "error" in result:
             return jsonify({'error': result['error']}), 500
 
+        project_id = data.get('project_id')
         if result.get("success") and "local_path" in result:
-            public_url = upload_to_storage(result["local_path"], "images")
+            public_url = upload_to_storage(result["local_path"], "images", project_id=project_id)
             if public_url:
                 result["image_url"] = public_url
             del result["local_path"]
@@ -1122,14 +1422,17 @@ def visuals_generate_batch_images():
 
         def generate_one(scene):
             sid = scene.get('scene_id')
+            scene_characters = scene.get('characters') or global_config.get('characters')
             return generate_scene_image(
                 prompt=scene.get('prompt', ''),
                 model_name=scene.get('model') or global_config.get('model', 'gemini-3-pro-image-preview'),
                 aspect_ratio=scene.get('aspect_ratio') or global_config.get('aspect_ratio', '16:9'),
                 resolution=scene.get('resolution') or global_config.get('resolution', '2K'),
                 style_images=global_config.get('style_images') or None,
+                characters=scene_characters or None,
                 character_images=global_config.get('character_images') or None,
                 additional_context=global_config.get('additional_context', ''),
+                style_mode=global_config.get('style_mode', 'art_only'),
                 scene_id=sid,
                 api_key=api_key,
             )
@@ -1142,7 +1445,8 @@ def visuals_generate_batch_images():
                 try:
                     res = future.result()
                     if res.get("success") and "local_path" in res:
-                        public_url = upload_to_storage(res["local_path"], "images")
+                        project_id = data.get('project_id')
+                        public_url = upload_to_storage(res["local_path"], "images", project_id=project_id)
                         if public_url:
                             res["image_url"] = public_url
                         del res["local_path"]
@@ -1233,8 +1537,9 @@ def visuals_poll_animation():
         if result.get('status') == 'failed':
             return jsonify(result), 500
 
+        project_id = data.get('project_id')
         if result.get('status') == 'completed' and "local_path" in result:
-            public_url = upload_to_storage(result["local_path"], "videos")
+            public_url = upload_to_storage(result["local_path"], "videos", project_id=project_id)
             if public_url:
                 result["video_url"] = public_url
             del result["local_path"]

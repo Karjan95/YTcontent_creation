@@ -11,6 +11,7 @@ This module provides helper functions that server.py calls.
 import json
 import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -23,6 +24,9 @@ from research_templates import (
     build_title_suggestions_prompt,
     build_tone_suggestion_prompt,
     build_beat_regeneration_prompt,
+    build_director_prompt,
+    build_storyboard_prompt,
+    build_dp_prompt,
 )
 from gemini_client import generate_content
 
@@ -222,7 +226,10 @@ def regenerate_beats(topic: str, template_id: str, research_dossier: str,
 def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                               style_analysis: dict = None,
                               aspect_ratio: str = "16:9",
-                              api_key: str = None) -> dict:
+                              api_key: str = None,
+                              pacing_tier: str = "Standard",
+                              quality_mode: str = "fast",
+                              creative_direction: dict = None) -> dict:
     """
     Generate production-ready prompts from narration beats.
 
@@ -237,6 +244,7 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
         style_analysis: Structured style dict {style_summary, style_intent, prompt_schema}
         aspect_ratio: Video aspect ratio (Veo hardware constraint)
         api_key: Gemini API key
+        pacing_tier: Pacing speed (Meditative, Relaxed, Standard, High Energy, Frenetic)
 
     For large narrations (>8 beats), processes in batches by act.
     """
@@ -246,18 +254,65 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
         return {"error": "No narration beats found. Generate narration first."}
 
     title = narration_json.get("title", "Untitled")
-    BEATS_PER_BATCH = 8
+
+    # Normalize script: Split massive beats to avoid token limits.
+    # Essential for manual pasted JSON or overly verbose generation.
+    import re
+    MAX_WORDS_PER_BEAT = 45
+    normalized_beats = []
+    for beat in beats:
+        act = beat.get("act", "ACT 1")
+        beat_name = beat.get("beat", "Beat")
+        text = beat.get("text", beat.get("narration", "")).strip()
+        
+        if len(text.split()) > MAX_WORDS_PER_BEAT:
+            sentences = re.split(r'(?<=[.!?]) +', text)
+            current_chunk = ""
+            for sentence in sentences:
+                proposed_length = len(current_chunk.split()) + len(sentence.split())
+                if proposed_length > MAX_WORDS_PER_BEAT and current_chunk:
+                    normalized_beats.append({"act": act, "beat": beat_name, "text": current_chunk.strip()})
+                    current_chunk = sentence
+                else:
+                    current_chunk = (current_chunk + " " + sentence).strip()
+            if current_chunk:
+                normalized_beats.append({"act": act, "beat": beat_name, "text": current_chunk.strip()})
+        else:
+            normalized_beats.append({"act": act, "beat": beat_name, "text": text})
+            
+    beats = normalized_beats
+    narration_json["narration"] = beats # Update original object so _generate_single_batch uses correct chunks
+
+    # Define pacing parameters
+    PACE_TIERS = {
+        "Meditative": {"beats_per_batch": 12, "words_per_shot": 15},
+        "Relaxed": {"beats_per_batch": 10, "words_per_shot": 11},
+        "Standard": {"beats_per_batch": 8, "words_per_shot": 9},
+        "High Energy": {"beats_per_batch": 5, "words_per_shot": 5},
+        "Frenetic": {"beats_per_batch": 3, "words_per_shot": 3}
+    }
+    
+    tier_config = PACE_TIERS.get(pacing_tier, PACE_TIERS["Standard"])
+    BEATS_PER_BATCH = tier_config["beats_per_batch"]
+    WORDS_PER_SHOT_TARGET = tier_config["words_per_shot"]
+
+    # Choose batch function based on quality mode
+    batch_fn = _generate_single_batch_3phase if quality_mode == "max_quality" else _generate_single_batch
+    mode_label = "3-Phase" if quality_mode == "max_quality" else "Fast"
 
     # Small narrations: single call
     if len(beats) <= BEATS_PER_BATCH + 2:
-        return _generate_single_batch(narration_json, duration_minutes,
-                                      style_analysis=style_analysis,
-                                      aspect_ratio=aspect_ratio,
-                                      api_key=api_key)
+        print(f"[Production] Mode: {mode_label}")
+        return batch_fn(narration_json, duration_minutes,
+                        style_analysis=style_analysis,
+                        aspect_ratio=aspect_ratio,
+                        api_key=api_key,
+                        pacing_tier=pacing_tier,
+                        creative_direction=creative_direction)
 
     # Large narrations: batch by act
     MAX_CONCURRENT_BATCHES = 3
-    print(f"[Production] Large narration ({len(beats)} beats). Batching by act...")
+    print(f"[Production] Large narration ({len(beats)} beats). Mode: {mode_label}. Batching by act...")
 
     # Group beats by act
     acts = {}
@@ -283,10 +338,22 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
 
     # Calculate total words for proportional duration splitting
     total_words = sum(len(b.get("text", b.get("narration", "")).split()) for b in beats)
+    estimated_total_shots = max(1, int(total_words / WORDS_PER_SHOT_TARGET))
+
+    MAX_RETRIES = 2
 
     def process_batch(batch_idx, batch_beats):
+        # Calculate offset based on previous words
+        previous_beats = []
+        for b in batches[:batch_idx - 1]:
+            previous_beats.extend(b)
+
+        previous_words = sum(len(b.get("text", b.get("narration", "")).split()) for b in previous_beats)
         batch_words = sum(len(b.get("text", b.get("narration", "")).split()) for b in batch_beats)
+
+        # Proportional duration and shot offset
         batch_duration = max(1, round(duration_minutes * batch_words / total_words)) if total_words > 0 else duration_minutes
+        shot_offset = max(1, round(estimated_total_shots * previous_words / total_words)) + 1 if total_words > 0 else 1
 
         batch_narration = {
             "title": title,
@@ -295,17 +362,31 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
         }
 
         print(f"[Production] Batch {batch_idx}/{len(batches)}: "
-              f"{len(batch_beats)} beats, ~{batch_words} words, ~{batch_duration}min - STARTED")
+              f"{len(batch_beats)} beats, ~{batch_words} words, ~{batch_duration}min (Start shot: {shot_offset}) - STARTED")
 
-        result = _generate_single_batch(batch_narration, batch_duration,
-                                        style_analysis=style_analysis,
-                                        aspect_ratio=aspect_ratio,
-                                        api_key=api_key,
-                                        batch_label=f"batch {batch_idx}/{len(batches)}")
+        last_error = None
+        for attempt in range(1, MAX_RETRIES + 2):  # attempts 1, 2, 3
+            result = batch_fn(batch_narration, batch_duration,
+                              style_analysis=style_analysis,
+                              aspect_ratio=aspect_ratio,
+                              api_key=api_key,
+                              shot_start_number=shot_offset,
+                              batch_label=f"batch {batch_idx}/{len(batches)}",
+                              pacing_tier=pacing_tier,
+                              creative_direction=creative_direction)
 
-        if "error" in result:
-            print(f"[Production] Batch {batch_idx} FAILED: {result['error']}")
-            return {"batch_idx": batch_idx, "error": result["error"]}
+            if "error" not in result:
+                break  # success
+
+            last_error = result["error"]
+            if attempt <= MAX_RETRIES:
+                wait_sec = attempt * 3  # 3s, 6s backoff
+                print(f"[Production] Batch {batch_idx} attempt {attempt} failed: {last_error}. "
+                      f"Retrying in {wait_sec}s... ({MAX_RETRIES - attempt + 1} retries left)")
+                time.sleep(wait_sec)
+            else:
+                print(f"[Production] Batch {batch_idx} FAILED after {MAX_RETRIES + 1} attempts: {last_error}")
+                return {"batch_idx": batch_idx, "error": last_error}
 
         pt = result.get("production_table", {})
         batch_shots = pt.get("shots", [])
@@ -332,38 +413,100 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                 result = future.result()
                 batch_results[result["batch_idx"]] = result
             except Exception as e:
+                import traceback
+                traceback.print_exc()
                 print(f"[Production] Batch {batch_idx} exception: {e}")
                 batch_results[batch_idx] = {"batch_idx": batch_idx, "error": str(e)}
 
-    # Reconstruct in order
+    # Reconstruct and NORMALIZE in order
+    final_shots = []
+    final_continuity = []
+    final_challenging = []
+    failed_batches = []
+
+    current_shot_num = 1
+
     for batch_idx in sorted(batch_results.keys()):
         result = batch_results[batch_idx]
         if "error" in result:
+            failed_batches.append({
+                "batch": batch_idx,
+                "total_batches": len(batches),
+                "error": result["error"],
+            })
+            print(f"[Production] WARNING: Batch {batch_idx}/{len(batches)} failed permanently — "
+                  f"these scenes will be missing from the final table. Error: {result['error']}")
             continue
-        all_shots.extend(result.get("shots", []))
-        all_continuity.extend(result.get("continuity_notes", []))
-        all_challenging.extend(result.get("challenging_shots", []))
+
+        batch_shots = result.get("shots", [])
+        batch_continuity = result.get("continuity_notes", [])
+
+        # Map old Gemini-generated numbers to new global sequential numbers
+        shot_map = {}
+
+        for shot in batch_shots:
+            old_num = str(shot.get("shot_number", ""))
+            new_num = str(current_shot_num)
+            shot_map[old_num] = new_num
+
+            shot["shot_number"] = new_num
+            # Note: we don't fix timestamps globally here because they are usually
+            # relative to the clip start or already handled by Gemini's sense of pacing.
+
+            final_shots.append(shot)
+            current_shot_num += 1
+
+        # Adjust continuity notes to point to new global numbers
+        for note in batch_continuity:
+            from_old = str(note.get("from_shot", ""))
+            to_old = str(note.get("to_shot", ""))
+
+            # Only include if we can map the shots (they belong to this batch)
+            if from_old in shot_map:
+                note["from_shot"] = shot_map[from_old]
+            if to_old in shot_map:
+                note["to_shot"] = shot_map[to_old]
+
+            final_continuity.append(note)
+
+        final_challenging.extend(result.get("challenging_shots", []))
         if batch_idx == 1:
             style_summary = result.get("style_summary", "")
 
-    if not all_shots:
+    if not final_shots:
         return {"error": "All batches failed to produce shots."}
+
+    # Build warning message for partial failures
+    batch_warning = None
+    if failed_batches:
+        failed_labels = [f"batch {fb['batch']}/{fb['total_batches']}" for fb in failed_batches]
+        batch_warning = (
+            f"Warning: {len(failed_batches)} of {len(batches)} section(s) failed after retries "
+            f"({', '.join(failed_labels)}). The production table has {len(final_shots)} shots "
+            f"but some scenes from the middle of your script may be missing. "
+            f"You can regenerate to try again."
+        )
+        print(f"[Production] {batch_warning}")
 
     merged = {
         "title": title,
         "aspect_ratio": aspect_ratio,
         "style_summary": style_summary,
-        "total_shots": len(all_shots),
-        "shots": all_shots,
-        "continuity_notes": all_continuity,
+        "total_shots": len(final_shots),
+        "shots": final_shots,
+        "continuity_notes": final_continuity,
         "production_notes": {
-            "challenging_shots": all_challenging,
+            "challenging_shots": final_challenging,
             "recommended_workflow": "Generate in batch order for visual continuity",
             "post_production": "Review cross-batch transitions for consistency",
         },
     }
 
-    print(f"[Production] Complete: {len(all_shots)} total shots from {len(batches)} batches")
+    if batch_warning:
+        merged["batch_warning"] = batch_warning
+        merged["failed_batches"] = failed_batches
+
+    print(f"[Production] Complete: {len(final_shots)} total shots (normalized 1-{len(final_shots)}) from {len(batches)} batches")
     return {"success": True, "production_table": merged}
 
 
@@ -371,13 +514,19 @@ def _generate_single_batch(narration_json: dict, duration_minutes: int = 10,
                            style_analysis: dict = None,
                            aspect_ratio: str = "16:9",
                            api_key: str = None,
-                           batch_label: str = "") -> dict:
+                           shot_start_number: int = 1,
+                           batch_label: str = "",
+                           pacing_tier: str = "Standard",
+                           creative_direction: dict = None) -> dict:
     """Generate production table for a single batch of narration beats."""
     prompt = build_production_prompt(
         narration_json=narration_json,
         duration_minutes=duration_minutes,
         style_analysis=style_analysis,
         aspect_ratio=aspect_ratio,
+        shot_start_number=shot_start_number,
+        pacing_tier=pacing_tier,
+        creative_direction=creative_direction
     )
 
     label = f" ({batch_label})" if batch_label else ""
@@ -399,6 +548,106 @@ def _generate_single_batch(narration_json: dict, duration_minutes: int = 10,
                 "title": narration_json.get("title", "Untitled"),
                 "raw_text": raw_response,
                 "parse_error": f"Could not parse production JSON{label}."
+            }
+        }
+
+
+def _generate_single_batch_3phase(narration_json: dict, duration_minutes: int = 10,
+                                   style_analysis: dict = None,
+                                   aspect_ratio: str = "16:9",
+                                   api_key: str = None,
+                                   shot_start_number: int = 1,
+                                   batch_label: str = "",
+                                   pacing_tier: str = "Standard",
+                                   creative_direction: dict = None) -> dict:
+    """
+    Generate production table using the 3-phase pipeline (Max Quality mode).
+
+    Phase 1: Director — editorial cuts (where to split, duration, emotion)
+    Phase 2: Storyboard Artist — visual composition (what each shot shows)
+    Phase 3: DP — final prompts (first_frame, last_frame, veo)
+
+    Same signature as _generate_single_batch() for drop-in compatibility.
+    """
+    label = f" ({batch_label})" if batch_label else ""
+
+    # ── Phase 1: Director ──
+    print(f"[Production 3-Phase] Phase 1: Director{label}...")
+    director_prompt = build_director_prompt(
+        narration_json=narration_json,
+        duration_minutes=duration_minutes,
+        shot_start_number=shot_start_number,
+        pacing_tier=pacing_tier,
+        creative_direction=creative_direction,
+    )
+    raw_director = generate_content(
+        director_prompt, model_name="gemini-3.1-pro-preview",
+        temperature=0.1, api_key=api_key
+    )
+    if not raw_director or raw_director.startswith("Error:"):
+        return {"error": f"Phase 1 (Director) failed{label}: {raw_director or 'empty response'}"}
+
+    try:
+        director_data = _parse_json_response(raw_director)
+        director_shots = director_data.get("shots", [])
+    except json.JSONDecodeError as e:
+        return {"error": f"Phase 1 (Director) JSON parse failed{label}: {e}"}
+
+    print(f"[Production 3-Phase] Phase 1 complete: {len(director_shots)} shots{label}")
+
+    # ── Phase 2: Storyboard Artist ──
+    print(f"[Production 3-Phase] Phase 2: Storyboard Artist{label}...")
+    style_intent = style_analysis.get("style_intent", {}) if style_analysis else {}
+    storyboard_prompt = build_storyboard_prompt(
+        director_shots=director_shots,
+        narration_json=narration_json,
+        style_intent=style_intent,
+        creative_direction=creative_direction,
+    )
+    raw_storyboard = generate_content(
+        storyboard_prompt, model_name="gemini-3.1-pro-preview",
+        temperature=0.1, api_key=api_key
+    )
+    if not raw_storyboard or raw_storyboard.startswith("Error:"):
+        return {"error": f"Phase 2 (Storyboard) failed{label}: {raw_storyboard or 'empty response'}"}
+
+    try:
+        storyboard_data = _parse_json_response(raw_storyboard)
+        storyboard_shots = storyboard_data.get("shots", [])
+    except json.JSONDecodeError as e:
+        return {"error": f"Phase 2 (Storyboard) JSON parse failed{label}: {e}"}
+
+    print(f"[Production 3-Phase] Phase 2 complete: {len(storyboard_shots)} shots{label}")
+
+    # ── Phase 3: Director of Photography ──
+    print(f"[Production 3-Phase] Phase 3: Director of Photography{label}...")
+    title = narration_json.get("title", "Untitled")
+    dp_prompt = build_dp_prompt(
+        storyboard_shots=storyboard_shots,
+        style_analysis=style_analysis,
+        aspect_ratio=aspect_ratio,
+        title=title,
+        creative_direction=creative_direction,
+    )
+    raw_dp = generate_content(
+        dp_prompt, model_name="gemini-3.1-pro-preview",
+        temperature=0.1, api_key=api_key
+    )
+    if not raw_dp or raw_dp.startswith("Error:"):
+        return {"error": f"Phase 3 (DP) failed{label}: {raw_dp or 'empty response'}"}
+
+    try:
+        production_data = _parse_json_response(raw_dp)
+        shot_count = len(production_data.get("shots", []))
+        print(f"[Production 3-Phase] Phase 3 complete: {shot_count} shots{label}")
+        return {"success": True, "production_table": production_data}
+    except json.JSONDecodeError:
+        return {
+            "success": True,
+            "production_table": {
+                "title": title,
+                "raw_text": raw_dp,
+                "parse_error": f"Could not parse Phase 3 (DP) JSON{label}."
             }
         }
 

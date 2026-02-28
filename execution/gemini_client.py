@@ -3,6 +3,7 @@ import argparse
 import base64
 import time
 import json
+import random
 import traceback
 from google import genai
 from google.genai import types
@@ -10,6 +11,44 @@ from dotenv import load_dotenv
 
 # Load environment variables from project root
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+
+# ── Retry logic for transient Gemini API errors ──
+MAX_RETRIES = 3
+
+
+def _is_retryable_error(e):
+    """Check if an exception is a transient 503/429 error worth retrying."""
+    error_str = str(e).lower()
+    return any(indicator in error_str for indicator in [
+        '503', 'unavailable', '429', 'resource_exhausted',
+        'overloaded', 'high demand', 'rate limit', 'quota',
+        'temporarily unavailable', 'server error',
+    ])
+
+
+def _retry_api_call(api_fn, max_retries=MAX_RETRIES, description="API call"):
+    """Execute api_fn() with exponential backoff on transient errors.
+
+    Returns: (result, retries_used) where retries_used=0 means first attempt succeeded.
+    Raises: the last exception if all retries are exhausted.
+    """
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            result = api_fn()
+            if attempt > 0:
+                print(f"[Retry] {description} succeeded on attempt {attempt + 1}/{max_retries + 1}")
+            return result, attempt
+        except Exception as e:
+            last_error = e
+            if _is_retryable_error(e) and attempt < max_retries:
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                print(f"[Retry] {description} attempt {attempt + 1}/{max_retries + 1} failed: {e}")
+                print(f"[Retry] Waiting {wait:.1f}s before retry...")
+                time.sleep(wait)
+            else:
+                raise
+    raise last_error
 
 
 def get_client(api_key=None):
@@ -33,28 +72,35 @@ def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=Fal
             if temperature is not None:
                 config.temperature = temperature
 
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-            config=config
-        )
+        def _call():
+            return client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=config
+            )
+
+        response, retries = _retry_api_call(_call, description=f"generate_content({model_name})")
         if response.text is None:
             return "Error: Gemini returned an empty response (possibly blocked by safety filters)."
         return response.text
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error (after {MAX_RETRIES + 1} attempts): {str(e)}"
 
 
 def _generate_with_gemini_model(client, model_name, prompt, timestamp):
     """Generate image using Gemini's native image generation (generate_content API)."""
     print(f"[Image Gen] Trying Gemini model: {model_name}...")
-    response = client.models.generate_content(
-        model=model_name,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_modalities=["IMAGE", "TEXT"],
+
+    def _call():
+        return client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE", "TEXT"],
+            )
         )
-    )
+
+    response, _retries = _retry_api_call(_call, description=f"image_gen({model_name})")
     if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
         for part in response.candidates[0].content.parts:
             if part.inline_data and part.inline_data.mime_type.startswith("image/"):
@@ -74,13 +120,17 @@ def _generate_with_gemini_model(client, model_name, prompt, timestamp):
 def _generate_with_imagen_model(client, model_name, prompt, timestamp):
     """Generate image using Imagen API (generate_images endpoint)."""
     print(f"[Image Gen] Trying Imagen model: {model_name}...")
-    response = client.models.generate_images(
-        model=model_name,
-        prompt=prompt,
-        config=types.GenerateImagesConfig(
-            number_of_images=1,
+
+    def _call():
+        return client.models.generate_images(
+            model=model_name,
+            prompt=prompt,
+            config=types.GenerateImagesConfig(
+                number_of_images=1,
+            )
         )
-    )
+
+    response, _retries = _retry_api_call(_call, description=f"imagen_gen({model_name})")
     if response.generated_images:
         image_data = response.generated_images[0].image.image_bytes
         filename = os.path.join(
@@ -152,14 +202,14 @@ def generate_image_content(prompt, model_name=None, api_key=None):
 
 # All possible prompt fields for the dynamic schema system
 PROMPT_FIELD_UNIVERSE = [
-    "shot_size", "subject", "arrangement", "background", "mood",
+    "shot_size", "subject", "expression", "wardrobe", "arrangement", "background", "photography", "mood",
     "lighting", "lighting_direction", "camera_lens", "camera_aperture",
     "dof", "film_stock", "color_restriction", "output_style",
     "room_objects", "made_out_of", "tags",
 ]
 
 # Fields that are always required regardless of style
-LOCKED_PROMPT_FIELDS = ["shot_size", "subject", "arrangement", "background"]
+LOCKED_PROMPT_FIELDS = ["shot_size", "subject", "expression", "wardrobe", "arrangement", "background", "photography", "mood"]
 
 
 def _build_default_schema_from_detail_level(detail_level: str) -> dict:
@@ -167,21 +217,21 @@ def _build_default_schema_from_detail_level(detail_level: str) -> dict:
     detail = (detail_level or "").lower()
     if "minimal" in detail:
         return {
-            "always_include": LOCKED_PROMPT_FIELDS + ["mood"],
+            "always_include": LOCKED_PROMPT_FIELDS,
             "include": ["color_restriction", "output_style"],
             "exclude": ["camera_lens", "camera_aperture", "dof", "film_stock",
                         "made_out_of", "lighting", "lighting_direction", "room_objects", "tags"],
         }
     elif "abstract" in detail:
         return {
-            "always_include": LOCKED_PROMPT_FIELDS + ["mood"],
+            "always_include": LOCKED_PROMPT_FIELDS,
             "include": ["color_restriction", "output_style", "tags"],
             "exclude": ["camera_lens", "camera_aperture", "dof", "film_stock",
                         "made_out_of", "lighting_direction", "room_objects"],
         }
     else:  # High Detail / Standard
         return {
-            "always_include": LOCKED_PROMPT_FIELDS + ["mood"],
+            "always_include": LOCKED_PROMPT_FIELDS,
             "include": ["lighting", "lighting_direction", "camera_lens", "camera_aperture",
                         "dof", "film_stock", "color_restriction", "output_style",
                         "room_objects", "made_out_of", "tags"],
@@ -191,89 +241,86 @@ def _build_default_schema_from_detail_level(detail_level: str) -> dict:
 
 def _get_style_analysis_prompt():
     """Return the shared style analysis prompt used by both image and text analysis."""
-    return """Analyze the provided style reference to create a **Production Style Guide** for an AI video generator that will create NARRATIVE SCENES (not product photos).
+    return """Analyze the provided style reference to create a **Production Style Guide** for an AI video generator that will create NARRATIVE SCENES.
 
-YOUR JOB HAS THREE PARTS:
+YOUR JOB HAS FOUR PARTS:
 
-═══ PART 1: EXTRACT ARTISTIC INTENT (CHARACTER RENDERING STYLE) ═══
+═══ PART 1: EXTRACT ARTISTIC INTENT & MICRO-AESTHETICS ═══
+Do not describe the literal story of the reference image. Extract the TRANSFERABLE AESTHETIC RULES.
+Perform a silent "Micro Sweep":
+- Look at textures, overall imperfections (film grain, brush strokes, clean digital vectors).
+- Look at lighting quality (Hard/Soft/Diffused, warm/cool temperature).
+- Look at color contrast levels and palette rules.
 
-CRITICAL DISTINCTIONS:
-1. ARTISTIC INTENT = the CHARACTER RENDERING STYLE (e.g., "3D stylized figures like Pixar", "flat 2D cartoon", "anime")
-2. INCIDENTAL DETAILS = the CONTEXT of the reference image itself (e.g., studio backdrop, white background, product display angle)
-3. SCENE CONTEXT = this is a VIDEO — characters will be placed in REAL STORY ENVIRONMENTS, not on studio backdrops
+═══ PART 2: EXTRACT CHARACTER RENDERING IDENTITY ═══
+⚠️ THIS IS CRITICAL. Look at HOW CHARACTERS ARE RENDERED in the reference images.
+Do NOT describe the character as a real person. Describe the RENDERING STYLE of the character:
+- What do characters LOOK LIKE as rendered objects? (e.g., "stick figure with large white circular head, thick black outline body, dot eyes" or "3D clay figure with soft matte skin" or "realistic photographic human")
+- What are the body proportions? (e.g., "simplified stick limbs" or "chibi/large head" or "realistic proportions")
+- What are the facial features? (e.g., "two dot eyes, no nose, curved line mouth" or "photorealistic face with pores")
+- What is the wardrobe rendering style? (e.g., "flat color fills with no folds" or "detailed fabric with wrinkles")
 
-⚠️ COMMON TRAP — DO NOT FALL INTO THIS:
-If the reference shows a 3D figure on a white/studio background, the style is the CHARACTER RENDERING (3D, stylized, collectible proportions) — NOT "product photography on studio backdrops."
-The characters will appear in forests, houses, streets, etc. — wherever the story takes place.
-NEVER describe the style as "product photography", "studio showcase", or "display figure."
-The reference defines HOW CHARACTERS LOOK, not WHERE THEY ARE.
+Write a single "character_description" paragraph that can be used as a TEMPLATE to describe ANY character in this style.
+This description will REPLACE generic terms like "man", "woman", "person" in every production prompt.
 
-═══ PART 2: DEFINE HOW SCENES SHOULD LOOK ═══
+Example for stick figure style: "A stick figure character with a large white circular head, thick black outline body, simple dot eyes, no nose, minimal curved-line mouth. Clothing rendered as flat solid-color shapes over the body outline."
+Example for photorealistic: "A photorealistic human with natural skin texture, detailed facial features, and physically accurate proportions."
 
-Since these prompts are for a VIDEO that tells a STORY, the environments must:
-- Match the NARRATIVE (if the story mentions a forest, the background is a forest)
-- Be rendered in the SAME VISUAL STYLE as the characters (3D stylized world if 3D characters, etc.)
-- Support the EMOTIONAL BEAT of each scene
-- NOT be "studio backdrops" or "clean seamless backgrounds" (unless the story literally takes place in a studio)
+═══ PART 3: DEFINE HOW ENVIRONMENTS SHOULD BE RENDERED ═══
+Since these prompts are for a STORY, the environments must match the narrative, NOT the reference image's background.
 
-For "scene_complexity": Think about the STORY WORLD, not the reference image's background.
-- A 3D animated character style → "Complex Environments" (like Pixar/animated movies, characters live in rich worlds)
-- A minimalist stick figure → "Simple Environments" (matching the simple aesthetic)
+⚠️ IMPORTANT: Character rendering and environment rendering may use DIFFERENT levels of detail.
+For example, stick figure characters can exist in rich cinematic environments. Cartoon characters can exist in photorealistic backgrounds.
 
-═══ PART 3: RECOMMEND A PROMPT SCHEMA ═══
+Determine the "rendering_split":
+- "unified" = characters and environments are rendered the SAME way (e.g., both photorealistic, or both cartoon/flat)
+- "hybrid" = characters are rendered DIFFERENTLY from environments (e.g., 2D stick figures in detailed cinematic worlds, cartoon characters in painterly backgrounds)
 
-Based on the artistic intent, decide which prompt fields are RELEVANT for this style.
+Write an "environment_description" paragraph that describes HOW ENVIRONMENTS/BACKGROUNDS should be rendered.
+This is SEPARATE from the character rendering style.
 
-The UNIVERSE of possible prompt fields is:
-- shot_size: Camera framing (wide, medium, close-up, extreme close-up)
-- subject: Physical description of characters/objects in scene
-- arrangement: Pose, body position, camera angle relative to subject
-- background: Environment or backdrop description — MUST come from the story/narration
-- mood: Emotional atmosphere of the scene
-- lighting: Lighting setup, quality, direction
-- lighting_direction: Specific key light position, fill, color temperature
-- camera_lens: Focal length in mm (e.g., 35mm, 85mm)
-- camera_aperture: f-stop value (e.g., f/2.8)
-- dof: Depth of field description
-- film_stock: Film grain, texture, analog feel
-- color_restriction: Color palette rules
-- output_style: Overall aesthetic (e.g., "3D animated film", "watercolor illustration", "pixel art")
-- room_objects: Props and objects in the scene
-- made_out_of: Material and texture of the subject
-- tags: Aesthetic keyword tags
+Examples:
+- For stick figures in cinematic worlds: "Rich, detailed cinematic environments with dramatic lighting, depth of field, and volumetric atmosphere rendered in a painterly or semi-realistic style"
+- For fully cartoon: "Flat solid-color backgrounds with simple geometric shapes matching the character rendering"
+- For photorealistic: "Photorealistic environments with natural lighting and physically accurate materials"
 
-RULES FOR SCHEMA:
-- shot_size, subject, arrangement, background MUST ALWAYS be included (composition is universal)
-- For minimalist/simple styles: EXCLUDE technical camera fields (lens, aperture, dof), film_stock, made_out_of, lighting_direction
-- For cinematic/realistic styles: INCLUDE everything
-- For abstract/artistic styles: EXCLUDE technical camera, INCLUDE color_restriction, output_style, tags
-- For 3D animated styles: INCLUDE lighting, output_style, made_out_of, room_objects. Consider whether technical camera fields add value.
+Also define:
+- "scene_complexity": How complex should STORY ENVIRONMENTS be (simple/standard/rich/cinematic)
+
+═══ PART 4: RECOMMEND A PROMPT SCHEMA ═══
+Based on the intent, decide which prompt fields are RELEVANT.
+The UNIVERSE of fields: shot_size, subject, expression, wardrobe, arrangement, background, photography, mood, lighting, lighting_direction, camera_lens, camera_aperture, dof, film_stock, color_restriction, output_style, room_objects, made_out_of, tags.
+
+RULES:
+- shot_size, subject, expression, wardrobe, arrangement, background, photography, mood MUST ALWAYS be included.
+- For UNIFIED minimalist styles (characters AND environments are simple): EXCLUDE technical camera fields (lens, aperture, dof), film_stock, made_out_of, lighting_direction.
+- For UNIFIED cinematic styles: INCLUDE everything.
+- For HYBRID styles (minimalist characters + rich environments): INCLUDE technical camera fields — they will be applied to the ENVIRONMENT layer only. The prompt builder handles this separation.
 
 ═══ OUTPUT FORMAT ═══
-
-Return a JSON object with exactly this structure:
+Return a JSON object with EXACTLY this structure:
 {
-    "style_summary": "One sentence describing the CHARACTER RENDERING STYLE (not the background of the reference image)",
+    "style_summary": "One sentence describing the CHARACTER RENDERING STYLE and global atmosphere",
     "style_intent": {
-        "detail_level": "Minimalist | Standard | High Detail | Abstract",
-        "scene_complexity": "How complex should STORY ENVIRONMENTS be (not the reference image's background)",
-        "camera_language": "How to describe camera work for this style",
-        "lighting_instruction": "How to handle lighting in prompts for this style",
-        "subject_framing": "Default character/subject framing",
-        "writing_style": "How prompt text should be written (concise/descriptive/technical)",
-        "color_palette": "Color tendencies of this style",
-        "texture": "Surface quality of characters (flat, textured, smooth vinyl, etc.)",
-        "mood_default": "Default emotional quality"
+        "character_description": "Complete description of how ALL characters should be rendered in prompts. This replaces 'man'/'woman'/'person' in every prompt. Be specific about head shape, body style, facial features, limb rendering, and wardrobe rendering.",
+        "environment_description": "Complete description of how ALL environments/backgrounds should be rendered. Can differ from character rendering in hybrid styles.",
+        "rendering_split": "unified | hybrid",
+        "detail_level": "Minimalist | Standard | High Detail | Micro-Detail (Scratches/Imperfections)",
+        "scene_complexity": "How complex should STORY ENVIRONMENTS be",
+        "camera_language": "Eye-level/High-angle/Low-angle limitations",
+        "lighting_instruction": "Specify Source (Sunlight/Artificial), Direction, and Quality (Hard/Soft/Diffused)",
+        "subject_framing": "Close-up/Wide-shot tendencies",
+        "writing_style": "How prompt text should be written",
+        "color_palette": "Dominant tones and context level (High/Low/Medium contrast)",
+        "texture": "Rough/Smooth/Metallic/Fabric-type OR digital/painterly texture rules",
+        "mood_default": "Weather/Atmosphere tendencies (e.g. Chaotic/Serene/Foggy)"
     },
     "prompt_schema": {
-        "always_include": ["shot_size", "subject", "arrangement", "background", "mood"],
-        "include": ["fields that ARE relevant for this style"],
-        "exclude": ["fields that are NOT relevant for this style"]
+        "always_include": ["shot_size", "subject", "expression", "wardrobe", "arrangement", "background", "photography", "mood"],
+        "include": ["fields RELEVANT for this style"],
+        "exclude": ["fields NOT RELEVANT for this style"]
     }
-}
-
-REMEMBER: The "background" field describes STORY ENVIRONMENTS (forests, cities, rooms), NOT studio backdrops.
-The "scene_complexity" should reflect the STORY WORLD complexity, not the reference image's background."""
+}"""
 
 
 def analyze_style_from_images(image_data_list, api_key=None):
@@ -310,13 +357,16 @@ def analyze_style_from_images(image_data_list, api_key=None):
 
         parts.append(types.Part(text=_get_style_analysis_prompt()))
 
-        response = client.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=types.Content(parts=parts),
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json"
+        def _call():
+            return client.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents=types.Content(parts=parts),
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
             )
-        )
+
+        response, _retries = _retry_api_call(_call, description="analyze_style_from_images")
 
         try:
             result = json.loads(response.text)
@@ -366,13 +416,16 @@ def analyze_style_from_text(style_description, api_key=None):
 
 {_get_style_analysis_prompt()}"""
 
-        response = client.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json"
+        def _call():
+            return client.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
             )
-        )
+
+        response, _retries = _retry_api_call(_call, description="analyze_style_from_text")
 
         try:
             result = json.loads(response.text)
@@ -397,6 +450,265 @@ def analyze_style_from_text(style_description, api_key=None):
         return f"Error: {str(e)}"
 
 
+# ── Creative Direction Expansion ──────────────────────────────────
+
+def _get_creative_direction_prompt():
+    """Return the shared prompt for expanding/refining creative direction."""
+    return """You are a creative director for an AI video production pipeline.
+The user has described what KIND of video they want. Your job is to expand this
+into structured creative guidance that will direct three production agents:
+- A DIRECTOR (who makes editorial/cutting decisions)
+- A STORYBOARD ARTIST (who designs visual compositions)
+- A DIRECTOR OF PHOTOGRAPHY (who writes final image/video generation prompts)
+
+YOUR JOB HAS TWO PARTS:
+
+═══ PART 1: EXPAND THE CREATIVE DIRECTION ═══
+Take the user's description and fill in any gaps they didn't specify.
+Be creative but stay faithful to their vision. If they said "stick figure explainer,"
+don't turn it into a cinematic epic. If they said "documentary," don't make it a cartoon.
+
+Be flexible — self-suggest details the user didn't mention based on what would make
+sense for this type of video and this script's content. The user can always edit or
+remove your suggestions.
+
+For each field below, provide a clear, actionable directive:
+- direction_summary: 2-3 sentence elevator pitch of the creative vision
+- video_format: The type/genre of video (explainer, documentary, essay, tutorial, etc.)
+- visual_language: How visual storytelling works (literal depiction, visual metaphors, abstract, symbolic, etc.)
+- narrative_approach: How the story is told (direct address, observational, dramatic reenactment, POV, educational walkthrough, etc.)
+- pacing_philosophy: The rhythm and energy (contemplative with slow reveals, rapid-fire montage, building crescendo, steady educational pace, etc.)
+- world_building: What environments/worlds look like (minimalist void, rich fantasy, real-world locations, stylized abstractions, etc.)
+- character_approach: How characters/subjects are treated (stick figures, 3D rendered humans, silhouettes, no characters — objects only, etc.)
+- tone_and_feel: The emotional register (playful and irreverent, serious and authoritative, warm and intimate, etc.)
+
+═══ PART 2: SUGGEST STYLE DEFAULTS ═══
+Based on the creative direction, suggest appropriate visual style defaults.
+These will pre-populate a style review panel that the user can edit.
+
+Generate a complete suggested_style_defaults object with:
+- style_summary: One sentence describing the rendering style
+- style_intent: {character_description, environment_description, rendering_split, detail_level, scene_complexity, camera_language,
+  lighting_instruction, subject_framing, writing_style, color_palette, texture, mood_default}
+- prompt_schema: {always_include, include, exclude}
+
+RULES for style_intent fields:
+- character_description: Complete template for rendering ANY character in this style (e.g., "A stick figure with large white circular head, thick black outline body, dot eyes")
+- environment_description: Complete template for rendering environments/backgrounds. Can differ from character rendering. (e.g., "Rich cinematic environments with dramatic lighting and depth" or "Flat solid-color backgrounds")
+- rendering_split: "unified" if characters and environments use the same rendering style, "hybrid" if they differ (e.g., stick figures in cinematic worlds). If the user mentions simple/minimalist characters but rich/detailed/cinematic environments, this MUST be "hybrid".
+- detail_level: One of "Minimalist", "Standard", "High Detail", "Micro-Detail"
+- scene_complexity: How complex story environments should be
+- camera_language: Eye-level/angle tendencies
+- lighting_instruction: Light source, direction, quality
+- subject_framing: Close-up/wide tendencies
+- writing_style: How prompt text should be written (concise, descriptive, technical)
+- color_palette: Dominant tones and contrast level
+- texture: Surface quality rules (rough, smooth, digital, painterly)
+- mood_default: Weather/atmosphere tendencies
+
+RULES for prompt_schema:
+- always_include MUST contain: shot_size, subject, expression, wardrobe, arrangement, background, photography, mood
+- For UNIFIED minimalist styles (characters AND environments are simple): EXCLUDE technical camera fields (camera_lens, camera_aperture, dof), film_stock, made_out_of, lighting_direction
+- For UNIFIED cinematic/3D styles: INCLUDE everything
+- For HYBRID styles (minimalist characters + rich environments): INCLUDE technical camera fields — they apply to environments only
+- Use your judgment for styles in between
+
+═══ OUTPUT FORMAT ═══
+Return a JSON object with EXACTLY this structure:
+{
+    "direction_summary": "...",
+    "video_format": "...",
+    "visual_language": "...",
+    "narrative_approach": "...",
+    "pacing_philosophy": "...",
+    "world_building": "...",
+    "character_approach": "...",
+    "tone_and_feel": "...",
+    "suggested_style_defaults": {
+        "style_summary": "...",
+        "style_intent": {
+            "character_description": "...",
+            "environment_description": "...",
+            "rendering_split": "unified | hybrid",
+            "detail_level": "...",
+            "scene_complexity": "...",
+            "camera_language": "...",
+            "lighting_instruction": "...",
+            "subject_framing": "...",
+            "writing_style": "...",
+            "color_palette": "...",
+            "texture": "...",
+            "mood_default": "..."
+        },
+        "prompt_schema": {
+            "always_include": ["shot_size", "subject", "expression", "wardrobe", "arrangement", "background", "photography", "mood"],
+            "include": ["...relevant fields..."],
+            "exclude": ["...irrelevant fields..."]
+        }
+    }
+}"""
+
+
+def expand_creative_direction(user_direction, narration_context=None, api_key=None):
+    """
+    Expand a user's free-form creative direction into structured guidance
+    plus auto-suggested style defaults.
+
+    Args:
+        user_direction: Free-form description (e.g., "stick figure explainer with POV style")
+        narration_context: Optional narration JSON {title, narration: [{act, beat, text}...]}
+        api_key: Optional Gemini API key
+
+    Returns:
+        Dict with direction fields + suggested_style_defaults, or error string starting with "Error:"
+    """
+    try:
+        client = get_client(api_key)
+
+        # Build context snippet from narration if available
+        narration_snippet = ""
+        if narration_context:
+            title = narration_context.get("title", "Untitled")
+            beats = narration_context.get("narration", [])
+            beat_texts = [b.get("text", b.get("narration", ""))[:100] for b in beats[:6]]
+            narration_snippet = f"""
+
+SCRIPT CONTEXT (use this to inform your creative decisions):
+Title: {title}
+Total beats: {len(beats)}
+Opening beats:
+{chr(10).join(f'- {t}' for t in beat_texts)}
+"""
+
+        prompt = f"""The user wants to create this type of video:
+
+"{user_direction}"
+{narration_snippet}
+{_get_creative_direction_prompt()}"""
+
+        def _call():
+            return client.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
+            )
+
+        response, _retries = _retry_api_call(_call, description="expand_creative_direction")
+
+        try:
+            result = json.loads(response.text)
+
+            # Validate suggested_style_defaults
+            defaults = result.get("suggested_style_defaults", {})
+            if "prompt_schema" not in defaults:
+                detail_level = defaults.get("style_intent", {}).get("detail_level", "Standard")
+                defaults["prompt_schema"] = _build_default_schema_from_detail_level(detail_level)
+
+            # Ensure locked fields in always_include
+            always = defaults.get("prompt_schema", {}).get("always_include", [])
+            for field in LOCKED_PROMPT_FIELDS:
+                if field not in always:
+                    always.append(field)
+            defaults.setdefault("prompt_schema", {})["always_include"] = always
+            result["suggested_style_defaults"] = defaults
+
+            print(f"[Creative Direction] Expanded: {result.get('direction_summary', '')[:80]}")
+            return result
+
+        except json.JSONDecodeError:
+            print(f"[Creative Direction] Failed to parse JSON: {response.text}")
+            return "Error: Could not parse creative direction response"
+
+    except Exception as e:
+        print(f"[Creative Direction] Expand failed: {e}")
+        return f"Error: {str(e)}"
+
+
+def refine_creative_direction(current_direction, user_feedback, narration_context=None, api_key=None):
+    """
+    Refine an already-expanded creative direction based on user feedback.
+
+    Args:
+        current_direction: The current expanded direction dict
+        user_feedback: User's adjustment request (e.g., "make it more playful")
+        narration_context: Optional narration JSON for context
+        api_key: Optional Gemini API key
+
+    Returns:
+        Updated direction dict (same structure), or error string starting with "Error:"
+    """
+    try:
+        client = get_client(api_key)
+
+        narration_snippet = ""
+        if narration_context:
+            title = narration_context.get("title", "Untitled")
+            beats = narration_context.get("narration", [])
+            beat_texts = [b.get("text", b.get("narration", ""))[:100] for b in beats[:6]]
+            narration_snippet = f"""
+
+SCRIPT CONTEXT:
+Title: {title}
+Total beats: {len(beats)}
+Opening beats:
+{chr(10).join(f'- {t}' for t in beat_texts)}
+"""
+
+        prompt = f"""You previously expanded a creative direction for a video production.
+Here is the current creative direction:
+
+{json.dumps(current_direction, indent=2)}
+{narration_snippet}
+The user wants to adjust it. Their feedback:
+"{user_feedback}"
+
+Please regenerate the COMPLETE creative direction incorporating this feedback.
+Keep everything the user didn't mention the same, and update what they requested.
+Also update the suggested_style_defaults if the changes affect visual style.
+
+{_get_creative_direction_prompt()}"""
+
+        def _call():
+            return client.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
+            )
+
+        response, _retries = _retry_api_call(_call, description="refine_creative_direction")
+
+        try:
+            result = json.loads(response.text)
+
+            # Validate suggested_style_defaults
+            defaults = result.get("suggested_style_defaults", {})
+            if "prompt_schema" not in defaults:
+                detail_level = defaults.get("style_intent", {}).get("detail_level", "Standard")
+                defaults["prompt_schema"] = _build_default_schema_from_detail_level(detail_level)
+
+            always = defaults.get("prompt_schema", {}).get("always_include", [])
+            for field in LOCKED_PROMPT_FIELDS:
+                if field not in always:
+                    always.append(field)
+            defaults.setdefault("prompt_schema", {})["always_include"] = always
+            result["suggested_style_defaults"] = defaults
+
+            print(f"[Creative Direction] Refined: {result.get('direction_summary', '')[:80]}")
+            return result
+
+        except json.JSONDecodeError:
+            print(f"[Creative Direction] Failed to parse refined JSON: {response.text}")
+            return "Error: Could not parse refined creative direction response"
+
+    except Exception as e:
+        print(f"[Creative Direction] Refine failed: {e}")
+        return f"Error: {str(e)}"
+
+
 def generate_tts(text, voice_name="Kore", style_instructions="", api_key=None):
     """
     Generate speech audio from text using Gemini TTS.
@@ -416,20 +728,24 @@ def generate_tts(text, voice_name="Kore", style_instructions="", api_key=None):
 
     try:
         print(f"[TTS] Generating with voice={voice_name}, style='{style_instructions}'")
-        response = client.models.generate_content(
-            model="gemini-2.5-flash-preview-tts",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_modalities=["AUDIO"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name=voice_name,
+
+        def _call():
+            return client.models.generate_content(
+                model="gemini-2.5-flash-preview-tts",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_modalities=["AUDIO"],
+                    speech_config=types.SpeechConfig(
+                        voice_config=types.VoiceConfig(
+                            prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                voice_name=voice_name,
+                            )
                         )
-                    )
-                ),
+                    ),
+                )
             )
-        )
+
+        response, _retries = _retry_api_call(_call, description="generate_tts")
 
         # Extract raw PCM audio data
         data = response.candidates[0].content.parts[0].inline_data.data
@@ -458,10 +774,22 @@ def generate_tts(text, voice_name="Kore", style_instructions="", api_key=None):
 _video_operations = {}  # operation_name -> operation object
 
 
+def _decode_ref_image(img_data):
+    """Decode a base64 data URI into (bytes, mime_type)."""
+    if ',' in img_data:
+        header, b64_data = img_data.split(',', 1)
+        mime_type = header.split(':')[1].split(';')[0] if ':' in header else "image/jpeg"
+    else:
+        b64_data = img_data
+        mime_type = "image/jpeg"
+    return base64.b64decode(b64_data), mime_type
+
+
 def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                          aspect_ratio="16:9", resolution="2K",
-                         style_images=None, character_images=None,
-                         additional_context="", scene_id=None, api_key=None):
+                         style_images=None, characters=None,
+                         character_images=None, additional_context="",
+                         style_mode="art_only", scene_id=None, api_key=None):
     """
     Generate an image for a specific scene using Gemini or Imagen models.
     Supports style/character reference images for Gemini models.
@@ -475,7 +803,8 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
         aspect_ratio: e.g. '16:9', '9:16', '1:1'
         resolution: '1K', '2K', or '4K'
         style_images: List of base64 data URIs for style reference (max 4, Gemini only)
-        character_images: List of base64 data URIs for character reference (max 10, Gemini only)
+        characters: List of dicts [{name: str, images: [base64_str]}] for labeled character refs (Gemini only)
+        character_images: Legacy flat list of base64 data URIs (fallback if characters not provided)
         additional_context: Extra style notes (e.g. '2D Cartoon Style')
         scene_id: Identifier for the scene (used in filename)
         api_key: Gemini API key
@@ -496,14 +825,18 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                 full_prompt = f"{prompt}\n\nStyle notes: {additional_context}"
 
             print(f"[Scene Image] Generating scene {scene_id} with Imagen model {model_name}")
-            response = client.models.generate_images(
-                model=model_name,
-                prompt=full_prompt,
-                config=types.GenerateImagesConfig(
-                    number_of_images=1,
-                    aspect_ratio=aspect_ratio,
+
+            def _call_imagen():
+                return client.models.generate_images(
+                    model=model_name,
+                    prompt=full_prompt,
+                    config=types.GenerateImagesConfig(
+                        number_of_images=1,
+                        aspect_ratio=aspect_ratio,
+                    )
                 )
-            )
+
+            response, _retries = _retry_api_call(_call_imagen, description=f"scene_imagen({scene_id})")
 
             if response.generated_images:
                 image_data = response.generated_images[0].image.image_bytes
@@ -524,54 +857,171 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
 
         # ── Gemini models: support multipart style/character refs ──
         parts = []
+        has_structured_chars = characters and len(characters) > 0
+        has_legacy_chars = character_images and len(character_images) > 0
+        has_style = style_images and len(style_images) > 0
 
-        # 1. Add character reference images (First to define subjects)
-        if character_images:
-            parts.append(types.Part(text="These are the character reference images. Maintain their identity strictly in the generated scene:"))
-            for img_data in character_images[:10]:
-                if ',' in img_data:
-                    header, b64_data = img_data.split(',', 1)
-                    mime_type = header.split(':')[1].split(';')[0] if ':' in header else "image/jpeg"
-                else:
-                    b64_data = img_data
-                    mime_type = "image/jpeg"
-                image_bytes = base64.b64decode(b64_data)
-                parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
-
-        # 2. Add style reference images (Second to apply style over subjects)
-        if style_images:
-            parts.append(types.Part(text="These are the style reference images. The final image MUST match this visual style exactly. Ignore the style of the character references above:"))
-            for img_data in style_images[:4]:
-                if ',' in img_data:
-                    header, b64_data = img_data.split(',', 1)
-                    mime_type = header.split(':')[1].split(';')[0] if ':' in header else "image/jpeg"
-                else:
-                    b64_data = img_data
-                    mime_type = "image/jpeg"
-                image_bytes = base64.b64decode(b64_data)
-                parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
-
-        # 3. Add the scene prompt with additional context (Last for recency)
-        full_prompt = prompt
-        if additional_context:
-            full_prompt = f"{prompt}\n\nStyle notes: {additional_context}"
-        
-        # Explicitly tie it all together
-        parts.append(types.Part(text=f"Generate an image of the scene described below, featuring the characters above, in the style of the style references above:\n\n{full_prompt}"))
-
-        print(f"[Scene Image] Generating scene {scene_id} with {model_name} "
-              f"({len(style_images or [])} style refs, {len(character_images or [])} char refs)")
-
-        response = client.models.generate_content(
-            model=model_name,
-            contents=types.Content(parts=parts),
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE", "TEXT"],
-                image_config=types.ImageConfig(
-                    aspect_ratio=aspect_ratio,
-                ),
-            )
+        # 1. System instruction: overall task framing and rules
+        system_instruction = (
+            "You are generating a single image for a scene in a visual story. "
+            "You will receive CHARACTER REFERENCE images (defining who appears) "
+            "and STYLE REFERENCE images (defining the visual aesthetic).\n"
+            "CRITICAL RULES:\n"
+            "- Each character's FACIAL FEATURES, HAIR, BODY TYPE, AGE, SKIN TONE, and ETHNICITY "
+            "must EXACTLY match their reference images. This is non-negotiable.\n"
+            "- Characters must wear ONLY the clothing described in the scene prompt, "
+            "NOT the clothing from their reference images.\n"
+            "- The art style, colors, lighting, and medium must match the STYLE references, "
+            "NOT the character references.\n"
+            "- If a character name appears in the scene description, you MUST use "
+            "that specific character's reference.\n"
+            "- Do NOT blend or merge different characters' features together.\n"
+            "- Do NOT invent new characters not described in the scene.\n"
         )
+        parts.append(types.Part(text=system_instruction))
+
+        # 2. Character references: labeled per-character sections
+        if has_structured_chars:
+            for char in characters:
+                char_name = char.get('name', 'Unknown')
+                char_images = char.get('images', [])
+                if not char_images:
+                    continue
+
+                ref_mode = char.get('ref_mode', 'identity')
+                if ref_mode == 'full_look':
+                    char_instruction = (
+                        f"\n--- CHARACTER: \"{char_name}\" (Full Look) ---\n"
+                        f"The following {len(char_images)} image(s) show \"{char_name}\". "
+                        f"Preserve this character's COMPLETE appearance exactly: facial features, "
+                        f"hair, skin tone, body build, clothing, outfit, accessories, and overall "
+                        f"aesthetic. They must look identical to these references in every way:"
+                    )
+                else:  # identity (default)
+                    char_instruction = (
+                        f"\n--- CHARACTER: \"{char_name}\" (Identity Only) ---\n"
+                        f"The following {len(char_images)} image(s) show \"{char_name}\". "
+                        f"Preserve this character's exact facial structure, features, hair, "
+                        f"skin tone, body build, and age. Do NOT copy their clothing, outfit, "
+                        f"or accessories from these references — dress them according to the "
+                        f"scene prompt instead:"
+                    )
+                parts.append(types.Part(text=char_instruction))
+
+                for img_data in char_images[:4]:
+                    image_bytes, mime_type = _decode_ref_image(img_data)
+                    parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+
+            # Character-to-scene binding instruction
+            char_names = [c.get('name', 'Unknown') for c in characters if c.get('images')]
+            if char_names:
+                binding = (
+                    "\n--- CHARACTER BINDING ---\n"
+                    f"Characters available in this scene: {', '.join(char_names)}.\n"
+                    "When the scene description mentions a person, map them to the "
+                    "closest matching character reference above based on the description. "
+                    "If the scene explicitly names a character, you MUST use exactly "
+                    "that character's reference images for their appearance.\n"
+                )
+                parts.append(types.Part(text=binding))
+
+        elif has_legacy_chars:
+            # Legacy fallback: flat unlabeled images
+            parts.append(types.Part(text=(
+                "These are character reference images. You MUST strictly maintain "
+                "their core physical identity (facial features, hair, body structure, "
+                "age, skin tone, ethnicity) in the generated scene. "
+                "Do NOT copy clothing or poses from these references:"
+            )))
+            for img_data in character_images[:10]:
+                image_bytes, mime_type = _decode_ref_image(img_data)
+                parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+
+        # 3. Style reference images (mode-dependent instruction)
+        if has_style:
+            if style_mode == "full":
+                style_instruction = (
+                    "\n--- STYLE REFERENCE ---\n"
+                    "The following images define the EXACT visual style for the output. "
+                    "Match this art style, color palette, lighting, mood, texture, line weight, "
+                    "and artistic medium PRECISELY. The style references override ALL visual "
+                    "aspects including mood and lighting. Only use character references for "
+                    "physical identity, not for style:"
+                )
+            elif style_mode == "loose":
+                style_instruction = (
+                    "\n--- STYLE REFERENCE (loose inspiration) ---\n"
+                    "Use the following images as loose visual inspiration for the general "
+                    "aesthetic direction. The scene prompt takes priority for ALL visual "
+                    "decisions including style, lighting, mood, and atmosphere. These "
+                    "references are suggestions, not strict requirements:"
+                )
+            else:  # art_only (default)
+                style_instruction = (
+                    "\n--- STYLE REFERENCE ---\n"
+                    "Match the art style, technique, color palette, texture, and line weight "
+                    "from the following images. But for lighting, mood, atmosphere, and time "
+                    "of day — follow the scene prompt instead. The style references define "
+                    "HOW things look (medium, rendering) but NOT the scene's mood or lighting:"
+                )
+            parts.append(types.Part(text=style_instruction))
+            for img_data in style_images[:4]:
+                image_bytes, mime_type = _decode_ref_image(img_data)
+                parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+
+        # 4. Scene prompt with additional context (LAST for recency bias)
+        scene_block = f"\n--- SCENE TO GENERATE ---\n{prompt}"
+        if additional_context:
+            scene_block += f"\n\nADDITIONAL STYLE NOTES: {additional_context}"
+
+        # Mode-dependent reminder
+        if style_mode == "full":
+            scene_block += (
+                "\n\nREMINDER: Each character MUST visually match their reference images. "
+                "The art style, lighting, and mood MUST match the style reference images. "
+                "Generate a single cohesive image."
+            )
+        elif style_mode == "loose":
+            scene_block += (
+                "\n\nREMINDER: Each character MUST visually match their reference images. "
+                "Follow the scene description above for style, lighting, and mood. "
+                "Style references are only loose inspiration. Generate a single cohesive image."
+            )
+        else:  # art_only
+            scene_block += (
+                "\n\nREMINDER: Each character MUST visually match their reference images. "
+                "Use the art style/medium from the style references, but follow THIS scene's "
+                "description for lighting, mood, and atmosphere. Generate a single cohesive image."
+            )
+        parts.append(types.Part(text=scene_block))
+
+        # Log what we're sending
+        if has_structured_chars:
+            char_summary = ", ".join(
+                f"{c.get('name','?')}({len(c.get('images',[]))} imgs)"
+                for c in characters if c.get('images')
+            )
+        elif has_legacy_chars:
+            char_summary = f"{len(character_images)} unlabeled"
+        else:
+            char_summary = "none"
+        print(f"[Scene Image] Generating scene {scene_id} with {model_name} "
+              f"({len(style_images or [])} style refs, chars=[{char_summary}]"
+              f"{', context=' + repr(additional_context[:50]) if additional_context else ''})")
+
+        def _call_gemini_scene():
+            return client.models.generate_content(
+                model=model_name,
+                contents=types.Content(parts=parts),
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE", "TEXT"],
+                    image_config=types.ImageConfig(
+                        aspect_ratio=aspect_ratio,
+                    ),
+                )
+            )
+
+        response, _retries = _retry_api_call(_call_gemini_scene, description=f"scene_gemini({scene_id})")
 
         # Extract image from response
         if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
@@ -635,19 +1085,22 @@ def start_video_generation(image_path, prompt, model_name="veo-3.1-generate-prev
         print(f"[Veo] Starting animation for scene {scene_id} with {model_name} "
               f"(duration={duration}s, resolution={resolution})")
 
-        operation = client.models.generate_videos(
-            model=model_name,
-            prompt=prompt,
-            image=types.Image(
-                image_bytes=image_bytes,
-                mime_type=mime_type,
-            ),
-            config=types.GenerateVideosConfig(
-                aspect_ratio=aspect_ratio,
-                resolution=resolution,
-                duration_seconds=int(duration),
-            ),
-        )
+        def _call():
+            return client.models.generate_videos(
+                model=model_name,
+                prompt=prompt,
+                image=types.Image(
+                    image_bytes=image_bytes,
+                    mime_type=mime_type,
+                ),
+                config=types.GenerateVideosConfig(
+                    aspect_ratio=aspect_ratio,
+                    resolution=resolution,
+                    duration_seconds=int(duration),
+                ),
+            )
+
+        operation, _retries = _retry_api_call(_call, description=f"veo_start({scene_id})")
 
         # Store operation for later polling
         op_name = operation.name

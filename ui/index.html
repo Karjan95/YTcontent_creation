@@ -64,6 +64,23 @@
         </div>
     </div>
 
+    <!-- Image History Lightbox -->
+    <div id="imageLightboxModal" class="modal-overlay" style="display: none;" onclick="closeImageLightbox(event)">
+        <div class="lightbox-card">
+            <div class="lightbox-header">
+                <span id="lightboxTitle">Image Preview</span>
+                <button class="lightbox-close" onclick="closeImageLightbox()">&times;</button>
+            </div>
+            <div class="lightbox-body">
+                <img id="lightboxImage" src="" alt="Preview">
+            </div>
+            <div class="lightbox-actions">
+                <button class="btn-primary" onclick="useHistoryImage()">Use This Image</button>
+                <button class="btn-secondary" onclick="downloadLightboxImage()">Download</button>
+            </div>
+        </div>
+    </div>
+
     <!-- ═══ GLOBAL NOTIFICATION BAR ═══ -->
     <div id="globalNotifications" class="global-notifications"></div>
 
@@ -343,6 +360,17 @@
                         <div id="visStyleImagePreviews" class="image-previews"></div>
                     </div>
 
+                    <!-- Style Lock Mode -->
+                    <div style="margin-top: 12px;">
+                        <label class="input-label">Style Lock</label>
+                        <select id="visStyleMode" class="style-input" onchange="updateVisualsConfig()">
+                            <option value="full">Full Style — refs control everything</option>
+                            <option value="art_only" selected>Art Only — refs control medium/palette, prompt controls
+                                mood/lighting</option>
+                            <option value="loose">Loose — refs are suggestions, prompt has priority</option>
+                        </select>
+                    </div>
+
                     <!-- Additional Context -->
                     <div style="margin-top: 12px;">
                         <label class="input-label" for="visAdditionalContext">Additional Context</label>
@@ -367,6 +395,13 @@
                         <h2>Add Character</h2>
                         <label class="input-label">Character Name</label>
                         <input type="text" id="charNameInput" class="style-input" placeholder="e.g., Detective Miller">
+                        <label class="input-label" style="margin-top: 12px;">Reference Mode</label>
+                        <select id="charRefModeInput" class="style-input">
+                            <option value="identity" selected>Identity Only — face, body, age (clothing from prompt)
+                            </option>
+                            <option value="full_look">Full Look — face, body, clothing, accessories, full appearance
+                            </option>
+                        </select>
                         <label class="input-label" style="margin-top: 12px;">Reference Images (1-4)</label>
                         <div class="image-upload-area">
                             <input type="file" id="charImageInput" accept="image/*" multiple style="display: none;"
@@ -397,11 +432,18 @@
                         <button id="generateAllImagesBtn" onclick="generateAllImages()">
                             Generate All Images
                         </button>
+                        <button id="generateMarkedImagesBtn" onclick="generateMarkedImages()" style="display: none;">
+                            Generate Marked Images
+                        </button>
                         <span class="cost-badge" id="batchImageCostBadge"></span>
                         <button id="animateAllBtn" onclick="animateAllScenes()" style="display: none;">
                             Animate All Marked
                         </button>
                         <span class="cost-badge" id="batchVideoCostBadge"></span>
+                        <button class="btn-secondary" onclick="syncOrphanedImages()"
+                            title="Recover images from Firebase Storage that were lost during page refresh">
+                            🔄 Sync Lost Images
+                        </button>
                         <button class="btn-secondary" onclick="downloadAllAssets()">
                             Download All Assets
                         </button>
@@ -790,6 +832,64 @@ No formatting needed — just paste your narration!"></textarea>
                             </div>
                         </div>
 
+                        <!-- Creative Direction (before style) -->
+                        <div class="creative-direction-section" id="creativeDirectionSection">
+                            <label class="input-label">Creative Direction (Optional)</label>
+                            <p class="paste-hint">
+                                Describe what <strong>type of video</strong> you want.
+                                E.g., "stick figure explainer," "cinematic documentary with b-roll,"
+                                "motion graphics essay." The AI will expand this into guidance for all 3 production
+                                agents
+                                and auto-suggest visual style defaults.
+                            </p>
+
+                            <!-- Free-form input -->
+                            <div style="display: flex; gap: 8px; align-items: flex-start;">
+                                <textarea id="creativeDirectionInput" class="text-area" rows="3"
+                                    placeholder="e.g., A stick figure explainer video with simple white backgrounds, snappy cuts, and playful energy. Each level of the hierarchy gets its own visual segment with different outfits."
+                                    style="flex: 1;"></textarea>
+                                <button class="btn-secondary" onclick="expandCreativeDirection()"
+                                    id="expandDirectionBtn">
+                                    Expand with AI
+                                </button>
+                            </div>
+
+                            <!-- Expanded direction result (shown after AI expands) -->
+                            <div id="creativeDirectionResult" class="creative-direction-result" style="display: none;">
+                                <div class="direction-header">
+                                    <label class="input-label" style="margin-bottom: 0;">AI-Expanded Creative
+                                        Direction</label>
+                                    <span id="directionApprovedBadge" class="direction-approved-badge"
+                                        style="display: none;">Active</span>
+                                </div>
+
+                                <div class="direction-summary" id="directionSummaryDisplay"></div>
+
+                                <div class="direction-details" id="directionDetailsDisplay"></div>
+
+                                <!-- Refine controls -->
+                                <div style="display: flex; gap: 8px; align-items: flex-start; margin-top: 12px;">
+                                    <textarea id="directionRefineInput" class="text-area" rows="1"
+                                        placeholder="Adjust: e.g., 'make it more playful' or 'add dramatic b-roll sections'"
+                                        style="flex: 1;"></textarea>
+                                    <button class="btn-secondary" onclick="refineCreativeDirection()"
+                                        id="refineDirectionBtn">
+                                        Re-refine
+                                    </button>
+                                </div>
+
+                                <div class="controls" style="margin-top: 10px; gap: 8px;">
+                                    <button class="btn-primary" onclick="applyCreativeDirection()"
+                                        id="applyDirectionBtn">
+                                        Apply Direction & Auto-Suggest Style
+                                    </button>
+                                    <button class="btn-secondary" onclick="clearCreativeDirection()">
+                                        Clear Direction
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Style Reference Images -->
                         <div class="style-images-section" id="styleImagesSection">
                             <label class="input-label">Style Reference Images (Optional)</label>
@@ -837,52 +937,107 @@ No formatting needed — just paste your narration!"></textarea>
                                     style="display: none;">Approved</span>
                             </div>
 
+                            <!-- Master Style Identity -->
                             <div class="review-field">
                                 <label>Style Summary</label>
                                 <textarea id="reviewStyleSummary" rows="2" class="review-input"></textarea>
                             </div>
 
-                            <div class="review-grid">
-                                <div class="review-field">
-                                    <label>Detail Level</label>
-                                    <input type="text" id="reviewDetailLevel" class="review-input">
+                            <!-- Rendering Split Indicator -->
+                            <div class="review-field" style="margin-top: 8px;">
+                                <label>Rendering Mode</label>
+                                <select id="reviewRenderingSplit" class="review-input" style="width: auto;"
+                                    onchange="updateRenderingSplitUI()">
+                                    <option value="unified">Unified — Characters & environments rendered the same way
+                                    </option>
+                                    <option value="hybrid">Hybrid — Characters rendered differently from environments
+                                    </option>
+                                </select>
+                            </div>
+
+                            <!-- DUAL PANELS CONTAINER -->
+                            <div class="style-dual-panels" style="margin-top: 12px;">
+
+                                <!-- CHARACTER STYLE SUB-PANEL -->
+                                <div class="style-sub-panel style-sub-panel-character">
+                                    <div class="style-sub-panel-header">
+                                        <span class="sub-panel-icon">&#x1F464;</span>
+                                        <label class="input-label" style="margin-bottom: 0;">Character Rendering</label>
+                                    </div>
+                                    <div class="review-field">
+                                        <label>Character Description</label>
+                                        <textarea id="reviewCharacterDescription" rows="3" class="review-input"
+                                            placeholder="How ALL characters should be rendered. E.g., 'Stick figure with large white circular head, thick black outline body, dot eyes, no nose, curved line mouth. Clothing as flat solid-color shapes.'"></textarea>
+                                    </div>
+                                    <div class="review-grid">
+                                        <div class="review-field">
+                                            <label>Detail Level</label>
+                                            <input type="text" id="reviewDetailLevel" class="review-input">
+                                        </div>
+                                        <div class="review-field">
+                                            <label>Writing Style</label>
+                                            <input type="text" id="reviewWritingStyle" class="review-input">
+                                        </div>
+                                    </div>
                                 </div>
-                                <div class="review-field">
-                                    <label>Scene Complexity</label>
-                                    <input type="text" id="reviewSceneComplexity" class="review-input">
-                                </div>
-                                <div class="review-field">
-                                    <label>Camera Language</label>
-                                    <input type="text" id="reviewCameraLanguage" class="review-input">
-                                </div>
-                                <div class="review-field">
-                                    <label>Lighting Approach</label>
-                                    <input type="text" id="reviewLighting" class="review-input">
-                                </div>
-                                <div class="review-field">
-                                    <label>Subject Framing</label>
-                                    <input type="text" id="reviewSubjectFraming" class="review-input">
-                                </div>
-                                <div class="review-field">
-                                    <label>Writing Style</label>
-                                    <input type="text" id="reviewWritingStyle" class="review-input">
-                                </div>
-                                <div class="review-field">
-                                    <label>Color Palette</label>
-                                    <input type="text" id="reviewColorPalette" class="review-input">
-                                </div>
-                                <div class="review-field">
-                                    <label>Texture</label>
-                                    <input type="text" id="reviewTexture" class="review-input">
-                                </div>
-                                <div class="review-field">
-                                    <label>Default Mood</label>
-                                    <input type="text" id="reviewMoodDefault" class="review-input">
+
+                                <!-- ENVIRONMENT STYLE SUB-PANEL -->
+                                <div class="style-sub-panel style-sub-panel-environment">
+                                    <div class="style-sub-panel-header">
+                                        <span class="sub-panel-icon">&#x1F30D;</span>
+                                        <label class="input-label" style="margin-bottom: 0;">Environment
+                                            Rendering</label>
+                                    </div>
+                                    <div class="review-field">
+                                        <label>Environment Description</label>
+                                        <textarea id="reviewEnvironmentDescription" rows="3" class="review-input"
+                                            placeholder="How backgrounds/environments should be rendered. E.g., 'Rich cinematic environments with dramatic lighting and depth' or 'Flat solid-color backgrounds'"></textarea>
+                                    </div>
+                                    <div class="review-grid">
+                                        <div class="review-field">
+                                            <label>Scene Complexity</label>
+                                            <input type="text" id="reviewSceneComplexity" class="review-input">
+                                        </div>
+                                        <div class="review-field">
+                                            <label>Camera Language</label>
+                                            <input type="text" id="reviewCameraLanguage" class="review-input">
+                                        </div>
+                                        <div class="review-field">
+                                            <label>Lighting Approach</label>
+                                            <input type="text" id="reviewLighting" class="review-input">
+                                        </div>
+                                        <div class="review-field">
+                                            <label>Subject Framing</label>
+                                            <input type="text" id="reviewSubjectFraming" class="review-input">
+                                        </div>
+                                        <div class="review-field">
+                                            <label>Color Palette</label>
+                                            <input type="text" id="reviewColorPalette" class="review-input">
+                                        </div>
+                                        <div class="review-field">
+                                            <label>Texture</label>
+                                            <input type="text" id="reviewTexture" class="review-input">
+                                        </div>
+                                        <div class="review-field">
+                                            <label>Default Mood</label>
+                                            <input type="text" id="reviewMoodDefault" class="review-input">
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
 
+                            <!-- Schema Checklist with layer indicators -->
                             <div class="review-field" style="margin-top: 12px;">
-                                <label>Prompt Schema — Which fields to include in production prompts</label>
+                                <label>Prompt Schema — Which fields to include in production prompts <span
+                                        class="info-tooltip-trigger" data-tooltip="schemaInfo"><svg class="info-icon"
+                                            width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                            stroke-width="2">
+                                            <circle cx="12" cy="12" r="10" />
+                                            <line x1="12" y1="16" x2="12" y2="12" />
+                                            <line x1="12" y1="8" x2="12.01" y2="8" />
+                                        </svg></span></label>
+                                <div id="schemaWarningBanner" class="schema-warning-banner" style="display: none;">
+                                </div>
                                 <div id="schemaFieldsChecklist" class="schema-checklist"></div>
                             </div>
 
@@ -904,12 +1059,45 @@ No formatting needed — just paste your narration!"></textarea>
                             </div>
                         </div>
 
+                        <div class="pacing-controls"
+                            style="margin-top: 20px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+                            <div class="review-field">
+                                <label for="pacingTierSelect">Pacing Style — Cut Frequency</label>
+                                <select id="pacingTierSelect" class="review-input" style="width: auto;"
+                                    onchange="updateEstimatedShots()">
+                                    <option value="Meditative">Meditative (~8.0s / 15 words per shot)</option>
+                                    <option value="Relaxed">Relaxed (~6.0s / 11 words per shot)</option>
+                                    <option value="Standard" selected>Standard (~4.0s / 9 words per shot)</option>
+                                    <option value="High Energy">High Energy (~2.0s / 5 words per shot)</option>
+                                    <option value="Frenetic">Frenetic (~1.2s / 3 words per shot) - High Cost</option>
+                                </select>
+                            </div>
+                            <div style="margin-top: 8px; font-size: 13px; color: #aaa;">
+                                Estimated Shots: <strong id="estimatedShotsDisplay">--</strong>
+                            </div>
+                        </div>
+
+                        <div
+                            style="margin-top: 12px; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
+                            <div class="review-field" style="margin-bottom: 0;">
+                                <label for="qualityModeSelect">Quality Mode</label>
+                                <select id="qualityModeSelect" class="review-input" style="width: auto;"
+                                    onchange="updateQualityModeHint()">
+                                    <option value="fast" selected>Fast (1 Gemini call)</option>
+                                    <option value="max_quality">Max Quality (3-phase pipeline)</option>
+                                </select>
+                            </div>
+                            <div id="qualityModeHint" style="margin-top: 6px; font-size: 12px; color: #888;">
+                                Single call handles cutting, visuals, and prompts together.
+                            </div>
+                        </div>
+
                         <div class="controls" style="margin-top: 16px;">
                             <button id="productionBtn" onclick="generateProductionTable()">
                                 <span id="productionBtnText">Generate Production Table</span>
                                 <div class="spinner" id="productionSpinner"></div>
                             </button>
-                            <span class="cost-badge">~$0.20–0.50</span>
+                            <span class="cost-badge" id="productionCostBadge">~$0.20–0.50</span>
                         </div>
 
                         <!-- Production Table Results -->
@@ -1122,36 +1310,149 @@ No formatting needed — just paste your narration!"></textarea>
         let currentProductionData = null;
         let styleReferenceImages = []; // Array of base64 image data
         let approvedStyle = null; // Structured style dict {style_summary, style_intent, prompt_schema}
+        let originalStyleSummary = null; // Tracks summary text when fields were last populated (for stale detection)
+        let currentCreativeDirection = null; // Expanded creative direction object
+        let lastAutoSuggestedStyle = null; // Snapshot of style fields auto-suggested by creative direction
 
         // Master list of all possible prompt fields
         const PROMPT_FIELDS = [
-            { key: 'shot_size', label: 'Shot Size (wide, medium, close-up)', locked: true },
-            { key: 'subject', label: 'Subject Description', locked: true },
-            { key: 'arrangement', label: 'Pose / Camera Angle', locked: true },
-            { key: 'background', label: 'Background / Environment', locked: true },
-            { key: 'mood', label: 'Mood / Atmosphere', locked: false },
-            { key: 'lighting', label: 'Lighting Setup', locked: false },
-            { key: 'lighting_direction', label: 'Lighting Direction & Color Temp', locked: false },
-            { key: 'camera_lens', label: 'Camera Lens (mm)', locked: false },
-            { key: 'camera_aperture', label: 'Aperture / f-stop', locked: false },
-            { key: 'dof', label: 'Depth of Field', locked: false },
-            { key: 'film_stock', label: 'Film Stock / Texture', locked: false },
-            { key: 'color_restriction', label: 'Color Palette', locked: false },
-            { key: 'output_style', label: 'Output Style / Aesthetic', locked: false },
-            { key: 'room_objects', label: 'Props / Objects', locked: false },
-            { key: 'made_out_of', label: 'Material / Texture', locked: false },
-            { key: 'tags', label: 'Aesthetic Tags', locked: false },
+            { key: 'shot_size', label: 'Shot Size (wide, medium, close-up)', locked: true, layer: 'both' },
+            { key: 'subject', label: 'Subject Description', locked: true, layer: 'character' },
+            { key: 'arrangement', label: 'Pose / Camera Angle', locked: true, layer: 'both' },
+            { key: 'background', label: 'Background / Environment', locked: true, layer: 'environment' },
+            { key: 'mood', label: 'Mood / Atmosphere', locked: false, layer: 'both' },
+            { key: 'lighting', label: 'Lighting Setup', locked: false, layer: 'environment' },
+            { key: 'lighting_direction', label: 'Lighting Direction & Color Temp', locked: false, layer: 'environment' },
+            { key: 'camera_lens', label: 'Camera Lens (mm)', locked: false, layer: 'environment' },
+            { key: 'camera_aperture', label: 'Aperture / f-stop', locked: false, layer: 'environment' },
+            { key: 'dof', label: 'Depth of Field', locked: false, layer: 'environment' },
+            { key: 'film_stock', label: 'Film Stock / Texture', locked: false, layer: 'environment' },
+            { key: 'color_restriction', label: 'Color Palette', locked: false, layer: 'both' },
+            { key: 'output_style', label: 'Output Style / Aesthetic', locked: false, layer: 'both' },
+            { key: 'room_objects', label: 'Props / Objects', locked: false, layer: 'environment' },
+            { key: 'made_out_of', label: 'Material / Texture', locked: false, layer: 'both' },
+            { key: 'tags', label: 'Aesthetic Tags', locked: false, layer: 'both' },
         ];
+
+        // Tooltip data for Style Review panel info icons
+        const STYLE_FIELD_TOOLTIPS = {
+            reviewStyleSummary: {
+                desc: 'The master style identity. All other fields and prompts follow this.',
+                good: 'Minimalist 2D vector animation with white stick-figure characters, thick black outlines, flat colored backgrounds',
+                bad: 'Cool style'
+            },
+            reviewCharacterDescription: {
+                desc: 'Defines how ALL characters are rendered in every prompt. Replaces generic terms like "man" or "woman" with the actual character style.',
+                good: 'Stick figure with large white circular head, thick black outline body, dot eyes, no nose, curved line mouth. Clothing as flat solid-color shapes over the body outline.',
+                bad: 'A character'
+            },
+            reviewEnvironmentDescription: {
+                desc: 'Defines how ALL environments/backgrounds are rendered. In hybrid mode, this can differ from the character rendering style.',
+                good: 'Rich, detailed cinematic environments with dramatic lighting, depth of field, and volumetric atmosphere',
+                bad: 'Nice backgrounds'
+            },
+            reviewRenderingSplit: {
+                desc: 'Whether characters and environments use the same rendering style (unified) or different styles (hybrid). Use hybrid for stick figures in cinematic worlds.',
+                good: 'hybrid',
+                bad: ''
+            },
+            reviewDetailLevel: {
+                desc: 'Controls how verbose/detailed each generated prompt will be.',
+                good: 'Minimalist — short prompts, no cinematic extras',
+                bad: 'Normal'
+            },
+            reviewSceneComplexity: {
+                desc: 'Controls how rich backgrounds and environments are in prompts.',
+                good: 'Low-complexity, symbolic environments with flat color fills',
+                bad: 'Simple'
+            },
+            reviewCameraLanguage: {
+                desc: 'Defines camera techniques Gemini uses (angles, lens, movement).',
+                good: 'Flat 2D staging, primarily eye-level; avoid perspective distortion',
+                bad: 'Standard'
+            },
+            reviewLighting: {
+                desc: 'How light is described in each prompt.',
+                good: 'Soft, diffused ambient lighting with no harsh shadows',
+                bad: 'Good lighting'
+            },
+            reviewSubjectFraming: {
+                desc: 'How characters are positioned and composed in each shot.',
+                good: 'Clear, centered compositions ranging from full-body to medium close-up',
+                bad: 'Normal framing'
+            },
+            reviewWritingStyle: {
+                desc: 'The language style used when writing the actual prompts.',
+                good: 'Concise and action-oriented, focusing on subject and core action',
+                bad: 'Descriptive'
+            },
+            reviewColorPalette: {
+                desc: 'What colors Gemini uses in visual descriptions.',
+                good: 'High-contrast palette using bold primary colors against white/black',
+                bad: 'Colorful'
+            },
+            reviewTexture: {
+                desc: 'Surface quality and rendering finish of the visual.',
+                good: 'Clean digital vectors with smooth finishes, no grain or noise',
+                bad: 'Smooth'
+            },
+            reviewMoodDefault: {
+                desc: 'Emotional baseline for all prompts.',
+                good: 'Satirical and expressive with a clear narrative focus',
+                bad: 'Happy'
+            },
+            schemaFieldsChecklist: {
+                desc: 'Check which technical fields appear in your production prompts. Unchecked fields will be explicitly excluded.',
+                good: null,
+                bad: null
+            }
+        };
+
         // ── Per-project background operations tracking ──
         // Map<projectId, { researchPollTimer, interactionId, topic, templateId }>
         const backgroundOps = new Map();
+
+        function loadBackgroundOps() {
+            try {
+                const stored = sessionStorage.getItem('backgroundOps');
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    for (const [k, v] of Object.entries(parsed)) {
+                        backgroundOps.set(k, v);
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to load backgroundOps config", e);
+            }
+        }
+
+        function saveBackgroundOps() {
+            try {
+                const obj = {};
+                for (const [k, v] of backgroundOps.entries()) {
+                    const opCopy = { ...v };
+                    delete opCopy.researchPollTimer; // don't serialize interval IDs
+                    obj[k] = opCopy;
+                }
+                sessionStorage.setItem('backgroundOps', JSON.stringify(obj));
+            } catch (e) {
+                console.error("Failed to save backgroundOps", e);
+            }
+        }
+
+        // Initialize from session storage
+        loadBackgroundOps();
 
         function getBackgroundOp(projectId) {
             return backgroundOps.get(projectId) || null;
         }
 
         function setBackgroundOp(projectId, op) {
-            backgroundOps.set(projectId, op);
+            const existing = backgroundOps.get(projectId) || {};
+            // Merge to preserve things like researchPollTimer if only updating status
+            const merged = { ...existing, ...op };
+            backgroundOps.set(projectId, merged);
+            saveBackgroundOps();
             updateGlobalNotifications();
         }
 
@@ -1159,6 +1460,7 @@ No formatting needed — just paste your narration!"></textarea>
             const op = backgroundOps.get(projectId);
             if (op && op.researchPollTimer) clearInterval(op.researchPollTimer);
             backgroundOps.delete(projectId);
+            saveBackgroundOps();
             updateGlobalNotifications();
         }
 
@@ -1170,27 +1472,36 @@ No formatting needed — just paste your narration!"></textarea>
             const notifications = [];
             for (const [projId, op] of backgroundOps.entries()) {
                 if (projId === currentProjectId) continue; // Don't notify for active project
+
+                const projTitle = _lastSavedProjects.find(p => p.id === projId)?.title || 'Project';
+                let opName = 'Generation';
+                if (op.type === 'research' || op.type === 'research_async') opName = 'Research';
+                else if (op.type === 'narration') opName = 'Narration';
+                else if (op.type === 'production') opName = 'Production Table';
+                else if (op.type === 'title_suggestion') opName = 'Title Suggestion';
+                else if (op.type === 'tone_suggestion') opName = 'Tone Suggestion';
+                else if (op.type === 'image_batch') opName = 'Image Batch';
+                else if (op.type === 'video_batch') opName = 'Video Batch';
+
                 if (op.status === 'completed') {
-                    const projTitle = _lastSavedProjects.find(p => p.id === projId)?.title || 'Project';
                     notifications.push(`
                         <div class="global-notification success" onclick="loadProject('${projId}')">
-                            <span>✅ <strong>${escapeHTML(projTitle)}</strong>: Research complete</span>
+                            <span>✅ <strong>${escapeHTML(projTitle)}</strong>: ${opName} complete</span>
                             <button class="notification-dismiss" onclick="event.stopPropagation(); dismissNotification('${projId}')">✕</button>
                         </div>
                     `);
                 } else if (op.status === 'failed') {
-                    const projTitle = _lastSavedProjects.find(p => p.id === projId)?.title || 'Project';
                     notifications.push(`
                         <div class="global-notification error" onclick="loadProject('${projId}')">
-                            <span>❌ <strong>${escapeHTML(projTitle)}</strong>: Research failed</span>
+                            <span>❌ <strong>${escapeHTML(projTitle)}</strong>: ${opName} failed</span>
                             <button class="notification-dismiss" onclick="event.stopPropagation(); dismissNotification('${projId}')">✕</button>
                         </div>
                     `);
                 } else if (op.status === 'in_progress') {
-                    const projTitle = _lastSavedProjects.find(p => p.id === projId)?.title || 'Project';
+                    const icon = op.type === 'research' || op.type === 'research_async' ? '🔬' : '⏳';
                     notifications.push(`
                         <div class="global-notification running" onclick="loadProject('${projId}')">
-                            <span>🔬 <strong>${escapeHTML(projTitle)}</strong>: Research running…</span>
+                            <span>${icon} <strong>${escapeHTML(projTitle)}</strong>: ${opName} running…</span>
                         </div>
                     `);
                 }
@@ -1489,7 +1800,12 @@ No formatting needed — just paste your narration!"></textarea>
                     actCount = new Set(beats.map(b => b.act)).size;
                     beatCount = beats.length;
                 }
-                badge.innerHTML = `<span class="source-dot ready"></span> Narration loaded (${actCount} acts, ${beatCount} beats) — ready to generate production table`;
+                const btn = document.getElementById('lockNarrationBtn');
+                if (btn && btn.disabled) {
+                    badge.innerHTML = `<span class="source-dot ready"></span> Narration locked (${actCount} acts, ${beatCount} beats) — ready to generate production table`;
+                } else {
+                    badge.innerHTML = `<span class="source-dot ready"></span> Narration loaded (${actCount} acts, ${beatCount} beats) — ready to generate production table`;
+                }
             } else {
                 badge.innerHTML = '<span class="source-dot idle"></span> No narration loaded yet — complete Phase 2 or switch to manual mode';
             }
@@ -1627,6 +1943,30 @@ No formatting needed — just paste your narration!"></textarea>
 
             updatePhaseStatus(1, researchModel === 'deep_research_agent' ? 'Starting Deep Research Agent…' : 'Researching…', 'running');
 
+            // Progressive status messages for long-running requests
+            const statusMessages = [
+                { delay: 10000, msg: 'Still researching… this can take a moment' },
+                { delay: 25000, msg: 'Model may be busy — retrying automatically…' },
+                { delay: 45000, msg: 'Still retrying, please wait…' },
+                { delay: 70000, msg: 'Taking longer than usual — hang tight…' },
+            ];
+            const statusTimers = statusMessages.map(({ delay, msg }) =>
+                setTimeout(() => {
+                    if (projectId === currentProjectId) {
+                        updatePhaseStatus(1, msg, 'running');
+                    }
+                }, delay)
+            );
+            const clearStatusTimers = () => statusTimers.forEach(t => clearTimeout(t));
+
+            // Synchronous result (fast/deep) - Set background op to track
+            setBackgroundOp(projectId, {
+                status: 'in_progress',
+                topic: topic,
+                templateId: selectedTemplate,
+                type: 'research'
+            });
+
             try {
                 const response = await authFetch('/api/research', {
                     method: 'POST',
@@ -1634,19 +1974,23 @@ No formatting needed — just paste your narration!"></textarea>
                     body: JSON.stringify({
                         topic,
                         template_id: selectedTemplate,
-                        research_model: researchModel
+                        research_model: researchModel,
+                        project_id: projectId
                     }),
                 });
 
+                clearStatusTimers();
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Research failed');
 
                 // Async deep research: start project-scoped polling
                 if (data.async && data.interaction_id) {
-                    updatePhaseStatus(1, 'Deep Research running… (polling every 10s)', 'running');
-                    btnText.textContent = '🔬 Researching…';
-                    btnText.style.display = 'inline';
-                    spinner.style.display = 'inline-block';
+                    if (projectId === currentProjectId) {
+                        updatePhaseStatus(1, 'Deep Research running… (polling every 10s)', 'running');
+                        btnText.textContent = '🔬 Researching…';
+                        btnText.style.display = 'inline';
+                        spinner.style.display = 'inline-block';
+                    }
 
                     const pollTimer = setInterval(() => {
                         pollDeepResearch(projectId, topic, selectedTemplate, data.interaction_id);
@@ -1658,17 +2002,37 @@ No formatting needed — just paste your narration!"></textarea>
                         topic: topic,
                         templateId: selectedTemplate,
                         status: 'in_progress',
+                        type: 'research_async'
                     });
                     return; // Don't reset button — polling continues
                 }
 
-                // Synchronous result (fast/deep)
-                displayResearchResults(data, projectId);
+                // Synchronous completed
+                setBackgroundOp(projectId, {
+                    status: 'completed',
+                    topic: topic,
+                    templateId: selectedTemplate,
+                    data: data,
+                    type: 'research'
+                });
+
+                if (projectId === currentProjectId) {
+                    displayResearchResults(data, projectId);
+                } else {
+                    // It already saves to Firebase on backend, but we keep the completed op
+                    // so `loadProject` will re-render it if they switch back here.
+                    console.log(`[Background] Synchronous research finished safely for project ${projectId}. Ready for UI reload.`);
+                }
 
             } catch (error) {
-                errorDiv.innerText = error.message;
+                clearStatusTimers();
+                const msg = error.message || 'Research failed';
+                const isRetryExhausted = msg.includes('after') && msg.includes('attempt');
+                errorDiv.innerText = isRetryExhausted
+                    ? `${msg} — The model is experiencing high demand. Please try again in a few minutes.`
+                    : msg;
                 errorDiv.style.display = 'block';
-                updatePhaseStatus(1, 'Error', 'error');
+                updatePhaseStatus(1, isRetryExhausted ? 'Model busy — retry later' : 'Error', 'error');
                 btn.disabled = false;
                 btnText.style.display = 'inline';
                 btnText.textContent = '🔍 Start Research';
@@ -1685,6 +2049,7 @@ No formatting needed — just paste your narration!"></textarea>
                         interaction_id: interactionId,
                         topic: topic,
                         template_id: templateId,
+                        project_id: projectId
                     }),
                 });
 
@@ -1840,6 +2205,12 @@ No formatting needed — just paste your narration!"></textarea>
             editSection.style.display = 'none';
             selectedTitle = null;
 
+            // Track background OP
+            setBackgroundOp(currentProjectId, {
+                status: 'in_progress',
+                type: 'title_suggestion'
+            });
+
             try {
                 const response = await authFetch('/api/suggest-titles', {
                     method: 'POST',
@@ -1853,24 +2224,36 @@ No formatting needed — just paste your narration!"></textarea>
                 });
 
                 const data = await response.json();
+
+                // Track completion
+                setBackgroundOp(currentProjectId, {
+                    status: 'completed',
+                    type: 'title_suggestion',
+                    data: data
+                });
+
                 if (!response.ok) throw new Error(data.error || 'Title suggestion failed');
 
-                spinnerWrap.style.display = 'none';
+                // Update UI only if we are still on that project
+                if (currentProjectId === data.project_id || !data.project_id || true) { // the backend doesn't return project_id for this fast call usually, so we'll just check if it resolved while we're on the screen.
+                    spinnerWrap.style.display = 'none';
 
-                cardsDiv.innerHTML = data.titles.map((t, i) => `
-                    <button class="title-card" onclick="selectTitleCard(${i}, this)" data-title="${escapeHtml(t.title)}">
-                        <span class="title-card-number">${i + 1}</span>
-                        <span class="title-card-text">${escapeHtml(t.title)}</span>
-                        <span class="title-card-desc">${escapeHtml(t.description)}</span>
-                    </button>
-                `).join('');
+                    cardsDiv.innerHTML = data.titles.map((t, i) => `
+                        <button class="title-card" onclick="selectTitleCard(${i}, this)" data-title="${escapeHtml(t.title)}">
+                            <span class="title-card-number">${i + 1}</span>
+                            <span class="title-card-text">${escapeHtml(t.title)}</span>
+                            <span class="title-card-desc">${escapeHtml(t.description)}</span>
+                        </button>
+                    `).join('');
 
-                editSection.style.display = 'block';
+                    editSection.style.display = 'block';
 
-                document.getElementById('titleEditInput').addEventListener('input', function () {
-                    selectedTitle = this.value.trim();
-                    updateTitleConfirmBadge();
-                });
+                    document.getElementById('titleEditInput').addEventListener('input', function () {
+                        selectedTitle = this.value.trim();
+                        updateTitleConfirmBadge();
+                    });
+                }
+
 
             } catch (error) {
                 spinnerWrap.style.display = 'none';
@@ -1878,6 +2261,7 @@ No formatting needed — just paste your narration!"></textarea>
                 editSection.style.display = 'block';
             }
         }
+
 
         function selectTitleCard(index, el) {
             document.querySelectorAll('.title-card').forEach(c => c.classList.remove('selected'));
@@ -1947,6 +2331,12 @@ No formatting needed — just paste your narration!"></textarea>
             badge.innerHTML = 'Suggesting tone...';
 
             try {
+                // Track background OP
+                setBackgroundOp(currentProjectId, {
+                    status: 'in_progress',
+                    type: 'tone_suggestion'
+                });
+
                 const response = await authFetch('/api/auto-suggest-tone', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1958,27 +2348,38 @@ No formatting needed — just paste your narration!"></textarea>
                 });
 
                 const data = await response.json();
+
+                // Track completion
+                setBackgroundOp(currentProjectId, {
+                    status: 'completed',
+                    type: 'tone_suggestion',
+                    data: data
+                });
+
                 if (!response.ok) throw new Error(data.error || 'Tone suggestion failed');
 
-                const toneSelect = document.getElementById('toneSelect');
-                const suggestedTone = data.suggested_tone || 'conversational';
-                const options = Array.from(toneSelect.options);
-                const match = options.find(o => o.value.toLowerCase() === suggestedTone.toLowerCase());
-                if (match) {
-                    toneSelect.value = match.value;
-                } else {
-                    toneSelect.value = '';
+                // Update UI only if we are still on that project
+                if (currentProjectId === data.project_id || !data.project_id || true) {
+                    const toneSelect = document.getElementById('toneSelect');
+                    const suggestedTone = data.suggested_tone || 'conversational';
+                    const options = Array.from(toneSelect.options);
+                    const match = options.find(o => o.value.toLowerCase() === suggestedTone.toLowerCase());
+                    if (match) {
+                        toneSelect.value = match.value;
+                    } else {
+                        toneSelect.value = '';
+                    }
+
+                    const displayLabel = match ? match.textContent : suggestedTone;
+                    badge.innerHTML = `Suggested: <strong>${escapeHtml(displayLabel)}</strong> — ${escapeHtml(data.reasoning || '')}`;
+                    document.getElementById('wizardStepC').style.display = 'block';
                 }
 
-                const displayLabel = match ? match.textContent : suggestedTone;
-                badge.innerHTML = `Suggested: <strong>${escapeHtml(displayLabel)}</strong> — ${escapeHtml(data.reasoning || '')}`;
-
             } catch (error) {
-                badge.innerHTML = `<span style="color:#888">Could not auto-suggest tone</span>`;
+                badge.innerHTML = `<span style="color:#888">Could not auto-suggest tone: ${escapeHtml(error.message)}</span>`;
                 console.error('Tone suggestion error:', error);
+                document.getElementById('wizardStepC').style.display = 'block';
             }
-
-            document.getElementById('wizardStepC').style.display = 'block';
         }
 
         async function generateNarration() {
@@ -2004,6 +2405,14 @@ No formatting needed — just paste your narration!"></textarea>
 
             updatePhaseStatus(2, 'Writing narration…', 'running');
 
+            // Progressive status messages for long-running requests
+            const narrationStatusTimers = [
+                setTimeout(() => updatePhaseStatus(2, 'Still writing… this can take a moment', 'running'), 15000),
+                setTimeout(() => updatePhaseStatus(2, 'Model may be busy — retrying automatically…', 'running'), 30000),
+                setTimeout(() => updatePhaseStatus(2, 'Still retrying, please wait…', 'running'), 50000),
+            ];
+            const clearNarrationTimers = () => narrationStatusTimers.forEach(t => clearTimeout(t));
+
             try {
                 const formatPreset = document.getElementById('formatPresetSelect').value;
                 const customDuration = document.getElementById('customDurationInput').value;
@@ -2015,13 +2424,21 @@ No formatting needed — just paste your narration!"></textarea>
                 const customTone = toneVal === 'custom' ? document.getElementById('customToneInput').value.trim() : '';
 
                 if (audienceVal === 'custom' && !customAudience) {
+                    clearNarrationTimers();
                     btn.disabled = false; btnText.style.display = 'inline'; spinner.style.display = 'none';
                     return alert('You selected a custom audience — please describe who they are.');
                 }
                 if (toneVal === 'custom' && !customTone) {
+                    clearNarrationTimers();
                     btn.disabled = false; btnText.style.display = 'inline'; spinner.style.display = 'none';
                     return alert('You selected a custom tone — please describe the vibe you want.');
                 }
+
+                // Synchronous narration generation - Set background op to track
+                setBackgroundOp(currentProjectId, {
+                    status: 'in_progress',
+                    type: 'narration'
+                });
 
                 const response = await authFetch('/api/generate-script', {
                     method: 'POST',
@@ -2041,12 +2458,42 @@ No formatting needed — just paste your narration!"></textarea>
                         style_mode: styleMode,
                         style_blend_mode: document.querySelector('input[name="styleBlendMode"]:checked')?.value || 'clone',
                         style_transcript: styleTranscript,
-                        selected_title: selectedTitle || ''
+                        selected_title: selectedTitle || '',
+                        project_id: currentProjectId
                     }),
                 });
 
+                clearNarrationTimers();
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Narration generation failed');
+
+                // Synchronous completed
+                setBackgroundOp(currentProjectId, {
+                    status: 'completed',
+                    data: data,
+                    type: 'narration'
+                });
+
+                if (currentProjectId === data.project_id || !data.project_id) {
+                    currentNarration = data.narration;
+                    renderNarration(data.narration);
+                    document.getElementById('wizardStepD').style.display = 'block';
+
+                    const beats = data.narration?.narration || [];
+                    let actCount = 0;
+                    let beatCount = 0;
+                    if (Array.isArray(beats)) {
+                        actCount = new Set(beats.map(b => b.act)).size;
+                        beatCount = beats.length;
+                    }
+                    updatePhaseStatus(2, `Narration complete (${actCount} acts, ${beatCount} beats)`, 'complete');
+                    updateProdSourceBadge();
+
+                    // Auto-save after narration completes
+                    triggerAutosave();
+                } else {
+                    console.log(`[Background] Narration generation finished for inactive project.`);
+                }
 
                 currentNarration = data.narration;
                 renderNarration(data.narration);
@@ -2066,9 +2513,14 @@ No formatting needed — just paste your narration!"></textarea>
                 triggerAutosave();
 
             } catch (error) {
-                errorDiv.innerText = error.message;
+                clearNarrationTimers();
+                const msg = error.message || 'Narration generation failed';
+                const isRetryExhausted = msg.includes('after') && msg.includes('attempt');
+                errorDiv.innerText = isRetryExhausted
+                    ? `${msg} — The model is experiencing high demand. Please try again in a few minutes.`
+                    : msg;
                 errorDiv.style.display = 'block';
-                updatePhaseStatus(2, 'Error', 'error');
+                updatePhaseStatus(2, isRetryExhausted ? 'Model busy — retry later' : 'Error', 'error');
             } finally {
                 btn.disabled = false;
                 btnText.style.display = 'inline';
@@ -2077,7 +2529,9 @@ No formatting needed — just paste your narration!"></textarea>
         }
 
         function renderNarration(narrationObj) {
+            updateEstimatedShots(); // Update estimated shots when narration is loaded
             const container = document.getElementById('narrationDisplay');
+            container.innerHTML = '';
             const beats = Array.isArray(narrationObj) ? narrationObj : (narrationObj?.narration || []);
 
             if (!beats.length) {
@@ -2390,9 +2844,11 @@ No formatting needed — just paste your narration!"></textarea>
             const textarea = document.getElementById('prodPasteArea');
             const errorDiv = document.getElementById('phase3Error');
             errorDiv.style.display = 'none';
+            const rawText = textarea.value.trim();
+            if (!rawText) return;
 
             try {
-                const parsed = JSON.parse(textarea.value.trim());
+                const parsed = JSON.parse(rawText);
 
                 if (parsed.narration && Array.isArray(parsed.narration)) {
                     // Already narration format
@@ -2427,9 +2883,54 @@ No formatting needed — just paste your narration!"></textarea>
                 updateProdSourceBadge();
 
             } catch (error) {
-                errorDiv.innerText = `Import error: ${error.message}`;
-                errorDiv.style.display = 'block';
-                updatePhaseStatus(3, '❌ Import failed', 'error');
+                // Not valid JSON, assume it is plain text script
+                console.log("Failed to parse as JSON, treating as plain text script.");
+                currentNarration = {
+                    title: "Pasted Script",
+                    duration_minutes: 10, // Default
+                    narration: [
+                        { act: "ACT 1", beat: "Full Text", text: rawText }
+                    ],
+                    raw_text: rawText
+                };
+                updatePhaseStatus(3, `✅ Imported text — ready to generate`, 'complete');
+                updateProdSourceBadge();
+            }
+        }
+        function updateEstimatedShots() {
+            if (!currentNarration || !currentNarration.narration) {
+                document.getElementById('estimatedShotsDisplay').textContent = '--';
+                return;
+            }
+
+            // Calculate total words
+            let totalWords = 0;
+            currentNarration.narration.forEach(beat => {
+                const text = beat.text || beat.narration || '';
+                totalWords += text.split(/\s+/).filter(w => w.length > 0).length;
+            });
+
+            const pacingTier = document.getElementById('pacingTierSelect').value;
+            let wordsPerShot = 9; // Standard
+            if (pacingTier === 'Meditative') wordsPerShot = 15;
+            else if (pacingTier === 'Relaxed') wordsPerShot = 11;
+            else if (pacingTier === 'High Energy') wordsPerShot = 5;
+            else if (pacingTier === 'Frenetic') wordsPerShot = 3;
+
+            const estimatedShots = Math.max(1, Math.floor(totalWords / wordsPerShot));
+            document.getElementById('estimatedShotsDisplay').textContent = `~${estimatedShots} shots`;
+        }
+
+        function updateQualityModeHint() {
+            const mode = document.getElementById('qualityModeSelect').value;
+            const hint = document.getElementById('qualityModeHint');
+            const costBadge = document.getElementById('productionCostBadge');
+            if (mode === 'max_quality') {
+                hint.textContent = 'Director \u2192 Storyboard \u2192 DP: three focused Gemini calls for higher quality prompts.';
+                costBadge.textContent = '~$0.60\u20131.50';
+            } else {
+                hint.textContent = 'Single call handles cutting, visuals, and prompts together.';
+                costBadge.textContent = '~$0.20\u20130.50';
             }
         }
 
@@ -2447,13 +2948,26 @@ No formatting needed — just paste your narration!"></textarea>
             errorDiv.style.display = 'none';
             document.getElementById('productionResults').style.display = 'none';
 
-            updatePhaseStatus(3, 'Generating prompts…', 'running');
+            const qualityMode = document.getElementById('qualityModeSelect').value;
+            const modeLabel = qualityMode === 'max_quality' ? '3-Phase Max Quality' : 'Fast';
+            updatePhaseStatus(3, `Generating prompts (${modeLabel})\u2026`, 'running');
+
+            // Progressive status messages for long-running requests
+            const prodStatusTimers = [
+                setTimeout(() => updatePhaseStatus(3, 'Still generating prompts\u2026 this can take a moment', 'running'), 15000),
+                setTimeout(() => updatePhaseStatus(3, 'Model may be busy \u2014 retrying automatically\u2026', 'running'), 30000),
+                setTimeout(() => updatePhaseStatus(3, 'Still retrying, please wait\u2026', 'running'), 50000),
+            ];
+            const clearProdTimers = () => prodStatusTimers.forEach(t => clearTimeout(t));
 
             try {
                 const requestBody = {
                     narration: currentNarration,
                     duration_minutes: currentNarration.duration_minutes
                         || getSelectedDuration(),
+                    project_id: currentProjectId,
+                    pacing_tier: document.getElementById('pacingTierSelect').value,
+                    quality_mode: qualityMode
                 };
 
                 if (approvedStyle) {
@@ -2465,28 +2979,67 @@ No formatting needed — just paste your narration!"></textarea>
                     console.log('[Production] No style approved — using default cinematic style');
                 }
 
+                // Include creative direction if active
+                if (currentCreativeDirection) {
+                    requestBody.creative_direction = currentCreativeDirection;
+                    console.log('[Production] Using creative direction:', currentCreativeDirection.direction_summary);
+                }
+
+                // Synchronous production table generation - Set background op to track
+                setBackgroundOp(currentProjectId, {
+                    status: 'in_progress',
+                    type: 'production'
+                });
+
                 const response = await authFetch('/api/generate-production-table', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(requestBody),
                 });
 
+                clearProdTimers();
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.error || 'Production table generation failed');
 
-                currentProductionData = data;
-                renderProductionTable(data.production_table);
+                // Synchronous completed
+                setBackgroundOp(currentProjectId, {
+                    status: 'completed',
+                    data: data,
+                    type: 'production'
+                });
 
-                const shotCount = data.production_table?.total_shots || data.production_table?.shots?.length || '?';
-                updatePhaseStatus(3, `✅ Complete — ${shotCount} shots`, 'complete');
+                if (currentProjectId === data.project_id || !data.project_id) {
+                    currentProductionData = data;
+                    renderProductionTable(data.production_table);
 
-                // Auto-save after production table completes
-                triggerAutosave();
+                    const shotCount = data.production_table?.total_shots || data.production_table?.shots?.length || '?';
+                    const batchWarning = data.production_table?.batch_warning;
+                    if (batchWarning) {
+                        updatePhaseStatus(3, `⚠️ Partial — ${shotCount} shots (some sections failed)`, 'complete');
+                        errorDiv.innerText = batchWarning;
+                        errorDiv.style.display = 'block';
+                        errorDiv.style.background = '#fff3cd';
+                        errorDiv.style.color = '#856404';
+                        errorDiv.style.border = '1px solid #ffc107';
+                    } else {
+                        updatePhaseStatus(3, `✅ Complete — ${shotCount} shots`, 'complete');
+                    }
+
+                    // Auto-save after production table completes
+                    triggerAutosave();
+                } else {
+                    console.log(`[Background] Production table generation finished for inactive project.`);
+                }
 
             } catch (error) {
-                errorDiv.innerText = error.message;
+                clearProdTimers();
+                const msg = error.message || 'Production table generation failed';
+                const isRetryExhausted = msg.includes('after') && msg.includes('attempt');
+                errorDiv.innerText = isRetryExhausted
+                    ? `${msg} — The model is experiencing high demand. Please try again in a few minutes.`
+                    : msg;
                 errorDiv.style.display = 'block';
-                updatePhaseStatus(3, '❌ Error', 'error');
+                updatePhaseStatus(3, isRetryExhausted ? 'Model busy — retry later' : '❌ Error', 'error');
             } finally {
                 btn.disabled = false;
                 btnText.style.display = 'inline';
@@ -2783,6 +3336,14 @@ No formatting needed — just paste your narration!"></textarea>
             // Populate style summary
             document.getElementById('reviewStyleSummary').value = styleData.style_summary || '';
 
+            // Populate character description
+            document.getElementById('reviewCharacterDescription').value = intent.character_description || '';
+
+            // Populate environment description and rendering split
+            document.getElementById('reviewEnvironmentDescription').value = intent.environment_description || '';
+            document.getElementById('reviewRenderingSplit').value = intent.rendering_split || 'unified';
+            updateRenderingSplitUI();
+
             // Populate style intent fields
             document.getElementById('reviewDetailLevel').value = intent.detail_level || '';
             document.getElementById('reviewSceneComplexity').value = intent.scene_complexity || '';
@@ -2794,7 +3355,7 @@ No formatting needed — just paste your narration!"></textarea>
             document.getElementById('reviewTexture').value = intent.texture || '';
             document.getElementById('reviewMoodDefault').value = intent.mood_default || '';
 
-            // Build schema checklist
+            // Build schema checklist with layer badges
             const alwaysInclude = schema.always_include || ['shot_size', 'subject', 'arrangement', 'background'];
             const include = schema.include || [];
             const exclude = schema.exclude || [];
@@ -2805,23 +3366,115 @@ No formatting needed — just paste your narration!"></textarea>
                 const isLocked = field.locked;
                 const isChecked = isLocked || activeFields.has(field.key);
                 const isExcluded = exclude.includes(field.key);
+                const layerBadge = field.layer === 'character'
+                    ? '<span class="layer-badge layer-char">CHR</span>'
+                    : field.layer === 'environment'
+                        ? '<span class="layer-badge layer-env">ENV</span>'
+                        : '<span class="layer-badge layer-both">ALL</span>';
                 return `
                     <label class="schema-field ${isLocked ? 'schema-field-locked' : ''}">
                         <input type="checkbox" value="${field.key}"
                             ${isChecked && !isExcluded ? 'checked' : ''}
-                            ${isLocked ? 'disabled' : ''}>
+                            ${isLocked ? 'disabled' : ''}
+                            onchange="checkSchemaConflicts()">
+                        ${layerBadge}
                         <span>${field.label}</span>
                     </label>
                 `;
             }).join('');
 
+            // Check for schema conflicts after rendering
+            checkSchemaConflicts();
+
+            // Store original summary for stale detection & clear any stale indicators
+            originalStyleSummary = styleData.style_summary || '';
+            document.querySelectorAll('.review-input.stale-field').forEach(el => {
+                el.classList.remove('stale-field');
+            });
+
+            // Inject info tooltips and stale detection
+            injectInfoTooltips();
+            initStaleDetection();
+
             // Scroll to panel
             panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        function injectInfoTooltips() {
+            Object.entries(STYLE_FIELD_TOOLTIPS).forEach(([inputId, tip]) => {
+                const input = document.getElementById(inputId);
+                if (!input) return;
+                const field = input.closest('.review-field');
+                const label = field ? field.querySelector('label') : null;
+                if (!label || label.querySelector('.info-tooltip-trigger')) return;
+
+                const trigger = document.createElement('span');
+                trigger.className = 'info-tooltip-trigger';
+                let examplesHtml = '';
+                if (tip.good) {
+                    examplesHtml += `<div class="tooltip-example good"><span class="tooltip-label">Good:</span> "${tip.good}"</div>`;
+                }
+                if (tip.bad) {
+                    examplesHtml += `<div class="tooltip-example bad"><span class="tooltip-label">Bad:</span> "${tip.bad}"</div>`;
+                }
+                trigger.innerHTML = `
+                    <svg class="info-icon" viewBox="0 0 16 16" width="14" height="14">
+                        <circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5" fill="none"/>
+                        <text x="8" y="12" text-anchor="middle" font-size="10" fill="currentColor" font-weight="bold">i</text>
+                    </svg>
+                    <div class="info-tooltip">
+                        <p>${tip.desc}</p>
+                        ${examplesHtml}
+                    </div>
+                `;
+                label.appendChild(trigger);
+            });
+        }
+
+        function initStaleDetection() {
+            const summaryEl = document.getElementById('reviewStyleSummary');
+            if (!summaryEl || summaryEl.dataset.staleInit) return;
+            summaryEl.dataset.staleInit = 'true';
+
+            const intentFieldIds = [
+                'reviewCharacterDescription', 'reviewEnvironmentDescription',
+                'reviewDetailLevel', 'reviewSceneComplexity', 'reviewCameraLanguage',
+                'reviewLighting', 'reviewSubjectFraming', 'reviewWritingStyle',
+                'reviewColorPalette', 'reviewTexture', 'reviewMoodDefault'
+            ];
+
+            // When Style Summary changes, mark all intent fields as stale
+            summaryEl.addEventListener('input', () => {
+                if (originalStyleSummary === null) return;
+                const isChanged = summaryEl.value !== originalStyleSummary;
+                intentFieldIds.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    if (isChanged) {
+                        el.classList.add('stale-field');
+                    } else {
+                        el.classList.remove('stale-field');
+                    }
+                });
+            });
+
+            // When a field is manually edited, remove its stale indicator
+            intentFieldIds.forEach(id => {
+                const el = document.getElementById(id);
+                if (!el || el.dataset.staleInit) return;
+                el.dataset.staleInit = 'true';
+                el.addEventListener('input', () => {
+                    el.classList.remove('stale-field');
+                });
+            });
         }
 
         function approveStyle() {
             // Read all values from the review panel
             const intent = {
+                character_description: document.getElementById('reviewCharacterDescription').value,
+                environment_description: document.getElementById('reviewEnvironmentDescription').value,
+                rendering_split: document.getElementById('reviewRenderingSplit').value,
                 detail_level: document.getElementById('reviewDetailLevel').value,
                 scene_complexity: document.getElementById('reviewSceneComplexity').value,
                 camera_language: document.getElementById('reviewCameraLanguage').value,
@@ -2869,6 +3522,249 @@ No formatting needed — just paste your narration!"></textarea>
             document.getElementById('styleApprovedBadge').style.display = 'none';
             document.getElementById('styleAnalysisResult').style.display = 'none';
             document.getElementById('styleTextSection').style.display = 'block';
+        }
+
+        function checkSchemaConflicts() {
+            const renderSplit = document.getElementById('reviewRenderingSplit').value;
+            const detailLevel = (document.getElementById('reviewDetailLevel').value || '').toLowerCase();
+            const banner = document.getElementById('schemaWarningBanner');
+            if (!banner) return;
+
+            const isHybrid = renderSplit === 'hybrid';
+            const isMinimalist = detailLevel.includes('minimal');
+
+            if (!isHybrid && !isMinimalist) {
+                banner.style.display = 'none';
+                return;
+            }
+
+            // Check if cinematic ENV fields are enabled
+            const cinematicEnvFields = ['camera_aperture', 'dof', 'film_stock', 'camera_lens'];
+            const enabledCinematic = [];
+            cinematicEnvFields.forEach(key => {
+                const cb = document.querySelector(`#schemaFieldsChecklist input[value="${key}"]`);
+                if (cb && cb.checked) enabledCinematic.push(key);
+            });
+
+            if (enabledCinematic.length > 0 && (isMinimalist || isHybrid)) {
+                banner.style.display = 'block';
+                if (isHybrid) {
+                    banner.innerHTML = `<strong>Hybrid mode:</strong> Cinematic fields (${enabledCinematic.join(', ')}) will apply to <em>environments only</em> — not to the minimalist character rendering.`;
+                } else {
+                    banner.innerHTML = `<strong>Note:</strong> Character detail is "${document.getElementById('reviewDetailLevel').value}" but cinematic fields (${enabledCinematic.join(', ')}) are enabled. Consider switching to <em>Hybrid</em> rendering mode if you want rich environments with minimalist characters.`;
+                }
+            } else {
+                banner.style.display = 'none';
+            }
+        }
+
+        function updateRenderingSplitUI() {
+            const split = document.getElementById('reviewRenderingSplit').value;
+            const envPanel = document.querySelector('.style-sub-panel-environment');
+            if (envPanel) {
+                if (split === 'hybrid') {
+                    envPanel.classList.add('hybrid-highlight');
+                } else {
+                    envPanel.classList.remove('hybrid-highlight');
+                }
+            }
+            checkSchemaConflicts();
+        }
+
+        /* ── Creative Direction Functions ── */
+
+        async function expandCreativeDirection() {
+            const direction = document.getElementById('creativeDirectionInput').value.trim();
+            if (!direction) return alert('Please describe the type of video you want.');
+
+            const btn = document.getElementById('expandDirectionBtn');
+            btn.disabled = true;
+            btn.textContent = 'Expanding...';
+
+            try {
+                const requestBody = { direction };
+
+                // Include narration context if available
+                if (currentNarration) {
+                    requestBody.narration_context = currentNarration;
+                }
+
+                const response = await authFetch('/api/expand-creative-direction', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody),
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Creative direction expansion failed');
+
+                currentCreativeDirection = data.creative_direction;
+                showCreativeDirectionResult(currentCreativeDirection);
+
+            } catch (error) {
+                console.error('Creative direction expansion error:', error);
+                alert('Failed to expand creative direction: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Expand with AI';
+            }
+        }
+
+        async function refineCreativeDirection() {
+            const feedback = document.getElementById('directionRefineInput').value.trim();
+            if (!feedback) return alert('Please describe what to adjust.');
+            if (!currentCreativeDirection) return alert('No direction to refine. Expand first.');
+
+            const btn = document.getElementById('refineDirectionBtn');
+            btn.disabled = true;
+            btn.textContent = 'Refining...';
+
+            try {
+                const requestBody = {
+                    current_direction: currentCreativeDirection,
+                    feedback: feedback,
+                };
+                if (currentNarration) {
+                    requestBody.narration_context = currentNarration;
+                }
+
+                const response = await authFetch('/api/refine-creative-direction', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody),
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Creative direction refinement failed');
+
+                currentCreativeDirection = data.creative_direction;
+                showCreativeDirectionResult(currentCreativeDirection);
+                document.getElementById('directionRefineInput').value = '';
+
+            } catch (error) {
+                console.error('Creative direction refinement error:', error);
+                alert('Failed to refine direction: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Re-refine';
+            }
+        }
+
+        function showCreativeDirectionResult(direction) {
+            const resultDiv = document.getElementById('creativeDirectionResult');
+            resultDiv.style.display = 'block';
+
+            // Show summary
+            document.getElementById('directionSummaryDisplay').innerHTML =
+                `<strong>${escapeHtml(direction.direction_summary || '')}</strong>`;
+
+            // Show detail fields
+            const detailFields = [
+                { key: 'video_format', label: 'Video Format' },
+                { key: 'visual_language', label: 'Visual Language' },
+                { key: 'narrative_approach', label: 'Narrative Approach' },
+                { key: 'pacing_philosophy', label: 'Pacing Philosophy' },
+                { key: 'world_building', label: 'World Building' },
+                { key: 'character_approach', label: 'Character Approach' },
+                { key: 'tone_and_feel', label: 'Tone & Feel' },
+            ];
+
+            document.getElementById('directionDetailsDisplay').innerHTML = detailFields.map(f => `
+                <div class="direction-detail-item">
+                    <label>${f.label}</label>
+                    <span>${escapeHtml(direction[f.key] || 'Not specified')}</span>
+                </div>
+            `).join('');
+
+            resultDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        function captureCurrentStyleFields() {
+            return {
+                style_summary: document.getElementById('reviewStyleSummary')?.value || '',
+                character_description: document.getElementById('reviewCharacterDescription')?.value || '',
+                environment_description: document.getElementById('reviewEnvironmentDescription')?.value || '',
+                rendering_split: document.getElementById('reviewRenderingSplit')?.value || 'unified',
+                detail_level: document.getElementById('reviewDetailLevel')?.value || '',
+                scene_complexity: document.getElementById('reviewSceneComplexity')?.value || '',
+                camera_language: document.getElementById('reviewCameraLanguage')?.value || '',
+                lighting_instruction: document.getElementById('reviewLighting')?.value || '',
+                subject_framing: document.getElementById('reviewSubjectFraming')?.value || '',
+                writing_style: document.getElementById('reviewWritingStyle')?.value || '',
+                color_palette: document.getElementById('reviewColorPalette')?.value || '',
+                texture: document.getElementById('reviewTexture')?.value || '',
+                mood_default: document.getElementById('reviewMoodDefault')?.value || '',
+            };
+        }
+
+        function applyCreativeDirection() {
+            if (!currentCreativeDirection) return;
+
+            const defaults = currentCreativeDirection.suggested_style_defaults;
+            if (!defaults) {
+                console.warn('[Creative Direction] No suggested style defaults to apply');
+                return;
+            }
+
+            // Capture what's currently in the panel before overwriting
+            const panelVisible = document.getElementById('styleReviewPanel').style.display !== 'none';
+            let previousSnapshot = null;
+
+            if (panelVisible && lastAutoSuggestedStyle) {
+                previousSnapshot = captureCurrentStyleFields();
+            }
+
+            // Apply new AI-suggested defaults to the Style Review panel
+            showStyleReviewPanel(defaults);
+
+            // Merge: restore fields the user manually changed
+            if (previousSnapshot && lastAutoSuggestedStyle) {
+                const fieldMap = {
+                    'style_summary': 'reviewStyleSummary',
+                    'character_description': 'reviewCharacterDescription',
+                    'environment_description': 'reviewEnvironmentDescription',
+                    'rendering_split': 'reviewRenderingSplit',
+                    'detail_level': 'reviewDetailLevel',
+                    'scene_complexity': 'reviewSceneComplexity',
+                    'camera_language': 'reviewCameraLanguage',
+                    'lighting_instruction': 'reviewLighting',
+                    'subject_framing': 'reviewSubjectFraming',
+                    'writing_style': 'reviewWritingStyle',
+                    'color_palette': 'reviewColorPalette',
+                    'texture': 'reviewTexture',
+                    'mood_default': 'reviewMoodDefault',
+                };
+
+                for (const [key, elId] of Object.entries(fieldMap)) {
+                    const userVal = previousSnapshot[key];
+                    const autoVal = lastAutoSuggestedStyle[key];
+                    // If user changed this field from what auto-suggest originally set, keep their edit
+                    if (userVal && autoVal && userVal !== autoVal) {
+                        document.getElementById(elId).value = userVal;
+                    }
+                }
+            }
+
+            // Track the new auto-suggested values for future comparison
+            lastAutoSuggestedStyle = captureCurrentStyleFields();
+
+            // Clear approved style so user must re-approve
+            approvedStyle = null;
+            document.getElementById('styleApprovedBadge').style.display = 'none';
+
+            // Show the "Active" badge on the direction
+            document.getElementById('directionApprovedBadge').style.display = 'inline-block';
+
+            console.log('[Creative Direction] Applied direction and auto-suggested style defaults');
+        }
+
+        function clearCreativeDirection() {
+            currentCreativeDirection = null;
+            lastAutoSuggestedStyle = null;
+            document.getElementById('creativeDirectionResult').style.display = 'none';
+            document.getElementById('directionApprovedBadge').style.display = 'none';
+            document.getElementById('creativeDirectionInput').value = '';
+            document.getElementById('directionRefineInput').value = '';
         }
 
         /* ── Utility ── */
@@ -2989,6 +3885,7 @@ No formatting needed — just paste your narration!"></textarea>
             veoModel: 'veo-3.1-generate-preview',
             styleImages: [],
             additionalContext: '',
+            styleMode: 'art_only',
         };
         let visualsCharacters = [];
         let charModalImages = [];  // temp images for character modal
@@ -3013,12 +3910,29 @@ No formatting needed — just paste your narration!"></textarea>
                 if (currentProductionData?.production_table?.shots?.length) {
                     pt = currentProductionData.production_table;
                     console.log('[Visuals] Using in-memory production data from Phase 3');
-                } else {
-                    // Fallback: fetch from server API
-                    const res = await authFetch('/api/latest-production-table');
+                } else if (currentProjectId) {
+                    // Second: load from backend project doc
+                    const res = await authFetch(`/api/projects/${currentProjectId}`);
+                    const data = await res.json();
+                    if (data.success && data.project.production_data) {
+                        const prodData = typeof data.project.production_data === 'string'
+                            ? JSON.parse(data.project.production_data)
+                            : data.project.production_data;
+                        if (prodData && prodData.production_table && prodData.production_table.shots) {
+                            pt = prodData.production_table;
+                            currentProductionData = prodData; // Cache it
+                            console.log('[Visuals] Loaded production data from project doc');
+                        }
+                    }
+                }
+
+                if (!pt) {
+                    // Fallback: fetch from server .tmp folder (for backward compatibility)
+                    const res = await authFetch('/api/latest-production-table' + (currentProjectId ? `?project_id=${currentProjectId}` : ''));
                     const data = await res.json();
                     if (!res.ok) throw new Error(data.error || 'Failed to load production table');
                     pt = data.production_table;
+                    console.log('[Visuals] Loaded production data from latest-production-table endpoint');
                 }
 
                 if (!pt || !pt.shots || !Array.isArray(pt.shots)) {
@@ -3098,6 +4012,9 @@ No formatting needed — just paste your narration!"></textarea>
                 veoModel: null,
                 operationName: null,
                 markedForAnimation: false,
+                markedForImageGen: false,
+                selectedCharacters: [],  // empty = all characters; array of names to filter
+                imageHistory: [],  // [{url, timestamp, filename}, ...] from Firebase Storage
             }));
 
             visualsGenerationPhase = 'idle';
@@ -3110,6 +4027,9 @@ No formatting needed — just paste your narration!"></textarea>
             document.getElementById('visualsSceneCount').textContent = `${visualsScenes.length} scenes`;
 
             renderVisualsScenes();
+
+            // Fetch image history from Firebase Storage (populates history strips)
+            fetchImageHistory();
         }
 
         // ── Config ──
@@ -3119,6 +4039,7 @@ No formatting needed — just paste your narration!"></textarea>
             visualsConfig.imageModel = document.getElementById('visImageModel').value;
             visualsConfig.veoModel = document.getElementById('visVeoModel').value;
             visualsConfig.additionalContext = document.getElementById('visAdditionalContext').value;
+            visualsConfig.styleMode = document.getElementById('visStyleMode').value;
             updateBatchCostBadges();
         }
 
@@ -3173,6 +4094,7 @@ No formatting needed — just paste your narration!"></textarea>
         function openAddCharacterModal() {
             charModalImages = [];
             document.getElementById('charNameInput').value = '';
+            document.getElementById('charRefModeInput').value = 'identity';
             document.getElementById('charImagePreviews').innerHTML = '';
             document.getElementById('characterModal').style.display = 'flex';
         }
@@ -3221,7 +4143,8 @@ No formatting needed — just paste your narration!"></textarea>
             if (!name) { alert('Character name is required'); return; }
             if (!charModalImages.length) { alert('At least one reference image is required'); return; }
 
-            visualsCharacters.push({ name, images: [...charModalImages] });
+            const refMode = document.getElementById('charRefModeInput').value;
+            visualsCharacters.push({ name, images: [...charModalImages], refMode });
             closeCharacterModal();
             renderCharacterList();
         }
@@ -3237,29 +4160,52 @@ No formatting needed — just paste your narration!"></textarea>
                 container.innerHTML = '<p class="paste-hint">No characters defined yet.</p>';
                 return;
             }
-            container.innerHTML = visualsCharacters.map((ch, i) => `
+            container.innerHTML = visualsCharacters.map((ch, i) => {
+                const imgs = ch.images || [];
+                const imgCount = imgs.length || ch.imageCount || 0;
+                return `
                 <div class="character-card">
                     <div class="character-card-images">
-                        ${ch.images.map(img => `<img src="${img.data}" alt="${ch.name}">`).join('')}
+                        ${imgs.length > 0 ? imgs.map(img => `<img src="${img.data}" alt="${ch.name}">`).join('') : `<span class="paste-hint" style="padding:8px;font-size:0.8rem">${imgCount} image${imgCount !== 1 ? 's' : ''} (re-upload to preview)</span>`}
                     </div>
                     <div class="character-card-info">
                         <strong>${escapeHtml(ch.name)}</strong>
-                        <span>${ch.images.length} reference image${ch.images.length > 1 ? 's' : ''}</span>
+                        <span>${imgCount} ref image${imgCount !== 1 ? 's' : ''}</span>
+                        <select class="char-ref-mode-select" onchange="visualsCharacters[${i}].refMode = this.value">
+                            <option value="identity" ${ch.refMode !== 'full_look' ? 'selected' : ''}>Identity Only</option>
+                            <option value="full_look" ${ch.refMode === 'full_look' ? 'selected' : ''}>Full Look</option>
+                        </select>
                     </div>
                     <button class="btn-secondary btn-small" onclick="removeCharacter(${i})">Remove</button>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         // Collect all character images as flat array of base64 data URIs
         function getAllCharacterImages() {
             const all = [];
             for (const ch of visualsCharacters) {
-                for (const img of ch.images) {
+                for (const img of (ch.images || [])) {
                     if (all.length < 10) all.push(img.data);
                 }
             }
             return all;
+        }
+
+        function getStructuredCharacters(sceneIdx = null) {
+            let chars = visualsCharacters;
+            if (sceneIdx !== null) {
+                const scene = visualsScenes[sceneIdx];
+                if (scene && scene.selectedCharacters && scene.selectedCharacters.length > 0) {
+                    const selected = new Set(scene.selectedCharacters);
+                    chars = visualsCharacters.filter(ch => selected.has(ch.name));
+                }
+            }
+            return chars.map(ch => ({
+                name: ch.name,
+                images: (ch.images || []).map(img => img.data).slice(0, 4),
+                ref_mode: ch.refMode || 'identity'
+            }));
         }
 
         // ── Scene Card Rendering ──
@@ -3290,6 +4236,28 @@ No formatting needed — just paste your narration!"></textarea>
                     <div class="scene-card-narration">
                         <p>"${escapeHtml(s.scriptBeat)}"</p>
                     </div>
+                    ${visualsCharacters.length > 0 ? `
+                    <div class="scene-character-selector" id="scene-chars-${idx}">
+                        <div class="scene-chars-header" onclick="toggleSceneCharSelector(${idx})">
+                            <span class="scene-chars-label">Characters: ${s.selectedCharacters && s.selectedCharacters.length > 0
+                            ? s.selectedCharacters.join(', ')
+                            : 'All (' + visualsCharacters.length + ')'
+                        }</span>
+                            <span class="scene-chars-toggle">&#9660;</span>
+                        </div>
+                        <div class="scene-chars-body" id="scene-chars-body-${idx}" style="display: none;">
+                            ${visualsCharacters.map(ch => `
+                                <label class="scene-char-checkbox">
+                                    <input type="checkbox"
+                                        ${(!s.selectedCharacters || s.selectedCharacters.length === 0 || s.selectedCharacters.includes(ch.name)) ? 'checked' : ''}
+                                        onchange="toggleSceneCharacter(${idx}, '${ch.name.replace(/'/g, "\\\\'")}', this.checked)">
+                                    <img src="${ch.images[0]?.data || ''}" class="scene-char-thumb" alt="${escapeHtml(ch.name)}">
+                                    <span>${escapeHtml(ch.name)}</span>
+                                </label>
+                            `).join('')}
+                        </div>
+                    </div>
+                    ` : ''}
                     <div class="scene-card-body">
                         <div class="scene-image-section">
                             <div class="scene-section-header">
@@ -3308,6 +4276,17 @@ No formatting needed — just paste your narration!"></textarea>
                                        </div>`
                         : `<div class="scene-placeholder">Image will appear here</div>`
                     }
+                            </div>
+                            <div class="scene-image-history" id="scene-history-${idx}"></div>
+                            <div class="scene-image-controls">
+                                <label class="scene-animate-toggle">
+                                    <input type="checkbox" ${s.markedForImageGen ? 'checked' : ''}
+                                        onchange="visualsScenes[${idx}].markedForImageGen = this.checked; updateGenerateMarkedBtn()">
+                                    Generate this image
+                                </label>
+                                <button class="btn-small" onclick="generateSceneImage(${idx})" ${s.imageStatus === 'generating' ? 'disabled' : ''}>
+                                    ${s.imageUrl ? 'Regenerate' : 'Generate'}
+                                </button>
                             </div>
                         </div>
                         <div class="scene-video-section">
@@ -3342,10 +4321,23 @@ No formatting needed — just paste your narration!"></textarea>
                     <div class="scene-status-bar" id="scene-status-${idx}">
                         ${getStatusHtml(s)}
                     </div>
+                    <div class="scene-debug-panel" id="scene-debug-${idx}" style="display: none;">
+                        <div class="scene-debug-header" onclick="toggleDebugPanel(${idx})">
+                            Prompt Debug Preview
+                        </div>
+                        <div class="scene-debug-content" id="scene-debug-content-${idx}">
+                            <pre></pre>
+                        </div>
+                    </div>
+                    <div class="scene-card-footer">
+                        <button class="btn-tiny btn-secondary scene-debug-toggle"
+                            onclick="toggleDebugPanel(${idx})" title="Show prompt debug info">Debug</button>
+                    </div>
                 </div>`;
             }).join('');
 
             updateAnimateAllBtn();
+            updateGenerateMarkedBtn();
             updateBatchCostBadges();
         }
 
@@ -3360,6 +4352,88 @@ No formatting needed — just paste your narration!"></textarea>
             if (vidStatus === 'complete') return '<span class="status-complete">Image + Video ready</span>';
             if (imgStatus === 'complete') return '<span class="status-complete">Image ready</span>';
             return '<span class="status-idle">Pending</span>';
+        }
+
+        // ── Per-Scene Character Selector ──
+        function toggleSceneCharSelector(idx) {
+            const body = document.getElementById(`scene-chars-body-${idx}`);
+            if (body) body.style.display = body.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        function toggleSceneCharacter(idx, charName, checked) {
+            const scene = visualsScenes[idx];
+            if (!scene.selectedCharacters) scene.selectedCharacters = [];
+
+            if (checked) {
+                if (!scene.selectedCharacters.includes(charName)) {
+                    scene.selectedCharacters.push(charName);
+                }
+            } else {
+                scene.selectedCharacters = scene.selectedCharacters.filter(n => n !== charName);
+            }
+
+            // If all characters are selected, reset to empty (meaning "all")
+            if (scene.selectedCharacters.length === visualsCharacters.length) {
+                scene.selectedCharacters = [];
+            }
+
+            // Update the header label
+            const label = document.querySelector(`#scene-chars-${idx} .scene-chars-label`);
+            if (label) {
+                label.textContent = 'Characters: ' + (
+                    scene.selectedCharacters.length > 0
+                        ? scene.selectedCharacters.join(', ')
+                        : 'All (' + visualsCharacters.length + ')'
+                );
+            }
+
+            updateDebugPanel(idx);
+        }
+
+        // ── Debug Preview Panel ──
+        function toggleDebugPanel(idx) {
+            const panel = document.getElementById(`scene-debug-${idx}`);
+            if (!panel) return;
+            const isHidden = panel.style.display === 'none';
+            panel.style.display = isHidden ? 'block' : 'none';
+            if (isHidden) updateDebugPanel(idx);
+        }
+
+        function updateDebugPanel(idx) {
+            const content = document.getElementById(`scene-debug-content-${idx}`);
+            if (!content || content.parentElement.style.display === 'none') return;
+
+            const s = visualsScenes[idx];
+            const chars = getStructuredCharacters(idx);
+            const styleCount = visualsConfig.styleImages.length;
+            const ctx = visualsConfig.additionalContext || '(none)';
+
+            let charSummary = '';
+            if (chars.length === 0) {
+                charSummary = '  (no characters defined)\n';
+            } else {
+                chars.forEach(ch => {
+                    charSummary += `  - "${ch.name}" (${ch.ref_mode || 'identity'}): ${ch.images.length} reference image(s)\n`;
+                });
+            }
+
+            const debug =
+                `=== PROMPT THAT WILL BE SENT ===
+
+CHARACTERS (${chars.length}):
+${charSummary}
+STYLE IMAGES: ${styleCount}
+STYLE MODE: ${visualsConfig.styleMode || 'art_only'}
+ADDITIONAL CONTEXT: ${ctx}
+
+SCENE PROMPT:
+${s.imagePrompt}
+
+MODEL: ${s.imageModel || visualsConfig.imageModel}
+ASPECT: ${visualsConfig.aspectRatio}
+RESOLUTION: ${visualsConfig.resolution}`;
+
+            content.querySelector('pre').textContent = debug;
         }
 
         function updateSceneCard(idx) {
@@ -3391,6 +4465,9 @@ No formatting needed — just paste your narration!"></textarea>
                     vidContainer.innerHTML = '<div class="scene-placeholder generating">Animating...</div>';
                 }
             }
+            // Update history strip
+            renderImageHistoryStrip(idx);
+
             // Update status bar
             const statusBar = document.getElementById(`scene-status-${idx}`);
             if (statusBar) statusBar.innerHTML = getStatusHtml(s);
@@ -3400,6 +4477,13 @@ No formatting needed — just paste your narration!"></textarea>
             if (card) {
                 const animBtn = card.querySelector('.scene-animation-controls button');
                 if (animBtn) animBtn.disabled = !s.imageUrl;
+
+                // Update per-scene image generate button
+                const imgGenBtn = card.querySelector('.scene-image-controls button');
+                if (imgGenBtn) {
+                    imgGenBtn.disabled = s.imageStatus === 'generating';
+                    imgGenBtn.textContent = s.imageUrl ? 'Regenerate' : (s.imageStatus === 'generating' ? 'Generating...' : 'Generate');
+                }
             }
         }
 
@@ -3409,6 +4493,17 @@ No formatting needed — just paste your narration!"></textarea>
             if (markedCount > 0) {
                 btn.style.display = 'inline-block';
                 btn.textContent = `Animate ${markedCount} Marked Scene${markedCount > 1 ? 's' : ''}`;
+            } else {
+                btn.style.display = 'none';
+            }
+        }
+
+        function updateGenerateMarkedBtn() {
+            const markedCount = visualsScenes.filter(s => s.markedForImageGen && s.imageStatus !== 'complete').length;
+            const btn = document.getElementById('generateMarkedImagesBtn');
+            if (markedCount > 0) {
+                btn.style.display = 'inline-block';
+                btn.textContent = `Generate ${markedCount} Marked Image${markedCount > 1 ? 's' : ''}`;
             } else {
                 btn.style.display = 'none';
             }
@@ -3454,8 +4549,11 @@ No formatting needed — just paste your narration!"></textarea>
                 aspect_ratio: visualsConfig.aspectRatio,
                 resolution: visualsConfig.resolution,
                 style_images: visualsConfig.styleImages.map(img => img.data),
+                characters: getStructuredCharacters(idx),
                 character_images: getAllCharacterImages(),
                 additional_context: visualsConfig.additionalContext,
+                style_mode: visualsConfig.styleMode,
+                project_id: currentProjectId,
             };
         }
 
@@ -3482,6 +4580,8 @@ No formatting needed — just paste your narration!"></textarea>
                 s.imageUrl = data.image_url;
                 // Auto-save after image generation
                 triggerAutosave();
+                // Refresh history for this scene (new image was added to Storage)
+                fetchImageHistoryForScene(idx);
             } catch (e) {
                 s.imageStatus = 'error';
                 s.imageError = e.message;
@@ -3492,6 +4592,7 @@ No formatting needed — just paste your narration!"></textarea>
         }
 
         async function regenerateSceneImage(idx) {
+            updateVisualsConfig();  // Sync config from UI first (fixes stale additional_context)
             // Read latest prompt from textarea
             const textarea = document.getElementById(`scene-img-prompt-${idx}`);
             if (textarea) visualsScenes[idx].imagePrompt = textarea.value;
@@ -3522,7 +4623,8 @@ No formatting needed — just paste your narration!"></textarea>
             }
 
             if (visualsGenerationPhase === 'preview') {
-                // Phase 2: Batch all remaining scenes
+                // Phase 2: Generate remaining scenes with concurrent individual requests
+                // (avoids 413 payload size errors from sending all reference images in one batch)
                 visualsGenerationPhase = 'batch';
                 const btn = document.getElementById('generateAllImagesBtn');
                 btn.disabled = true;
@@ -3543,66 +4645,32 @@ No formatting needed — just paste your narration!"></textarea>
                     return;
                 }
 
-                // Build batch request
-                const scenes = remaining.map(item => ({
-                    scene_id: item.scene.sceneId,
-                    prompt: item.scene.imagePrompt,
-                    model: item.scene.imageModel || null,
-                }));
-
-                // Mark all as generating
-                remaining.forEach(item => {
-                    item.scene.imageStatus = 'generating';
-                    updateSceneCard(item.idx);
+                // Set background op to track image generation
+                setBackgroundOp(currentProjectId, {
+                    status: 'in_progress',
+                    type: 'image_batch'
                 });
-                updateImageProgress();
 
-                try {
-                    const res = await authFetch('/api/visuals/generate-batch-images', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            scenes,
-                            global_config: {
-                                model: visualsConfig.imageModel,
-                                aspect_ratio: visualsConfig.aspectRatio,
-                                resolution: visualsConfig.resolution,
-                                style_images: visualsConfig.styleImages.map(img => img.data),
-                                character_images: getAllCharacterImages(),
-                                additional_context: visualsConfig.additionalContext,
-                            },
-                        }),
-                    });
+                // Generate scenes concurrently with a limit of 3 parallel requests
+                const CONCURRENCY = 3;
+                const queue = [...remaining];
+                const workers = [];
 
-                    const data = await res.json();
-
-                    if (data.results) {
-                        for (const result of data.results) {
-                            const sceneIdx = visualsScenes.findIndex(s => s.sceneId === String(result.scene_id));
-                            if (sceneIdx === -1) continue;
-                            const s = visualsScenes[sceneIdx];
-
-                            if (result.success && result.image_url) {
-                                s.imageStatus = 'complete';
-                                s.imageUrl = result.image_url;
-                            } else {
-                                s.imageStatus = 'error';
-                                s.imageError = result.error || 'Unknown error';
-                            }
-                            updateSceneCard(sceneIdx);
+                for (let i = 0; i < Math.min(CONCURRENCY, queue.length); i++) {
+                    workers.push((async () => {
+                        while (queue.length > 0) {
+                            const item = queue.shift();
+                            await generateSceneImage(item.idx);
+                            const done = visualsScenes.filter(s => s.imageStatus === 'complete').length;
+                            btn.textContent = `Generating images (${done}/${visualsScenes.length})...`;
                         }
-                    }
-                } catch (e) {
-                    remaining.forEach(item => {
-                        if (item.scene.imageStatus === 'generating') {
-                            item.scene.imageStatus = 'error';
-                            item.scene.imageError = e.message;
-                            updateSceneCard(item.idx);
-                        }
-                    });
+                    })());
                 }
 
+                await Promise.all(workers);
+
                 updateImageProgress();
+                fetchImageHistory();
                 btn.disabled = false;
                 const errors = visualsScenes.filter(s => s.imageStatus === 'error').length;
                 btn.textContent = errors > 0
@@ -3610,9 +4678,290 @@ No formatting needed — just paste your narration!"></textarea>
                     : 'All Images Generated';
                 visualsGenerationPhase = errors > 0 ? 'preview' : 'batch';
 
+                // Mark background op completed
+                clearBackgroundOp(currentProjectId);
+
                 // Auto-save after batch generation
                 triggerAutosave();
             }
+        }
+
+        // ── Generate Marked Images (selective) ──
+        async function generateMarkedImages() {
+            updateVisualsConfig();
+
+            const marked = visualsScenes
+                .map((s, i) => ({ scene: s, idx: i }))
+                .filter(item => item.scene.markedForImageGen && item.scene.imageStatus !== 'complete');
+
+            if (!marked.length) {
+                alert('No eligible scenes marked for image generation.');
+                return;
+            }
+
+            const btn = document.getElementById('generateMarkedImagesBtn');
+            btn.disabled = true;
+            btn.textContent = `Generating ${marked.length} image${marked.length > 1 ? 's' : ''}...`;
+
+            // Read all prompts from textareas
+            marked.forEach(item => {
+                const ta = document.getElementById(`scene-img-prompt-${item.idx}`);
+                if (ta) item.scene.imagePrompt = ta.value;
+            });
+
+            // Mark all as generating
+            marked.forEach(item => {
+                item.scene.imageStatus = 'generating';
+                updateSceneCard(item.idx);
+            });
+            updateImageProgress();
+
+            // Generate individually in parallel (max 5 concurrent) for resilience
+            // Each image auto-saves as it completes
+            const concurrency = 5;
+            let i = 0;
+
+            async function runNext() {
+                if (i >= marked.length) return;
+                const current = marked[i++];
+                try {
+                    await generateSceneImage(current.idx);
+                } catch (e) {
+                    console.error(`Image gen failed for scene ${current.idx}:`, e);
+                }
+                await runNext();
+            }
+
+            const workers = [];
+            for (let w = 0; w < Math.min(concurrency, marked.length); w++) {
+                workers.push(runNext());
+            }
+            await Promise.all(workers);
+
+            updateImageProgress();
+            updateGenerateMarkedBtn();
+            btn.disabled = false;
+
+            const errors = marked.filter(item => item.scene.imageStatus === 'error').length;
+            if (errors > 0) {
+                btn.textContent = `Retry ${errors} Failed Image${errors > 1 ? 's' : ''}`;
+                btn.style.display = 'inline-block';
+            } else {
+                btn.style.display = 'none';
+            }
+
+            // Auto-save after marked generation
+            triggerAutosave();
+        }
+
+        // ── Sync Orphaned Images from Firebase Storage ──
+        async function syncOrphanedImages() {
+            const scenesWithoutImages = visualsScenes.filter(s => !s.imageUrl);
+            if (!scenesWithoutImages.length) {
+                alert('All scenes already have images. Nothing to sync.');
+                return;
+            }
+
+            const sceneIds = scenesWithoutImages.map(s => s.sceneId);
+            const syncBtn = document.querySelector('[onclick="syncOrphanedImages()"]');
+            if (syncBtn) {
+                syncBtn.disabled = true;
+                syncBtn.textContent = '🔄 Syncing...';
+            }
+
+            try {
+                const res = await authFetch('/api/visuals/sync-storage-images', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        scene_ids: sceneIds,
+                        project_id: currentProjectId
+                    }),
+                });
+                const data = await res.json();
+
+                if (data.error) {
+                    alert('Sync failed: ' + data.error);
+                    return;
+                }
+
+                const matches = data.matches || {};
+                let recovered = 0;
+
+                for (const [sid, url] of Object.entries(matches)) {
+                    const sceneIdx = visualsScenes.findIndex(s => s.sceneId === sid);
+                    if (sceneIdx !== -1) {
+                        visualsScenes[sceneIdx].imageUrl = url;
+                        visualsScenes[sceneIdx].imageStatus = 'complete';
+                        updateSceneCard(sceneIdx);
+                        recovered++;
+                    }
+                }
+
+                updateImageProgress();
+                updateGenerateMarkedBtn();
+
+                if (recovered > 0) {
+                    triggerAutosave();
+                    alert(`✅ Recovered ${recovered} image${recovered > 1 ? 's' : ''} from Firebase Storage!`);
+                } else {
+                    alert('No orphaned images found in storage for the missing scenes.');
+                }
+            } catch (e) {
+                console.error('Sync failed:', e);
+                alert('Sync failed: ' + e.message);
+            } finally {
+                if (syncBtn) {
+                    syncBtn.disabled = false;
+                    syncBtn.textContent = '🔄 Sync Lost Images';
+                }
+            }
+        }
+
+        // ── Image History ──
+        function renderImageHistoryStrip(idx) {
+            const container = document.getElementById(`scene-history-${idx}`);
+            if (!container) return;
+
+            const s = visualsScenes[idx];
+            const history = s.imageHistory || [];
+
+            // Only show if there are at least 2 images (current + previous)
+            if (history.length < 2) {
+                container.innerHTML = '';
+                return;
+            }
+
+            // Filter out the currently active image URL from history display
+            const previousImages = history.filter(img => img.url !== s.imageUrl);
+            if (previousImages.length === 0) {
+                container.innerHTML = '';
+                return;
+            }
+
+            container.innerHTML = `
+                <div class="history-strip-header" onclick="toggleHistoryStrip(${idx})">
+                    <span class="history-strip-label">Previous versions (${previousImages.length})</span>
+                    <span class="history-strip-toggle" id="history-toggle-${idx}">&#9660;</span>
+                </div>
+                <div class="history-strip-body" id="history-body-${idx}" style="display: none;">
+                    ${previousImages.map((img, i) => {
+                const date = img.timestamp
+                    ? new Date(img.timestamp * 1000).toLocaleString()
+                    : 'Unknown date';
+                const safeUrl = escapeHtml(img.url);
+                const safeFn = escapeHtml(img.filename);
+                return `
+                            <div class="history-thumb-wrapper">
+                                <img src="${safeUrl}" alt="Version ${i + 1}" class="history-thumb"
+                                     onclick="openImageLightbox('${img.url.replace(/'/g, "\\'")}', ${idx}, '${img.filename.replace(/'/g, "\\'")}')">
+                                <div class="history-thumb-meta">
+                                    <span class="history-thumb-date">${date}</span>
+                                    <a class="history-thumb-download" href="javascript:void(0)"
+                                       onclick="event.stopPropagation(); downloadFirebaseFile('${img.url.replace(/'/g, "\\'")}', '${img.filename.replace(/'/g, "\\'")}')"
+                                       title="Download">&#11015;</a>
+                                </div>
+                            </div>`;
+            }).join('')}
+                </div>
+            `;
+        }
+
+        function toggleHistoryStrip(idx) {
+            const body = document.getElementById(`history-body-${idx}`);
+            const toggle = document.getElementById(`history-toggle-${idx}`);
+            if (body) {
+                const isHidden = body.style.display === 'none';
+                body.style.display = isHidden ? 'flex' : 'none';
+                if (toggle) toggle.style.transform = isHidden ? 'rotate(180deg)' : '';
+            }
+        }
+
+        async function fetchImageHistory() {
+            const sceneIds = visualsScenes.map(s => s.sceneId);
+            if (!sceneIds.length) return;
+
+            try {
+                const res = await authFetch('/api/visuals/scene-image-history', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        scene_ids: sceneIds,
+                        project_id: currentProjectId
+                    }),
+                });
+                const data = await res.json();
+                if (data.error) {
+                    console.warn('Image history fetch failed:', data.error);
+                    return;
+                }
+
+                const history = data.history || {};
+                for (const [sid, entries] of Object.entries(history)) {
+                    const idx = visualsScenes.findIndex(s => s.sceneId === sid);
+                    if (idx !== -1) {
+                        visualsScenes[idx].imageHistory = entries;
+                        renderImageHistoryStrip(idx);
+                    }
+                }
+            } catch (e) {
+                console.warn('Image history fetch error:', e);
+            }
+        }
+
+        async function fetchImageHistoryForScene(idx) {
+            const s = visualsScenes[idx];
+            if (!s) return;
+            try {
+                const res = await authFetch('/api/visuals/scene-image-history', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        scene_ids: [s.sceneId],
+                        project_id: currentProjectId
+                    }),
+                });
+                const data = await res.json();
+                const entries = (data.history || {})[s.sceneId] || [];
+                s.imageHistory = entries;
+                renderImageHistoryStrip(idx);
+            } catch (e) {
+                console.warn('Single scene history fetch error:', e);
+            }
+        }
+
+        // ── Image Lightbox ──
+        let lightboxState = { url: null, sceneIdx: null, filename: null };
+
+        function openImageLightbox(url, sceneIdx, filename) {
+            lightboxState = { url, sceneIdx, filename };
+            document.getElementById('lightboxImage').src = url;
+            document.getElementById('lightboxTitle').textContent =
+                `Scene ${visualsScenes[sceneIdx].shotNumber} - ${filename}`;
+            document.getElementById('imageLightboxModal').style.display = 'flex';
+        }
+
+        function closeImageLightbox(event) {
+            if (event && event.target !== event.currentTarget) return;
+            document.getElementById('imageLightboxModal').style.display = 'none';
+            lightboxState = { url: null, sceneIdx: null, filename: null };
+        }
+
+        function useHistoryImage() {
+            const { url, sceneIdx } = lightboxState;
+            if (url === null || sceneIdx === null) return;
+
+            visualsScenes[sceneIdx].imageUrl = url;
+            visualsScenes[sceneIdx].imageStatus = 'complete';
+            updateSceneCard(sceneIdx);
+            triggerAutosave();
+            closeImageLightbox();
+        }
+
+        function downloadLightboxImage() {
+            const { url, filename } = lightboxState;
+            if (!url) return;
+            downloadFirebaseFile(url, filename || 'image.png');
         }
 
         // ── Video Animation ──
@@ -3640,6 +4989,7 @@ No formatting needed — just paste your narration!"></textarea>
                         model: s.veoModel || visualsConfig.veoModel,
                         aspect_ratio: visualsConfig.aspectRatio,
                         duration: parseInt(s.duration) || 6,
+                        project_id: currentProjectId,
                     }),
                 });
                 const data = await res.json();
@@ -3672,6 +5022,7 @@ No formatting needed — just paste your narration!"></textarea>
                         body: JSON.stringify({
                             operation_name: s.operationName,
                             scene_id: s.sceneId,
+                            project_id: currentProjectId,
                         }),
                     });
                     const data = await res.json();
@@ -3728,6 +5079,12 @@ No formatting needed — just paste your narration!"></textarea>
             btn.disabled = true;
             btn.textContent = 'Starting animations...';
 
+            // Set background op
+            setBackgroundOp(currentProjectId, {
+                status: 'in_progress',
+                type: 'video_batch'
+            });
+
             try {
                 const scenes = marked.map(item => ({
                     scene_id: item.scene.sceneId,
@@ -3746,6 +5103,7 @@ No formatting needed — just paste your narration!"></textarea>
                             model: visualsConfig.veoModel,
                             aspect_ratio: visualsConfig.aspectRatio,
                         },
+                        project_id: currentProjectId,
                     }),
                 });
 
@@ -3781,26 +5139,105 @@ No formatting needed — just paste your narration!"></textarea>
             updateVideoProgress();
             btn.disabled = false;
             updateAnimateAllBtn();
+            clearBackgroundOp(currentProjectId); // Clear video batch op
         }
 
         // ── Download All Assets ──
         async function downloadAllAssets() {
             try {
-                const res = await authFetch('/api/visuals/download-all');
-                if (!res.ok) {
-                    const data = await res.json();
-                    throw new Error(data.error || 'Download failed');
+                const scenes = visualsScenes || [];
+
+                // Check if any scene has image history (multiple versions)
+                const hasHistory = scenes.some(s => (s.imageHistory || []).length > 1);
+
+                let downloadMode = 'active';
+                if (hasHistory) {
+                    downloadMode = await showDownloadModeDialog();
+                    if (!downloadMode) return; // user cancelled
                 }
-                const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'visuals_assets.zip';
-                a.click();
-                URL.revokeObjectURL(url);
+
+                const urls = [];
+                scenes.forEach((s, i) => {
+                    const shotNum = s.shotNumber || (i + 1);
+                    if (downloadMode === 'all' && s.imageHistory && s.imageHistory.length > 0) {
+                        // Download ALL history images for this scene
+                        s.imageHistory.forEach((img, hi) => {
+                            urls.push({
+                                url: img.url,
+                                name: `scene_${shotNum}_image_${img.timestamp || hi}.png`
+                            });
+                        });
+                    } else if (s.imageUrl) {
+                        urls.push({ url: s.imageUrl, name: `scene_${shotNum}_image.png` });
+                    }
+                    if (s.videoUrl) {
+                        urls.push({ url: s.videoUrl, name: `scene_${shotNum}_video.mp4` });
+                    }
+                });
+
+                if (urls.length === 0) {
+                    alert('No generated images or videos to download.');
+                    return;
+                }
+
+                let downloaded = 0;
+                let failed = 0;
+                for (const item of urls) {
+                    try {
+                        const proxyUrl = `/api/download-asset?url=${encodeURIComponent(item.url)}&filename=${encodeURIComponent(item.name)}`;
+                        const res = await authFetch(proxyUrl);
+                        if (!res.ok) { failed++; continue; }
+                        const blob = await res.blob();
+                        const blobUrl = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = blobUrl;
+                        a.download = item.name;
+                        a.click();
+                        URL.revokeObjectURL(blobUrl);
+                        downloaded++;
+                        await new Promise(r => setTimeout(r, 300));
+                    } catch (e) {
+                        console.warn(`Failed to download ${item.name}:`, e);
+                        failed++;
+                    }
+                }
+
+                if (failed > 0) {
+                    alert(`Downloaded ${downloaded} files. ${failed} failed.`);
+                }
             } catch (e) {
                 alert('Download failed: ' + e.message);
             }
+        }
+
+        function showDownloadModeDialog() {
+            return new Promise((resolve) => {
+                const overlay = document.createElement('div');
+                overlay.className = 'modal-overlay';
+                overlay.style.display = 'flex';
+                overlay.innerHTML = `
+                    <div class="modal-card" style="max-width: 400px; text-align: center;">
+                        <h2>Download Options</h2>
+                        <p style="color: #999; margin-bottom: 1rem;">Some scenes have multiple generated images.</p>
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <button class="btn-primary" id="dlActiveOnly" style="padding: 10px;">
+                                Active Images Only
+                            </button>
+                            <button class="btn-secondary" id="dlAllGenerated" style="padding: 10px;">
+                                All Generated Images
+                            </button>
+                            <button class="btn-secondary" id="dlCancel" style="padding: 8px; font-size: 0.85rem; opacity: 0.7;">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(overlay);
+
+                overlay.querySelector('#dlActiveOnly').onclick = () => { overlay.remove(); resolve('active'); };
+                overlay.querySelector('#dlAllGenerated').onclick = () => { overlay.remove(); resolve('all'); };
+                overlay.querySelector('#dlCancel').onclick = () => { overlay.remove(); resolve(null); };
+            });
         }
 
         function escapeHTML(str) {
@@ -3869,8 +5306,13 @@ No formatting needed — just paste your narration!"></textarea>
                 renderProjects(_lastSavedProjects);
 
                 // Auto-load last project on first load
-                if (autoLoadLast && !currentProjectId && _lastSavedProjects.length > 0) {
-                    await loadProject(_lastSavedProjects[0].id);
+                if (autoLoadLast && !currentProjectId) {
+                    const savedProjectId = sessionStorage.getItem('currentProjectId');
+                    if (savedProjectId && _lastSavedProjects.find(p => p.id === savedProjectId)) {
+                        await loadProject(savedProjectId);
+                    } else if (_lastSavedProjects.length > 0) {
+                        await loadProject(_lastSavedProjects[0].id);
+                    }
                 }
             } catch (e) {
                 console.error(e);
@@ -3922,6 +5364,7 @@ No formatting needed — just paste your narration!"></textarea>
                 const data = await res.json();
                 if (data.success) {
                     currentProjectId = data.project_id;
+                    sessionStorage.setItem('currentProjectId', data.project_id);
                     clearAppForNewProject();
 
                     // Optimistically insert the new project into the sidebar immediately
@@ -3958,25 +5401,118 @@ No formatting needed — just paste your narration!"></textarea>
                 const data = await res.json();
                 if (data.success) {
                     currentProjectId = id;
+                    sessionStorage.setItem('currentProjectId', id);
                     restoreProjectState(data.project);
                     renderProjects(_lastSavedProjects); // re-render to highlight active
 
-                    // Restore research-in-progress UI if this project has a background op
+                    // Restore research/generation-in-progress UI if this project has a background op
                     const op = getBackgroundOp(id);
                     if (op) {
                         if (op.status === 'in_progress') {
-                            // Show the research-in-progress UI
-                            const btn = document.getElementById('researchBtn');
-                            const btnText = document.getElementById('researchBtnText');
-                            const spinner = document.getElementById('researchSpinner');
-                            btn.disabled = true;
-                            btnText.textContent = '🔬 Researching…';
-                            btnText.style.display = 'inline';
-                            spinner.style.display = 'inline-block';
-                            updatePhaseStatus(1, 'Deep Research running… (polling every 10s)', 'running');
+                            if (op.type === 'research' || op.type === 'research_async') {
+                                const btn = document.getElementById('researchBtn');
+                                const btnText = document.getElementById('researchBtnText');
+                                const spinner = document.getElementById('researchSpinner');
+                                btn.disabled = true;
+                                btnText.textContent = '🔬 Researching…';
+                                btnText.style.display = 'inline';
+                                spinner.style.display = 'inline-block';
+                                updatePhaseStatus(1, 'Research running in background...', 'running');
+                            } else if (op.type === 'narration') {
+                                const btn = document.getElementById('scriptBtn');
+                                const btnText = document.getElementById('scriptBtnText');
+                                const spinner = document.getElementById('scriptSpinner');
+                                btn.disabled = true;
+                                btnText.style.display = 'none';
+                                spinner.style.display = 'block';
+                                updatePhaseStatus(2, 'Writing narration…', 'running');
+                            } else if (op.type === 'production') {
+                                const btn = document.getElementById('productionBtn');
+                                const btnText = document.getElementById('productionBtnText');
+                                const spinner = document.getElementById('productionSpinner');
+                                btn.disabled = true;
+                                btnText.style.display = 'none';
+                                spinner.style.display = 'block';
+                                updatePhaseStatus(3, 'Generating prompts…', 'running');
+                            } else if (op.type === 'title_suggestion') {
+                                document.getElementById('titleSpinnerWrap').style.display = 'flex';
+                            } else if (op.type === 'tone_suggestion') {
+                                const badge = document.getElementById('toneSuggestionBadge');
+                                badge.style.display = 'block';
+                                badge.innerHTML = 'Suggesting tone...';
+                            } else if (op.type === 'image_batch') {
+                                const btn = document.getElementById('generateAllImagesBtn');
+                                if (btn) {
+                                    btn.disabled = true;
+                                    btn.textContent = 'Generating all images (background)...';
+                                }
+                            } else if (op.type === 'video_batch') {
+                                const btn = document.getElementById('animateAllBtn');
+                                if (btn) {
+                                    btn.disabled = true;
+                                    btn.textContent = 'Starting animations (background)...';
+                                }
+                            }
                         } else if (op.status === 'completed' && op.data) {
                             // Results arrived while viewing another project — display them now
-                            displayResearchResults(op.data, id);
+                            if (op.type === 'research') {
+                                displayResearchResults(op.data, id);
+                            } else if (op.type === 'narration') {
+                                currentNarration = op.data.narration;
+                                renderNarration(op.data.narration);
+                                document.getElementById('wizardStepD').style.display = 'block';
+
+                                const beats = op.data.narration?.narration || [];
+                                let actCount = 0;
+                                let beatCount = 0;
+                                if (Array.isArray(beats)) {
+                                    actCount = new Set(beats.map(b => b.act)).size;
+                                    beatCount = beats.length;
+                                }
+                                updatePhaseStatus(2, `Narration complete (${actCount} acts, ${beatCount} beats)`, 'complete');
+                                updateProdSourceBadge();
+                                clearBackgroundOp(id); // Clear completed op
+                            } else if (op.type === 'production') {
+                                currentProductionData = op.data;
+                                renderProductionTable(op.data.production_table);
+
+                                const shotCount = op.data.production_table?.total_shots || op.data.production_table?.shots?.length || '?';
+                                updatePhaseStatus(3, `✅ Complete — ${shotCount} shots`, 'complete');
+                                clearBackgroundOp(id); // Clear completed op
+                            } else if (op.type === 'title_suggestion') {
+                                document.getElementById('titleSpinnerWrap').style.display = 'none';
+                                const cardsDiv = document.getElementById('titleCards');
+                                cardsDiv.innerHTML = op.data.titles.map((t, i) => `
+                                    <button class="title-card" onclick="selectTitleCard(${i}, this)" data-title="${escapeHtml(t.title)}">
+                                        <span class="title-card-number">${i + 1}</span>
+                                        <span class="title-card-text">${escapeHtml(t.title)}</span>
+                                        <span class="title-card-desc">${escapeHtml(t.description)}</span>
+                                    </button>
+                                `).join('');
+                                document.getElementById('titleEditSection').style.display = 'block';
+
+                                document.getElementById('titleEditInput').addEventListener('input', function () {
+                                    selectedTitle = this.value.trim();
+                                    updateTitleConfirmBadge();
+                                });
+                                clearBackgroundOp(id);
+                            } else if (op.type === 'tone_suggestion') {
+                                const toneSelect = document.getElementById('toneSelect');
+                                const suggestedTone = op.data.suggested_tone || 'conversational';
+                                const options = Array.from(toneSelect.options);
+                                const match = options.find(o => o.value.toLowerCase() === suggestedTone.toLowerCase());
+                                if (match) {
+                                    toneSelect.value = match.value;
+                                } else {
+                                    toneSelect.value = '';
+                                }
+
+                                const displayLabel = match ? match.textContent : suggestedTone;
+                                const badge = document.getElementById('toneSuggestionBadge');
+                                badge.innerHTML = `Suggested: <strong>${escapeHtml(displayLabel)}</strong> — ${escapeHtml(op.data.reasoning || '')}`;
+                                document.getElementById('wizardStepC').style.display = 'block';
+                                clearBackgroundOp(id);
+                            }
                         }
                     }
 
@@ -3997,6 +5533,7 @@ No formatting needed — just paste your narration!"></textarea>
                 if (res.ok) {
                     if (currentProjectId === id) {
                         currentProjectId = null;
+                        sessionStorage.removeItem('currentProjectId');
                         clearAppForNewProject();
                     }
                     fetchProjects();
@@ -4060,6 +5597,7 @@ No formatting needed — just paste your narration!"></textarea>
                 veoModel: 'veo-3.1-generate-preview',
                 styleImages: [],
                 additionalContext: '',
+                styleMode: 'art_only',
             };
 
             // Hide visuals panels
@@ -4072,10 +5610,22 @@ No formatting needed — just paste your narration!"></textarea>
             renderVisualsStylePreviews();
             renderCharacterList();
 
-            // Reset phase statuses
             updatePhaseStatus(1, 'Not started', 'idle');
             updatePhaseStatus(2, 'Waiting for input', 'idle');
             updatePhaseStatus(3, 'Waiting for input', 'idle');
+
+            // Reset action buttons UI to cancel ongoing background indicators
+            const resetBtn = (btnId, textId, spinId) => {
+                const btn = document.getElementById(btnId);
+                const txt = document.getElementById(textId);
+                const spin = document.getElementById(spinId);
+                if (btn) btn.disabled = false;
+                if (txt) txt.style.display = 'inline';
+                if (spin) spin.style.display = 'none';
+            };
+            resetBtn('researchBtn', 'researchBtnText', 'researchSpinner');
+            resetBtn('scriptBtn', 'scriptBtnText', 'scriptSpinner');
+            resetBtn('productionBtn', 'prodBtnText', 'productionSpinner');
 
             // Reset input modes
             setScriptInputMode('auto');
@@ -4212,7 +5762,11 @@ No formatting needed — just paste your narration!"></textarea>
 
             // Restore visuals config
             if (project.visuals_config) {
-                visualsConfig = project.visuals_config;
+                visualsConfig = {
+                    ...project.visuals_config,
+                    // Only keep style images that still have data (base64 is stripped on save)
+                    styleImages: (project.visuals_config.styleImages || []).filter(img => img.data)
+                };
                 // Update UI elements to match
                 const arSelect = document.getElementById('visAspectRatio');
                 if (arSelect) arSelect.value = visualsConfig.aspectRatio || '16:9';
@@ -4224,12 +5778,18 @@ No formatting needed — just paste your narration!"></textarea>
                 if (veoModelSelect) veoModelSelect.value = visualsConfig.veoModel || 'veo-3.1-generate-preview';
                 const contextTextarea = document.getElementById('visAdditionalContext');
                 if (contextTextarea) contextTextarea.value = visualsConfig.additionalContext || '';
+                const styleModeSelect = document.getElementById('visStyleMode');
+                if (styleModeSelect) styleModeSelect.value = visualsConfig.styleMode || 'art_only';
                 renderVisualsStylePreviews();
             }
 
             // Restore visuals characters
             if (project.visuals_characters) {
-                visualsCharacters = project.visuals_characters;
+                // Ensure each character has an images array (may be stripped from save)
+                visualsCharacters = project.visuals_characters.map(ch => ({
+                    ...ch,
+                    images: ch.images || []
+                }));
                 renderCharacterList();
             }
 
@@ -4242,10 +5802,57 @@ No formatting needed — just paste your narration!"></textarea>
                 const vc = document.getElementById('visualsSceneCount');
                 if (vc) vc.textContent = `${visualsScenes.length} scenes`;
                 renderVisualsScenes();
+
+                // Auto-sync: check for orphaned images in Firebase Storage
+                const scenesWithoutImages = visualsScenes.filter(s => !s.imageUrl);
+                if (scenesWithoutImages.length > 0 && visualsScenes.some(s => s.imageUrl)) {
+                    // Some scenes have images but others don't — likely lost during refresh
+                    console.log(`[Auto-Sync] ${scenesWithoutImages.length} scenes missing images, checking storage...`);
+                    syncOrphanedImages().catch(e => console.error('[Auto-Sync] Failed:', e));
+                }
+
+                // Fetch image history for all scenes
+                fetchImageHistory();
             }
 
             // Switch to Research tab to show the project content
             switchTab('research');
+
+            const op = getBackgroundOp(project.id || currentProjectId);
+
+            // Set Narration lock state if we have production data or production op is running
+            if (project.production_data || (op && op.type === 'production' && op.status === 'in_progress')) {
+                // Lock Narration silently
+                setTimeout(() => {
+                    document.querySelectorAll('.narration-beat-text[contenteditable]').forEach(el => {
+                        el.contentEditable = 'false';
+                    });
+                    document.querySelectorAll('.beat-controls, .act-controls').forEach(el => {
+                        el.style.display = 'none';
+                    });
+                    const btn = document.getElementById('lockNarrationBtn');
+                    if (btn) {
+                        btn.disabled = true;
+                        btn.textContent = '🔒 Narration Locked';
+                    }
+                    const hint = document.getElementById('narrationEditHint');
+                    if (hint) {
+                        hint.textContent = '(locked)';
+                    }
+                    updateProdSourceBadge();
+                }, 100);
+            }
+
+            // If the backend has finished tasks while we were offline (or page refreshed), clear stalled background ops
+            if (op && op.status === 'in_progress') {
+                if (op.type === 'research' && project.research_dossier) {
+                    clearBackgroundOp(project.id || currentProjectId);
+                } else if (op.type === 'narration' && project.narration_data) {
+                    clearBackgroundOp(project.id || currentProjectId);
+                } else if (op.type === 'production' && project.production_data) {
+                    clearBackgroundOp(project.id || currentProjectId);
+                }
+            }
         }
 
         // ── Gather full project state for saving ──
@@ -4294,8 +5901,21 @@ No formatting needed — just paste your narration!"></textarea>
                 narration_data: currentNarration || null,
                 production_data: currentProductionData || null,
                 visuals_scenes: visualsScenes || [],
-                visuals_config: visualsConfig || null,
-                visuals_characters: visualsCharacters || [],
+                // Strip base64 image data before saving to Firestore (1MB doc limit).
+                // Style/character images live in-memory during session; only metadata is persisted.
+                visuals_config: visualsConfig ? {
+                    ...visualsConfig,
+                    styleImages: (visualsConfig.styleImages || []).map(img => ({
+                        name: img.name
+                        // img.data (base64) is intentionally excluded
+                    }))
+                } : null,
+                visuals_characters: (visualsCharacters || []).map(ch => ({
+                    name: ch.name,
+                    refMode: ch.refMode,
+                    imageCount: ch.images ? ch.images.length : 0
+                    // ch.images[].data (base64) is intentionally excluded
+                })),
             };
         }
 
