@@ -41,6 +41,23 @@ fi
 echo "Setting project to $PROJECT_ID..."
 gcloud config set project $PROJECT_ID
 
+# ── Load secrets from local files (never hardcode) ──
+if [ -f "$(dirname "$0")/.env" ]; then
+    export $(grep -v '^#' "$(dirname "$0")/.env" | xargs)
+fi
+
+if [ -z "$ENCRYPTION_KEY" ]; then
+    echo "Error: ENCRYPTION_KEY must be set in .env"
+    exit 1
+fi
+
+# NOTE: The Cloud Run service account needs roles/iam.serviceAccountTokenCreator
+# for Firebase Storage signed URL generation. Grant once with:
+#   PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
+#   SA_EMAIL="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+#   gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
+#       --member="serviceAccount:${SA_EMAIL}" --role="roles/iam.serviceAccountTokenCreator"
+
 # Deploy to Cloud Run
 echo "Deploying to Cloud Run..."
 gcloud run deploy $SERVICE_NAME \
@@ -48,7 +65,8 @@ gcloud run deploy $SERVICE_NAME \
     --region $REGION \
     --allow-unauthenticated \
     --timeout 3600 \
-    --set-env-vars GOOGLE_CLOUD_PROJECT=$PROJECT_ID
+    --memory 2Gi \
+    --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},ENCRYPTION_KEY=${ENCRYPTION_KEY}"
 
 echo "========================================================"
 echo "Deployment Complete!"

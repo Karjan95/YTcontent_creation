@@ -2,12 +2,21 @@ import os
 import sys
 import io
 import json
+import re
+import logging
 import glob as glob_module
 import zipfile
+import socket
+import ipaddress
 from functools import wraps
+from datetime import timedelta
+from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, render_template, request, jsonify, send_from_directory, send_file, g
-import traceback
+
+logger = logging.getLogger(__name__)
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
 import firebase_admin
 from firebase_admin import credentials, auth, firestore
 
@@ -16,13 +25,27 @@ sys.path.insert(0, os.path.dirname(__file__))
 from gemini_client import (generate_image_content, generate_tts, generate_content,
                            analyze_style_from_images, analyze_style_from_text,
                            expand_creative_direction, refine_creative_direction,
-                           generate_scene_image,
+                           generate_scene_image, edit_scene_image,
                            start_video_generation, poll_video_generation)
 from research_templates import (get_all_templates_metadata, get_template, build_research_queries,
                                 build_title_suggestions_prompt, AUDIENCE_PROFILES, TONE_DEFINITIONS,
                                 FORMAT_PRESETS, VIEWER_OUTCOMES)
-from research_scriptwriter import build_research_dossier, generate_narration, generate_production_table, auto_suggest_tone, regenerate_beats, start_deep_research, poll_deep_research
-from youtube_utils import get_transcript, analyze_style
+from research_scriptwriter import (
+    build_research_dossier, generate_narration, generate_production_table,
+    auto_suggest_tone, regenerate_beats, start_deep_research, poll_deep_research,
+    run_structured_research, structure_from_blob, _markdown_from_structured,
+)
+from youtube_utils import analyze_style
+from kie_client import (check_credits as kie_check_credits,
+                        upload_image_url as kie_upload_image,
+                        create_task as kie_create_task,
+                        poll_task as kie_poll_task,
+                        get_models_info as kie_get_models_info,
+                        download_result as kie_download_result,
+                        mj_create_task as kie_mj_create_task,
+                        mj_poll_task as kie_mj_poll_task,
+                        mj_upscale as kie_mj_upscale,
+                        mj_vary as kie_mj_vary)
 
 # Paths relative to this script's location
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +56,10 @@ AUDIO_DIR = os.path.join(PROJECT_DIR, "generated_audio")
 VIDEO_DIR = os.path.join(PROJECT_DIR, "generated_videos")
 TMP_DIR = os.path.join(PROJECT_DIR, ".tmp")
 DEBUG_SAVE_TMP = os.environ.get('DEBUG_SAVE_TMP', 'true').lower() == 'true'
+# Feature flag: when true, /api/research emits a structured {sections, claims, sources}
+# object alongside the legacy markdown dossier. Kept off by default during rollout.
+RESEARCH_STRUCTURED_ENABLED = os.environ.get('RESEARCH_STRUCTURED', '0').lower() in ('1', 'true', 'yes')
+RESEARCH_SCHEMA_VERSION = 1
 
 # ── Firebase Initialization ──
 SERVICE_ACCOUNT_PATH = os.path.join(PROJECT_DIR, "firebase-service-account.json")
@@ -61,34 +88,249 @@ except Exception as e:
     print(f"Warning: Could not initialize Firebase Storage: {e}")
     bucket = None
 
-def upload_to_storage(local_path, remote_folder, project_id=None):
-    """Uploads a local file to Firebase Storage and returns the public URL."""
-    if not bucket or not os.path.exists(local_path):
-        return None
+# ── IAM Signing Credentials (for Cloud Run where no private key is available) ──
+_signing_email = None
+_signing_credentials = None
+
+if not os.path.exists(SERVICE_ACCOUNT_PATH):
     try:
-        filename = os.path.basename(local_path)
-        path_prefix = f"{remote_folder}/{project_id}" if project_id else remote_folder
-        blob = bucket.blob(f"{path_prefix}/{filename}")
+        import google.auth
+        import google.auth.transport.requests
+        _signing_credentials, _project = google.auth.default()
+        auth_request = google.auth.transport.requests.Request()
+        _signing_credentials.refresh(auth_request)
+        _signing_email = _signing_credentials.service_account_email
+        print(f"[Storage] IAM signing configured for: {_signing_email}")
+    except Exception as e:
+        print(f"[Storage] Warning: Could not configure IAM signing: {e}")
+
+# Log active signing method
+if os.path.exists(SERVICE_ACCOUNT_PATH):
+    print(f"[Storage] Using service account JSON for signing: {SERVICE_ACCOUNT_PATH}")
+elif _signing_email:
+    print(f"[Storage] Using IAM signing (Cloud Run mode) with: {_signing_email}")
+else:
+    print("[Storage] WARNING: No signing method available. Signed URLs will fail.")
+
+
+def _generate_signed_url(blob, expiration=timedelta(hours=4)):
+    """Generate a signed URL for a blob, with IAM-based fallback for Cloud Run."""
+    try:
+        return blob.generate_signed_url(
+            version="v4",
+            expiration=expiration,
+            method="GET",
+        )
+    except Exception:
+        if _signing_email and _signing_credentials:
+            try:
+                import google.auth.transport.requests
+                auth_request = google.auth.transport.requests.Request()
+                _signing_credentials.refresh(auth_request)
+                return blob.generate_signed_url(
+                    version="v4",
+                    expiration=expiration,
+                    method="GET",
+                    service_account_email=_signing_email,
+                    access_token=_signing_credentials.token,
+                )
+            except Exception as iam_err:
+                print(f"[Storage] IAM signing failed for {blob.name}: {iam_err}")
+                return None
+        return None
+
+
+def upload_to_storage(local_path, remote_folder, project_id=None, return_path=False):
+    """Uploads a local file to Firebase Storage and returns a time-limited signed URL.
+    If return_path=True, returns (url, blob_path) tuple instead of just url."""
+    if not bucket or not os.path.exists(local_path):
+        return (None, None) if return_path else None
+
+    filename = os.path.basename(local_path)
+    path_prefix = f"{remote_folder}/{project_id}" if project_id else remote_folder
+    blob_path = f"{path_prefix}/{filename}"
+    blob = bucket.blob(blob_path)
+
+    # Upload (separate from URL generation so upload success is preserved)
+    try:
         blob.upload_from_filename(local_path)
-        blob.make_public()
-        return blob.public_url
+        print(f"[Storage] Uploaded {local_path} -> {blob_path}")
     except Exception as e:
         print(f"[Storage] Failed to upload {local_path}: {e}")
-        return None
+        return (None, None) if return_path else None
+
+    # Generate signed URL (upload already succeeded at this point)
+    url = _generate_signed_url(blob)
+    if not url:
+        print(f"[Storage] Upload succeeded but signed URL failed for {blob_path}")
+
+    return (url, blob_path) if return_path else url
 
 import urllib.request
+import base64 as base64_module
+import tempfile
+import time
+from cryptography.fernet import Fernet
+
+# ── API Key Encryption ──
+_ENCRYPTION_KEY = os.environ.get("ENCRYPTION_KEY")
+if not _ENCRYPTION_KEY:
+    print("WARNING: ENCRYPTION_KEY not set. Generating a temporary key — "
+          "API keys encrypted this session won't be decryptable after restart! "
+          "Set ENCRYPTION_KEY env var with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"")
+    _ENCRYPTION_KEY = Fernet.generate_key().decode()
+
+_fernet = Fernet(_ENCRYPTION_KEY.encode())
+
+
+def encrypt_api_key(plain_key: str) -> str:
+    """Encrypt an API key for storage."""
+    return _fernet.encrypt(plain_key.encode()).decode()
+
+
+def decrypt_api_key(encrypted_key: str) -> str:
+    """Decrypt an API key from storage. Returns None if decryption fails."""
+    if not encrypted_key:
+        return None
+    try:
+        return _fernet.decrypt(encrypted_key.encode()).decode()
+    except Exception:
+        # If it looks like a raw Gemini key (starts with "AI"), treat as legacy plain-text
+        if encrypted_key.startswith("AI"):
+            logger.warning("Legacy plain-text API key detected — re-save to encrypt")
+            return encrypted_key
+        # Otherwise decryption genuinely failed (wrong ENCRYPTION_KEY)
+        logger.error("Failed to decrypt API key — ENCRYPTION_KEY may have changed. "
+                     "User needs to re-save their API key.")
+        return None
+
+# ── Safe Error Response ──
+_SAFE_ERROR_PATTERNS = re.compile(
+    r'rate limit|quota|429|content.*blocked|safety|returned no result|'
+    r'resource.?exhausted|overloaded|high demand',
+    re.IGNORECASE
+)
+
+
+def safe_error_response(e, status_code=500):
+    """Log the full error server-side, return a safe message to the client."""
+    logger.exception("Request failed")
+    error_str = str(e)
+    if _SAFE_ERROR_PATTERNS.search(error_str):
+        return jsonify({'error': error_str}), status_code
+    return jsonify({'error': 'An internal error occurred. Please try again.'}), status_code
+
+
+def _load_project_structured(project_id):
+    """Return the research_structured object for a project, or None.
+
+    Lets downstream prompt builders cite sources with stable [sN] ids without
+    requiring the client to re-send the whole research blob on every request.
+    """
+    if not project_id:
+        return None
+    try:
+        doc = db.collection('users').document(g.uid).collection('projects').document(project_id).get()
+        if not doc.exists:
+            return None
+        data = doc.to_dict() or {}
+        return data.get('research_structured')
+    except Exception as e:
+        print(f"[Project] Failed to load research_structured for {project_id}: {e}")
+        return None
+
+
+# ── URL Validation (SSRF Protection) ──
+_ALLOWED_URL_DOMAINS = {
+    'storage.googleapis.com',
+    'firebasestorage.googleapis.com',
+}
+
+
+def validate_url(url):
+    """Validate URL is from an allowed domain and doesn't resolve to a private IP."""
+    if not url or not isinstance(url, str):
+        raise ValueError("URL is required")
+    parsed = urlparse(url)
+    if parsed.scheme not in ('http', 'https'):
+        raise ValueError("Only HTTP(S) URLs are allowed")
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("Invalid URL: no hostname")
+    
+    is_allowed = any(hostname == d or hostname.endswith('.' + d) for d in _ALLOWED_URL_DOMAINS)
+    if not is_allowed:
+        raise ValueError(f"URL domain not allowed: {hostname}")
+    
+    try:
+        for info in socket.getaddrinfo(hostname, None):
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                raise ValueError("URL resolves to a private address")
+    except socket.gaierror:
+        raise ValueError("Could not resolve URL hostname")
+
+
+# ── Input Validation ──
+def validate_input(data, field, field_type=str, required=True, max_length=None, min_val=None, max_val=None):
+    """Validate a single input field. Returns (value, error_message)."""
+    value = data.get(field)
+    if required and (value is None or (isinstance(value, str) and not value.strip())):
+        return None, f'{field} is required'
+    if value is not None:
+        if field_type == str and not isinstance(value, str):
+            return None, f'{field} must be a string'
+        if field_type == int:
+            try:
+                value = int(value)
+            except (ValueError, TypeError):
+                return None, f'{field} must be an integer'
+        if field_type == list and not isinstance(value, list):
+            return None, f'{field} must be a list'
+        if max_length is not None and isinstance(value, (str, list)) and len(value) > max_length:
+            return None, f'{field} exceeds maximum length of {max_length}'
+        if min_val is not None and isinstance(value, (int, float)) and value < min_val:
+            return None, f'{field} must be at least {min_val}'
+        if max_val is not None and isinstance(value, (int, float)) and value > max_val:
+            return None, f'{field} must be at most {max_val}'
+    return value, None
+
+
+def resolve_image_input(image_input):
+    """Accept base64 data URI or allowed Storage URL. Return base64 data URI for Gemini."""
+    if not image_input:
+        return None
+    if image_input.startswith('data:'):
+        return image_input
+    if image_input.startswith('http'):
+        try:
+            validate_url(image_input)
+            resp = urllib.request.urlopen(image_input)
+            raw = resp.read()
+            ct = resp.headers.get('Content-Type', 'image/jpeg')
+            b64 = base64_module.b64encode(raw).decode('utf-8')
+            return f"data:{ct};base64,{b64}"
+        except Exception as e:
+            print(f"[Resolve] Failed to fetch image from URL (may be expired): {e}")
+            return None
+    return image_input
 
 def ensure_local_image(image_url):
-    """Ensure the image exists locally. If remote, download it."""
+    """Ensure the image exists locally. If remote, download from allowed domains."""
     filename = image_url.split("/")[-1].split("?")[0]
+
+    # Ensure directory exists before downloading
+    os.makedirs(GENERATED_DIR, exist_ok=True)
+
     image_path = os.path.join(GENERATED_DIR, filename)
     if not os.path.exists(image_path):
         if image_url.startswith("http"):
             try:
-                print(f"[Storage] Downloading missing local file from {image_url}")
+                validate_url(image_url)
+                print(f"[Storage] Downloading missing local file")
                 urllib.request.urlretrieve(image_url, image_path)
             except Exception as e:
-                print(f"[Storage] Failed to download {image_url}: {e}")
+                print(f"[Storage] Failed to download image: {e}")
                 return None
         else:
             return None
@@ -96,6 +338,16 @@ def ensure_local_image(image_url):
 
 
 app = Flask(__name__, static_url_path='', static_folder=UI_DIR, template_folder=UI_DIR)
+
+# ── Rate Limiting ──
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+def _rate_limit_key():
+    uid = getattr(g, 'uid', None)
+    return uid if uid else get_remote_address()
+
+limiter = Limiter(app=app, key_func=_rate_limit_key, storage_uri="memory://", default_limits=[])
 
 
 # ── Auth Decorator ──
@@ -112,18 +364,19 @@ def require_auth(f):
             decoded_token = auth.verify_id_token(id_token)
             g.uid = decoded_token['uid']
         except Exception as e:
-            return jsonify({'error': f'Invalid auth token: {str(e)}'}), 401
+            return jsonify({'error': 'Invalid or expired auth token'}), 401
 
-        # Fetch user's Gemini API key from Firestore
+        # Fetch user's API keys from Firestore (encrypted)
         user_doc = db.collection('users').document(g.uid).get()
         if user_doc.exists:
-            g.api_key = user_doc.to_dict().get('gemini_api_key')
+            user_data = user_doc.to_dict()
+            stored_key = user_data.get('gemini_api_key')
+            g.api_key = decrypt_api_key(stored_key) if stored_key else None
+            stored_kie_key = user_data.get('kie_api_key')
+            g.kie_api_key = decrypt_api_key(stored_kie_key) if stored_kie_key else None
         else:
             g.api_key = None
-
-        # Fall back to server-side key if user hasn't set one
-        if not g.api_key:
-            g.api_key = os.getenv("GEMINI_API_KEY")
+            g.kie_api_key = None
 
         return f(*args, **kwargs)
     return decorated
@@ -140,6 +393,7 @@ def index():
 
 @app.route('/api/save-api-key', methods=['POST'])
 @require_auth
+@limiter.limit("200/hour")
 def save_api_key():
     """Save or update the user's Gemini API key in Firestore."""
     try:
@@ -150,21 +404,324 @@ def save_api_key():
             return jsonify({'error': 'API key is required'}), 400
 
         db.collection('users').document(g.uid).set(
-            {'gemini_api_key': api_key}, merge=True
+            {'gemini_api_key': encrypt_api_key(api_key)}, merge=True
         )
 
         return jsonify({'success': True})
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/check-api-key', methods=['GET'])
 @require_auth
+@limiter.limit("200/hour")
 def check_api_key():
     """Check if the authenticated user has a Gemini API key saved."""
     has_key = bool(g.api_key)
     return jsonify({'has_key': has_key})
+
+
+# ────────────────────────────────────────────────────────────────
+#  KIE.AI INTEGRATION
+# ────────────────────────────────────────────────────────────────
+
+@app.route('/api/kie/save-api-key', methods=['POST'])
+@require_auth
+@limiter.limit("200/hour")
+def kie_save_api_key():
+    """Save the user's Kie.ai API key (Fernet encrypted, stored separately from Gemini key)."""
+    try:
+        data = request.json
+        api_key = data.get('api_key', '').strip()
+        if not api_key:
+            return jsonify({'error': 'API key is required'}), 400
+        db.collection('users').document(g.uid).set(
+            {'kie_api_key': encrypt_api_key(api_key)}, merge=True
+        )
+        return jsonify({'success': True})
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/kie/check-api-key', methods=['GET'])
+@require_auth
+@limiter.limit("200/hour")
+def kie_check_api_key():
+    """Check if the authenticated user has a Kie.ai API key saved."""
+    has_key = bool(g.kie_api_key)
+    return jsonify({'has_key': has_key})
+
+
+@app.route('/api/kie/check-credits', methods=['GET'])
+@require_auth
+@limiter.limit("60/hour")
+def kie_check_credits_route():
+    """Get the user's remaining Kie.ai credits."""
+    if not g.kie_api_key:
+        return jsonify({'error': 'No Kie.ai API key configured'}), 400
+    result = kie_check_credits(g.kie_api_key)
+    return jsonify(result)
+
+
+@app.route('/api/kie/models', methods=['GET'])
+@require_auth
+@limiter.limit("200/hour")
+def kie_list_models():
+    """Return available Kie.ai models with pricing info for frontend display."""
+    return jsonify({'models': kie_get_models_info()})
+
+
+@app.route('/api/kie/upload-image', methods=['POST'])
+@require_auth
+@limiter.limit("120/hour")
+def kie_upload_image_route():
+    """Upload an image to Kie.ai for use in I2V/I2I generation.
+    Accepts: {image_url: str} (Firebase Storage URL)."""
+    if not g.kie_api_key:
+        return jsonify({'error': 'No Kie.ai API key configured'}), 400
+    data = request.json
+    image_url = data.get('image_url', '').strip()
+    if not image_url:
+        return jsonify({'error': 'image_url is required'}), 400
+    # Validate URL is from Firebase Storage (SSRF protection)
+    try:
+        validate_url(image_url)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    result = kie_upload_image(image_url, g.kie_api_key)
+    if not result.get('success'):
+        return jsonify({'error': result.get('error', 'Upload failed')}), 500
+    return jsonify(result)
+
+
+@app.route('/api/kie/upload-media', methods=['POST'])
+@require_auth
+@limiter.limit("60/hour")
+def kie_upload_media():
+    """Upload a base64 audio or video file to Firebase Storage then to Kie.ai CDN.
+
+    Accepts: {data: 'data:audio/mp3;base64,...', filename: 'clip.mp3', media_type: 'audio'|'video'}
+    Returns: {success: bool, url: str}  — the Kie.ai CDN URL ready for ref_audio_urls / ref_video_urls
+    """
+    if not g.kie_api_key:
+        return jsonify({'error': 'No Kie.ai API key configured'}), 400
+    try:
+        body = request.json
+        data_uri = body.get('data', '')
+        filename = body.get('filename', 'upload')
+        media_type = body.get('media_type', 'audio')  # 'audio' or 'video'
+
+        if not data_uri or not data_uri.startswith('data:'):
+            return jsonify({'error': 'Valid base64 data URI is required'}), 400
+
+        header, encoded = data_uri.split(',', 1)
+        raw = base64_module.b64decode(encoded)
+
+        # Derive safe extension from MIME or filename
+        ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ('mp3' if media_type == 'audio' else 'mp4')
+        safe_name = f"{media_type}_{int(time.time())}_{filename}"
+
+        tmp_dir = tempfile.mkdtemp()
+        tmp_path = os.path.join(tmp_dir, safe_name)
+        with open(tmp_path, 'wb') as f:
+            f.write(raw)
+
+        remote_folder = f"kie_refs/{media_type}"
+        firebase_url, _ = upload_to_storage(tmp_path, remote_folder, return_path=True)
+        os.unlink(tmp_path)
+        os.rmdir(tmp_dir)
+
+        if not firebase_url:
+            return jsonify({'error': 'Firebase Storage upload failed'}), 500
+
+        # Re-host via Kie.ai CDN so Kie.ai servers can access the file
+        upload_path = f"{'audios' if media_type == 'audio' else 'videos'}/user-uploads"
+        kie_result = kie_upload_image(firebase_url, g.kie_api_key, upload_path=upload_path)
+        if not kie_result.get('success'):
+            return jsonify({'error': kie_result.get('error', 'Kie.ai CDN upload failed')}), 500
+
+        return jsonify({'success': True, 'url': kie_result['url']})
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/kie/generate', methods=['POST'])
+@require_auth
+@limiter.limit("120/hour")
+def kie_generate():
+    """Create a Kie.ai generation task.
+    Body: {model: str, prompt: str, image_urls?: [str], ...params}
+    Returns: {taskId: str, success: bool}"""
+    if not g.kie_api_key:
+        return jsonify({'error': 'No Kie.ai API key configured'}), 400
+    data = request.json
+    model = data.get('model', '').strip()
+    prompt = data.get('prompt', '').strip()
+    image_urls = data.get('image_urls')
+
+    if not model:
+        return jsonify({'error': 'model is required'}), 400
+
+    # Extract model-specific params (everything except model, prompt, image_urls, project_id)
+    reserved_keys = {'model', 'prompt', 'image_urls', 'project_id'}
+    params = {k: v for k, v in data.items() if k not in reserved_keys}
+
+    # Upload ref images to Kie.ai CDN (Seedance multimodal — Firebase URLs need re-hosting)
+    if params.get('ref_image_urls'):
+        uploaded_refs = []
+        for img_url in (params['ref_image_urls'] or [])[:9]:
+            if img_url:
+                up = kie_upload_image(str(img_url), g.kie_api_key)
+                if up.get('success'):
+                    uploaded_refs.append(up['url'])
+        params['ref_image_urls'] = uploaded_refs
+
+    print(f"[Kie Generate] model={model}, prompt={prompt[:50]}, images={len(image_urls or [])}, params={list(params.keys())}")
+
+    # Midjourney models use separate /mj/ endpoints
+    if model.startswith('midjourney-'):
+        result = kie_mj_create_task(model, prompt, g.kie_api_key, image_urls=image_urls, **params)
+    else:
+        result = kie_create_task(model, prompt, g.kie_api_key, image_urls=image_urls, **params)
+    print(f"[Kie Generate] result: {result}")
+    if not result.get('success'):
+        return jsonify({'error': result.get('error', 'Task creation failed')}), 500
+    return jsonify(result)
+
+
+@app.route('/api/kie/poll/<task_id>', methods=['GET'])
+@require_auth
+@limiter.limit("600/hour")
+def kie_poll(task_id):
+    """Poll a Kie.ai task for completion.
+    On success, downloads result and uploads to Firebase Storage for persistence."""
+    if not g.kie_api_key:
+        return jsonify({'error': 'No Kie.ai API key configured'}), 400
+
+    result = kie_poll_task(task_id, g.kie_api_key)
+    print(f"[Kie Poll] task={task_id} status={result.get('status')} urls={len(result.get('result_urls') or [])}")
+
+    # If completed, download from Kie.ai (24hr expiry) and persist to Firebase Storage
+    if result.get('status') == 'completed' and result.get('result_urls'):
+        project_id = request.args.get('project_id')
+        firebase_urls = []
+
+        for kie_url in result['result_urls']:
+            print(f"[Kie Poll] Downloading: {kie_url[:120]}...")
+            local_path = kie_download_result(kie_url, task_id)
+            if local_path:
+                try:
+                    is_video = local_path.endswith('.mp4')
+                    folder = 'kie_videos' if is_video else 'kie_images'
+                    firebase_url = upload_to_storage(local_path, folder, project_id=project_id)
+                    if firebase_url:
+                        firebase_urls.append(firebase_url)
+                        print(f"[Kie Poll] Uploaded to Firebase: {firebase_url[:120]}")
+                    else:
+                        print(f"[Kie Poll] Firebase upload returned None for {kie_url[:80]}")
+                finally:
+                    try:
+                        os.unlink(local_path)
+                        os.rmdir(os.path.dirname(local_path))
+                    except OSError:
+                        pass
+            else:
+                print(f"[Kie Poll] Download failed for: {kie_url[:120]}")
+                # If download fails, still pass through the Kie URL (temporary 24hr)
+                firebase_urls.append(kie_url)
+
+        if firebase_urls:
+            result['firebase_urls'] = firebase_urls
+    elif result.get('status') == 'completed' and not result.get('result_urls'):
+        print(f"[Kie Poll] Task completed but NO result_urls found!")
+
+    return jsonify(result)
+
+
+@app.route('/api/kie/mj/poll/<task_id>', methods=['GET'])
+@require_auth
+@limiter.limit("600/hour")
+def kie_mj_poll(task_id):
+    """Poll a Midjourney task using the dedicated /mj/ endpoint.
+    On success, downloads result and uploads to Firebase Storage for persistence."""
+    if not g.kie_api_key:
+        return jsonify({'error': 'No Kie.ai API key configured'}), 400
+
+    result = kie_mj_poll_task(task_id, g.kie_api_key)
+    print(f"[Kie/MJ Poll] task={task_id} status={result.get('status')} urls={len(result.get('result_urls') or [])}")
+
+    # If completed, download from Kie.ai (24hr expiry) and persist to Firebase Storage
+    if result.get('status') == 'completed' and result.get('result_urls'):
+        project_id = request.args.get('project_id')
+        firebase_urls = []
+
+        for kie_url in result['result_urls']:
+            print(f"[Kie/MJ Poll] Downloading: {kie_url[:120]}...")
+            local_path = kie_download_result(kie_url, task_id)
+            if local_path:
+                try:
+                    is_video = local_path.endswith('.mp4')
+                    folder = 'kie_videos' if is_video else 'kie_images'
+                    firebase_url = upload_to_storage(local_path, folder, project_id=project_id)
+                    if firebase_url:
+                        firebase_urls.append(firebase_url)
+                        print(f"[Kie/MJ Poll] Uploaded to Firebase: {firebase_url[:120]}")
+                    else:
+                        print(f"[Kie/MJ Poll] Firebase upload returned None for {kie_url[:80]}")
+                finally:
+                    try:
+                        os.unlink(local_path)
+                        os.rmdir(os.path.dirname(local_path))
+                    except OSError:
+                        pass
+            else:
+                print(f"[Kie/MJ Poll] Download failed for: {kie_url[:120]}")
+                firebase_urls.append(kie_url)
+
+        if firebase_urls:
+            result['firebase_urls'] = firebase_urls
+    elif result.get('status') == 'completed' and not result.get('result_urls'):
+        print(f"[Kie/MJ Poll] Task completed but NO result_urls found!")
+
+    return jsonify(result)
+
+
+@app.route('/api/kie/mj/upscale', methods=['POST'])
+@require_auth
+@limiter.limit("120/hour")
+def kie_mj_upscale_route():
+    """Upscale one of the 4 MJ grid images.
+    Body: {taskId: str, imageIndex: 0-3}"""
+    if not g.kie_api_key:
+        return jsonify({'error': 'No Kie.ai API key configured'}), 400
+    data = request.json
+    task_id = data.get('taskId', '').strip()
+    image_index = data.get('imageIndex')
+    if not task_id or image_index is None:
+        return jsonify({'error': 'taskId and imageIndex are required'}), 400
+    result = kie_mj_upscale(task_id, image_index, g.kie_api_key)
+    if not result.get('success'):
+        return jsonify({'error': result.get('error', 'Upscale failed')}), 500
+    return jsonify(result)
+
+
+@app.route('/api/kie/mj/vary', methods=['POST'])
+@require_auth
+@limiter.limit("120/hour")
+def kie_mj_vary_route():
+    """Create variations of one of the 4 MJ grid images.
+    Body: {taskId: str, imageIndex: 1-4}"""
+    if not g.kie_api_key:
+        return jsonify({'error': 'No Kie.ai API key configured'}), 400
+    data = request.json
+    task_id = data.get('taskId', '').strip()
+    image_index = data.get('imageIndex')
+    if not task_id or image_index is None:
+        return jsonify({'error': 'taskId and imageIndex are required'}), 400
+    result = kie_mj_vary(task_id, image_index, g.kie_api_key)
+    if not result.get('success'):
+        return jsonify({'error': result.get('error', 'Vary failed')}), 500
+    return jsonify(result)
 
 
 # ────────────────────────────────────────────────────────────────
@@ -173,13 +730,14 @@ def check_api_key():
 
 @app.route('/api/generate-image', methods=['POST'])
 @require_auth
+@limiter.limit("600/hour")
 def generate_image_route():
     try:
         data = request.json
-        prompt = data.get('prompt')
+        prompt, err = validate_input(data, 'prompt', max_length=10000)
+        if err:
+            return jsonify({'error': err}), 400
         model = data.get('model')  # optional: specific model selection
-        if not prompt:
-            return jsonify({'error': 'Prompt is required'}), 400
 
         print(f"Generating image for prompt: {prompt} (model: {model or 'auto'})")
         image_path = generate_image_content(prompt, model_name=model, api_key=g.api_key)
@@ -194,12 +752,101 @@ def generate_image_route():
         return jsonify({'image_url': image_url})
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
+
+
+@app.route('/api/upload-reference-image', methods=['POST'])
+@require_auth
+@limiter.limit("60/hour")
+def upload_reference_image():
+    """Upload a base64 reference image to Firebase Storage, return public URL."""
+    try:
+        data = request.json
+        image_b64 = data.get('image')
+        image_type = data.get('type', 'style')
+        project_id = data.get('project_id')
+        filename = data.get('filename', 'image.jpg')
+
+        if not image_b64 or not image_b64.startswith('data:'):
+            return jsonify({'error': 'Valid base64 data URI is required'}), 400
+
+        header, encoded = image_b64.split(',', 1)
+        ext = 'png' if 'png' in header else 'jpg'
+        safe_name = f"{image_type}_{int(time.time())}_{filename.rsplit('.', 1)[0]}.{ext}"
+
+        tmp_dir = tempfile.mkdtemp()
+        tmp_path = os.path.join(tmp_dir, safe_name)
+        tmp = open(tmp_path, 'wb')
+        tmp.write(base64_module.b64decode(encoded))
+        tmp.close()
+
+        remote_folder = f"references/{project_id}/{image_type}" if project_id else f"references/{image_type}"
+        url, blob_path = upload_to_storage(tmp_path, remote_folder, return_path=True)
+        os.unlink(tmp_path)
+        os.rmdir(tmp_dir)
+
+        if not url:
+            return jsonify({'error': 'Failed to upload to storage'}), 500
+
+        return jsonify({'success': True, 'url': url, 'path': blob_path})
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/refresh-reference-images', methods=['POST'])
+@require_auth
+def refresh_reference_images():
+    """Given blob paths, return fresh signed URLs and base64 data for each.
+
+    Accepts: { paths: ["references/proj/character/file.png", ...] }
+    Returns: { images: { "path": { url, data } } }
+    """
+    try:
+        if not bucket:
+            return jsonify({'error': 'Firebase Storage not configured'}), 500
+
+        data = request.json
+        paths = data.get('paths', [])
+        if not paths or not isinstance(paths, list):
+            return jsonify({'images': {}})
+
+        # Limit to 20 images per request to prevent abuse
+        paths = paths[:20]
+        result = {}
+        for blob_path in paths:
+            if not isinstance(blob_path, str) or not blob_path.startswith('references/'):
+                continue
+            try:
+                blob = bucket.blob(blob_path)
+                if not blob.exists():
+                    print(f"[Refresh] Blob not found: {blob_path}")
+                    continue
+                url = _generate_signed_url(blob)
+                if not url:
+                    print(f"[Refresh] Could not generate signed URL for {blob_path}")
+                    continue
+                # Also return base64 data so client can use it directly
+                raw = blob.download_as_bytes()
+                ct = blob.content_type or 'image/jpeg'
+                b64 = base64_module.b64encode(raw).decode('utf-8')
+                result[blob_path] = {
+                    'url': url,
+                    'data': f"data:{ct};base64,{b64}"
+                }
+            except Exception as e:
+                print(f"[Refresh] Failed to refresh {blob_path}: {e}")
+                continue
+
+        print(f"[Refresh] Refreshed {len(result)}/{len(paths)} reference images")
+        return jsonify({'images': result})
+
+    except Exception as e:
+        return safe_error_response(e)
 
 
 @app.route('/generated/<path:filename>')
 def serve_generated_file(filename):
+    """Serve generated images (local fallback when Storage upload fails)."""
     return send_from_directory(GENERATED_DIR, filename)
 
 
@@ -209,15 +856,15 @@ def serve_generated_file(filename):
 
 @app.route('/api/generate-tts', methods=['POST'])
 @require_auth
+@limiter.limit("60/hour")
 def generate_tts_route():
     try:
         data = request.json
-        text = data.get('text')
-        voice = data.get('voice', 'Kore')
+        text, err = validate_input(data, 'text', max_length=50000)
+        if err:
+            return jsonify({'error': err}), 400
+        voice = data.get('voice', 'kore').lower()
         style_instructions = data.get('style_instructions', '')
-
-        if not text:
-            return jsonify({'error': 'Text is required'}), 400
 
         print(f"Generating TTS for text ({len(text)} chars), voice={voice}")
         audio_path = generate_tts(text, voice_name=voice, style_instructions=style_instructions, api_key=g.api_key)
@@ -232,12 +879,12 @@ def generate_tts_route():
         return jsonify({'audio_url': audio_url})
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/audio/<path:filename>')
 def serve_audio_file(filename):
+    """Serve generated audio (local fallback when Storage upload fails)."""
     return send_from_directory(AUDIO_DIR, filename)
 
 
@@ -247,6 +894,7 @@ def serve_audio_file(filename):
 
 @app.route('/api/analyze-style-images', methods=['POST'])
 @require_auth
+@limiter.limit("60/hour")
 def analyze_style_images_route():
     """
     Analyze visual style from 1-4 uploaded images using Gemini Vision.
@@ -255,13 +903,14 @@ def analyze_style_images_route():
     """
     try:
         data = request.json
-        images = data.get('images', [])
-
-        if not images or len(images) == 0:
+        images, err = validate_input(data, 'images', field_type=list, max_length=4)
+        if err:
+            return jsonify({'error': err}), 400
+        if not images:
             return jsonify({'error': 'At least one image is required'}), 400
 
-        if len(images) > 4:
-            return jsonify({'error': 'Maximum 4 images allowed'}), 400
+        # Resolve URLs to base64 if needed (images restored from Firebase Storage)
+        images = [resolve_image_input(img) for img in images]
 
         print(f"[Style Analysis] Analyzing {len(images)} images...")
         style_analysis = analyze_style_from_images(images, api_key=g.api_key)
@@ -277,12 +926,12 @@ def analyze_style_images_route():
         })
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/analyze-style-text', methods=['POST'])
 @require_auth
+@limiter.limit("60/hour")
 def analyze_style_text_route():
     """
     Analyze visual style from a free-text description.
@@ -310,8 +959,325 @@ def analyze_style_text_route():
         })
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
+
+
+# ────────────────────────────────────────────────────────────────
+#  CAST SUGGESTION
+# ────────────────────────────────────────────────────────────────
+
+@app.route('/api/structure-script', methods=['POST'])
+@require_auth
+@limiter.limit("60/hour")
+def structure_script_route():
+    """
+    Take raw plain-text script and structure it into acts/beats.
+    Accepts: { raw_text: "...", duration_minutes: 10 }
+    Returns: { success, narration: { title, duration_minutes, narration: [...] } }
+    """
+    try:
+        data = request.json
+        raw_text = data.get('raw_text', '').strip()
+        duration_minutes = data.get('duration_minutes', 10)
+
+        if not raw_text:
+            return jsonify({'error': 'No script text provided'}), 400
+
+        from research_templates import build_script_structuring_prompt
+
+        print(f"[Script Structure] Structuring {len(raw_text.split())} words into acts/beats...")
+        prompt = build_script_structuring_prompt(
+            raw_text=raw_text,
+            duration_minutes=duration_minutes,
+        )
+
+        raw_response = generate_content(
+            prompt, model_name="gemini-3-flash-preview",
+            temperature=0.2, api_key=g.api_key
+        )
+
+        if not raw_response or (isinstance(raw_response, str) and raw_response.startswith("Error")):
+            return jsonify({'error': raw_response or 'Script structuring returned no result'}), 500
+
+        # Parse JSON response
+        import json
+        cleaned = raw_response.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:].strip()
+
+        narration = json.loads(cleaned)
+        beats = narration.get('narration', [])
+        act_count = len(set(b.get('act', '') for b in beats))
+        print(f"[Script Structure] Complete: {act_count} acts, {len(beats)} beats")
+
+        return jsonify({
+            'success': True,
+            'narration': narration
+        })
+
+    except json.JSONDecodeError as e:
+        print(f"[Script Structure] JSON parse error: {e}")
+        return jsonify({'error': f'Failed to parse structured script: {e}'}), 500
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/suggest-cast', methods=['POST'])
+@require_auth
+@limiter.limit("60/hour")
+def suggest_cast_route():
+    """
+    Analyze the finalized script and suggest a cast of characters.
+    Accepts: { narration_json: {...}, character_description: "...", rendering_split: "unified" }
+    Returns: { cast_data: {title, has_characters, cast: [...], casting_notes} }
+    """
+    try:
+        data = request.json
+        narration_json = data.get('narration_json')
+        character_description = data.get('character_description', '')
+        rendering_split = data.get('rendering_split', 'unified')
+        creative_direction = data.get('creative_direction')
+
+        if not narration_json or not narration_json.get('narration'):
+            return jsonify({'error': 'Narration data with beats is required'}), 400
+
+        from research_templates import build_cast_suggestion_prompt
+
+        print(f"[Cast Suggestion] Analyzing script for characters...")
+        prompt = build_cast_suggestion_prompt(
+            narration_json=narration_json,
+            character_description=character_description,
+            rendering_split=rendering_split,
+            creative_direction=creative_direction,
+        )
+
+        raw_response = generate_content(
+            prompt, model_name="gemini-3-flash-preview",
+            temperature=0.3, api_key=g.api_key
+        )
+
+        if not raw_response or (isinstance(raw_response, str) and raw_response.startswith("Error")):
+            return jsonify({'error': raw_response or 'Cast suggestion returned no result'}), 500
+
+        # Parse JSON response
+        import json
+        # Strip markdown code fences if present
+        cleaned = raw_response.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:].strip()
+
+        cast_data = json.loads(cleaned)
+        cast_count = len(cast_data.get('cast', []))
+        has_chars = cast_data.get('has_characters', cast_count > 0)
+        print(f"[Cast Suggestion] Complete: {cast_count} characters found, has_characters={has_chars}")
+
+        return jsonify({
+            'success': True,
+            'cast_data': cast_data
+        })
+
+    except json.JSONDecodeError as e:
+        print(f"[Cast Suggestion] JSON parse error: {e}")
+        return jsonify({'error': f'Failed to parse cast suggestion response: {e}'}), 500
+    except Exception as e:
+        return safe_error_response(e)
+
+
+# ────────────────────────────────────────────────────────────────
+#  CAST PORTRAIT GENERATION
+# ────────────────────────────────────────────────────────────────
+
+@app.route('/api/generate-cast-portrait', methods=['POST'])
+@require_auth
+@limiter.limit("600/hour")
+def generate_cast_portrait():
+    """Generate a portrait image for a cast member (face closeup or full body)."""
+    try:
+        data = request.json
+        prompt, err = validate_input(data, 'prompt', max_length=10000)
+        if err:
+            return jsonify({'error': err}), 400
+
+        portrait_type = data.get('portrait_type', 'face_closeup')
+        character_name = data.get('character_name', 'Unknown')
+        project_id = data.get('project_id')
+
+        if portrait_type not in ('face_closeup', 'full_body'):
+            return jsonify({'error': 'portrait_type must be face_closeup or full_body'}), 400
+        if not project_id:
+            return jsonify({'error': 'project_id is required'}), 400
+
+        model = data.get('model', 'gemini-3-pro-image-preview')
+        # Ensure we use a Gemini model (Imagen doesn't support style refs)
+        if model.startswith('imagen-'):
+            model = 'gemini-3-pro-image-preview'
+
+        aspect_ratio = '1:1' if portrait_type == 'face_closeup' else '9:16'
+        style_images = [r for r in (resolve_image_input(img) for img in data.get('style_images', []) if img) if r]
+        style_mode = data.get('style_mode', 'art_only')
+
+        safe_name = ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in character_name.lower())
+        scene_id = f"portrait_{safe_name}_{portrait_type}"
+
+        print(f"[Cast Portrait] Generating {portrait_type} for '{character_name}' "
+              f"(model={model}, {len(style_images)} style refs)")
+
+        result = generate_scene_image(
+            prompt=prompt,
+            model_name=model,
+            aspect_ratio=aspect_ratio,
+            resolution='2K',
+            style_images=style_images or None,
+            characters=None,
+            character_images=None,
+            additional_context='',
+            style_mode=style_mode,
+            scene_id=scene_id,
+            api_key=g.api_key,
+        )
+
+        if "error" in result:
+            return jsonify({'error': result['error'], 'portrait_type': portrait_type, 'character_name': character_name}), 500
+
+        # Upload to Firebase Storage under references path
+        if result.get("success") and "local_path" in result:
+            url, blob_path = upload_to_storage(
+                result["local_path"],
+                f"references/{project_id}/character",
+                return_path=True
+            )
+            if url:
+                result["image_url"] = url
+                result["blob_path"] = blob_path
+            del result["local_path"]
+
+        result["portrait_type"] = portrait_type
+        result["character_name"] = character_name
+        return jsonify(result)
+
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/generate-cast-portraits-batch', methods=['POST'])
+@require_auth
+@limiter.limit("60/hour")
+def generate_cast_portraits_batch():
+    """Generate portraits for all cast members (2 images each: face closeup + full body)."""
+    try:
+        data = request.json
+        cast = data.get('cast', [])
+        if not cast:
+            return jsonify({'error': 'cast array is required'}), 400
+
+        project_id = data.get('project_id')
+        if not project_id:
+            return jsonify({'error': 'project_id is required'}), 400
+
+        model = data.get('model', 'gemini-3-pro-image-preview')
+        if model.startswith('imagen-'):
+            model = 'gemini-3-pro-image-preview'
+
+        style_images = [r for r in (resolve_image_input(img) for img in data.get('style_images', []) if img) if r]
+        style_mode = data.get('style_mode', 'art_only')
+        api_key = g.api_key
+
+        def generate_one_portrait(char_name, prompt, portrait_type):
+            safe_name = ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in char_name.lower())
+            scene_id = f"portrait_{safe_name}_{portrait_type}"
+            aspect_ratio = '1:1' if portrait_type == 'face_closeup' else '9:16'
+
+            res = generate_scene_image(
+                prompt=prompt,
+                model_name=model,
+                aspect_ratio=aspect_ratio,
+                resolution='2K',
+                style_images=style_images or None,
+                characters=None,
+                character_images=None,
+                additional_context='',
+                style_mode=style_mode,
+                scene_id=scene_id,
+                api_key=api_key,
+            )
+
+            if res.get("success") and "local_path" in res:
+                url, blob_path = upload_to_storage(
+                    res["local_path"],
+                    f"references/{project_id}/character",
+                    return_path=True
+                )
+                if url:
+                    res["image_url"] = url
+                    res["blob_path"] = blob_path
+                if "local_path" in res:
+                    del res["local_path"]
+
+            res["portrait_type"] = portrait_type
+            res["character_name"] = char_name
+            return res
+
+        # Build list of all portrait jobs
+        jobs = []
+        for char in cast:
+            name = char.get('name', 'Unknown')
+            prompts = char.get('portrait_prompts', {})
+            if prompts.get('face_closeup'):
+                jobs.append((name, prompts['face_closeup'], 'face_closeup'))
+            if prompts.get('full_body'):
+                jobs.append((name, prompts['full_body'], 'full_body'))
+
+        if not jobs:
+            return jsonify({'error': 'No portrait prompts found in cast data'}), 400
+
+        print(f"[Cast Portrait] Batch generating {len(jobs)} portraits for {len(cast)} characters")
+
+        results = []
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(generate_one_portrait, *job): job for job in jobs}
+            for future in as_completed(futures):
+                try:
+                    res = future.result()
+                    results.append(res)
+                except Exception as exc:
+                    job = futures[future]
+                    results.append({
+                        "error": str(exc),
+                        "character_name": job[0],
+                        "portrait_type": job[2]
+                    })
+
+        # Group results by character
+        grouped = {}
+        for res in results:
+            name = res.get('character_name', 'Unknown')
+            ptype = res.get('portrait_type', '')
+            if name not in grouped:
+                grouped[name] = {"character_name": name}
+            grouped[name][ptype] = {
+                "success": res.get("success", False),
+                "image_url": res.get("image_url"),
+                "blob_path": res.get("blob_path"),
+                "error": res.get("error"),
+            }
+
+        success_count = sum(1 for r in results if r.get('success'))
+        print(f"[Cast Portrait] Batch complete: {success_count}/{len(jobs)} succeeded")
+
+        return jsonify({'results': list(grouped.values())})
+
+    except Exception as e:
+        return safe_error_response(e)
 
 
 # ────────────────────────────────────────────────────────────────
@@ -320,6 +1286,7 @@ def analyze_style_text_route():
 
 @app.route('/api/expand-creative-direction', methods=['POST'])
 @require_auth
+@limiter.limit("60/hour")
 def expand_creative_direction_route():
     """
     Expand user's free-form creative direction into structured guidance + style defaults.
@@ -348,12 +1315,12 @@ def expand_creative_direction_route():
         return jsonify({'success': True, 'creative_direction': result})
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/refine-creative-direction', methods=['POST'])
 @require_auth
+@limiter.limit("60/hour")
 def refine_creative_direction_route():
     """
     Refine an already-expanded creative direction based on user feedback.
@@ -386,8 +1353,7 @@ def refine_creative_direction_route():
         return jsonify({'success': True, 'creative_direction': result})
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 # ────────────────────────────────────────────────────────────────
@@ -396,6 +1362,7 @@ def refine_creative_direction_route():
 
 @app.route('/api/templates', methods=['GET'])
 @require_auth
+@limiter.limit("200/hour")
 def list_templates():
     """Return all available research/script templates."""
     return jsonify({'templates': get_all_templates_metadata()})
@@ -403,6 +1370,7 @@ def list_templates():
 
 @app.route('/api/script-options', methods=['GET'])
 @require_auth
+@limiter.limit("200/hour")
 def get_script_options():
     """Return all available audience profiles, tones, format presets, and viewer outcomes for the UI."""
     return jsonify({
@@ -415,6 +1383,7 @@ def get_script_options():
 
 @app.route('/api/research', methods=['POST'])
 @require_auth
+@limiter.limit("30/hour")
 def run_research():
     """
     Conduct research using Gemini as the research engine.
@@ -427,13 +1396,13 @@ def run_research():
     """
     try:
         data = request.json
-        topic = data.get('topic', '').strip()
+        topic, err = validate_input(data, 'topic', max_length=500)
+        if err:
+            return jsonify({'error': err}), 400
+        topic = topic.strip()
         template_id = data.get('template_id', 'educational_explainer')
         research_model = data.get('research_model', 'fast')  # 'fast', 'deep', or 'deep_research_agent'
         project_id = data.get('project_id')
-
-        if not topic:
-            return jsonify({'error': 'Topic is required'}), 400
 
         template = get_template(template_id)
         if not template:
@@ -532,13 +1501,16 @@ The more specific and detailed your answers, the better. No vague language. No a
 Return ONLY the JSON."""
 
         print(f"[Research] Sending research prompt to Gemini...")
-        raw = generate_content(research_prompt, model_name=model_name, use_search=use_search, api_key=g.api_key)
+        research_max_tokens = 32768 if research_model == 'deep' else 16384
+        raw = generate_content(research_prompt, model_name=model_name, use_search=use_search,
+                               api_key=g.api_key, max_output_tokens=research_max_tokens)
 
         # Fallback: if Deep (Pro) failed, retry with Flash + Search
         if raw and raw.startswith("Error:") and model_name != "gemini-3-flash-preview":
             fallback_model = "gemini-3-flash-preview"
             print(f"[Research] Primary model failed. Falling back to {fallback_model} + Search...")
-            raw = generate_content(research_prompt, model_name=fallback_model, use_search=True, api_key=g.api_key)
+            raw = generate_content(research_prompt, model_name=fallback_model, use_search=True,
+                                   api_key=g.api_key, max_output_tokens=16384)
 
         if not raw or raw.startswith("Error:"):
             return jsonify({'error': raw or 'Research query returned no result'}), 500
@@ -564,6 +1536,23 @@ Return ONLY the JSON."""
             topic, template_id, research_data.get("results", [])
         )
 
+        # Optional structured pipeline (planner → parallel sub-researchers → merger).
+        # Runs in addition to the legacy call so the existing dossier stays unchanged
+        # when extraction fails. Gated by the RESEARCH_STRUCTURED env flag.
+        structured = None
+        if RESEARCH_STRUCTURED_ENABLED:
+            try:
+                print(f"[Research] RESEARCH_STRUCTURED enabled — running structured pipeline")
+                structured = run_structured_research(
+                    topic=topic,
+                    template_id=template_id,
+                    api_key=g.api_key,
+                    mode='deep' if research_model == 'deep' else 'fast',
+                )
+            except Exception as e:
+                print(f"[Research] Structured pipeline failed: {e}")
+                structured = None
+
         # Save to .tmp for reference
         if DEBUG_SAVE_TMP:
             save_dir = TMP_DIR
@@ -580,13 +1569,17 @@ Return ONLY the JSON."""
         if project_id:
             try:
                 project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
-                project_ref.set({
+                project_payload = {
                     'research_dossier': dossier,
                     'research_summary': research_data.get("summary", ""),
                     'research_key_facts': research_data.get("key_facts", []),
                     'research_sources': research_data.get("sources_mentioned", []),
-                    'updated_at': firestore.SERVER_TIMESTAMP
-                }, merge=True)
+                    'last_updated_at': firestore.SERVER_TIMESTAMP
+                }
+                if structured is not None:
+                    project_payload['research_structured'] = structured
+                    project_payload['research_schema_version'] = RESEARCH_SCHEMA_VERSION
+                project_ref.set(project_payload, merge=True)
                 print(f"[Research] Saved to project document {project_id}")
             except Exception as e:
                 print(f"[Research] Warning: Failed to save to project document: {e}")
@@ -594,7 +1587,7 @@ Return ONLY the JSON."""
         # Save dossier to Firestore for persistence/reuse
         try:
             dossier_ref = db.collection('users').document(g.uid).collection('dossiers').document()
-            dossier_ref.set({
+            dossier_payload = {
                 'topic': topic,
                 'template_id': template_id,
                 'template_name': template["metadata"]["name"],
@@ -604,27 +1597,29 @@ Return ONLY the JSON."""
                 'summary': research_data.get("summary", ""),
                 'created_at': firestore.SERVER_TIMESTAMP,
                 'research_model': research_model
-            })
+            }
+            if structured is not None:
+                dossier_payload['structured'] = structured
+                dossier_payload['schema_version'] = RESEARCH_SCHEMA_VERSION
+            dossier_ref.set(dossier_payload)
             print(f"[Research] Dossier saved to Firestore: {dossier_ref.id}")
         except Exception as fs_err:
             print(f"[Research] Warning: Firestore save failed: {fs_err}")
 
-        return jsonify({
+        response = {
             'success': True,
             'dossier': dossier,
             'key_facts': research_data.get("key_facts", []),
             'sources': research_data.get("sources_mentioned", []),
             'summary': research_data.get("summary", ""),
             'template_name': template["metadata"]["name"]
-        })
+        }
+        if structured is not None:
+            response['structured'] = structured
+        return jsonify(response)
 
     except Exception as e:
-        error_trace = traceback.format_exc()
-        print(f"\n{'='*60}")
-        print(f"[Research Error] Full traceback:")
-        print(error_trace)
-        print(f"{'='*60}\n")
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 # ────────────────────────────────────────────────────────────────
@@ -633,6 +1628,7 @@ Return ONLY the JSON."""
 
 @app.route('/api/projects', methods=['GET'])
 @require_auth
+@limiter.limit("200/hour")
 def list_projects():
     """List all saved projects for the user."""
     try:
@@ -652,16 +1648,19 @@ def list_projects():
             
         return jsonify({'projects': projects})
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 @app.route('/api/projects', methods=['POST'])
 @require_auth
+@limiter.limit("200/hour")
 def create_project():
     """Create a new empty project."""
     try:
         data = request.json or {}
-        title = data.get('title', 'Untitled Project')
+        title, err = validate_input(data, 'title', required=False, max_length=200)
+        title = title or 'Untitled Project'
+        if err:
+            return jsonify({'error': err}), 400
         
         project_ref = db.collection('users').document(g.uid).collection('projects').document()
         new_project = {
@@ -670,7 +1669,7 @@ def create_project():
             'settings': data.get('settings', {}),
             'research_dossier': data.get('research_dossier', ''),
             'narration_data': data.get('narration_data', None),
-            'production_table': data.get('production_table', None),
+            'production_data': data.get('production_data', None),
             'created_at': firestore.SERVER_TIMESTAMP,
             'last_updated_at': firestore.SERVER_TIMESTAMP,
         }
@@ -682,11 +1681,11 @@ def create_project():
             'project': new_project
         })
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 @app.route('/api/projects/<project_id>', methods=['GET'])
 @require_auth
+@limiter.limit("200/hour")
 def get_project(project_id):
     """Load a specific project's full state."""
     try:
@@ -702,11 +1701,11 @@ def get_project(project_id):
                 project_data[key] = project_data[key].isoformat()
         return jsonify({'success': True, 'project': project_data})
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 @app.route('/api/projects/<project_id>', methods=['PUT'])
 @require_auth
+@limiter.limit("200/hour")
 def update_project(project_id):
     """Auto-save / Update a specific project."""
     try:
@@ -727,23 +1726,45 @@ def update_project(project_id):
         )
         return jsonify({'success': True})
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 @app.route('/api/projects/<project_id>', methods=['DELETE'])
 @require_auth
+@limiter.limit("200/hour")
 def delete_project(project_id):
-    """Delete a specific project."""
+    """Delete a specific project and all its Firebase Storage assets."""
     try:
+        # Delete Firestore document
         db.collection('users').document(g.uid).collection('projects').document(project_id).delete()
+
+        # Clean up Firebase Storage files for this project
+        if bucket:
+            storage_prefixes = [
+                f"images/{project_id}/",
+                f"videos/{project_id}/",
+                f"audio/{project_id}/",
+                f"references/{project_id}/",
+            ]
+            deleted_count = 0
+            for prefix in storage_prefixes:
+                try:
+                    blobs = list(bucket.list_blobs(prefix=prefix))
+                    for blob in blobs:
+                        blob.delete()
+                        deleted_count += 1
+                except Exception as e:
+                    print(f"[Storage Cleanup] Error deleting {prefix}: {e}")
+            if deleted_count > 0:
+                print(f"[Storage Cleanup] Deleted {deleted_count} files for project {project_id}")
+
         return jsonify({'success': True})
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/dossiers', methods=['GET'])
 @require_auth
+@limiter.limit("200/hour")
 def list_dossiers():
     """List saved research dossiers for the current user."""
     try:
@@ -764,12 +1785,13 @@ def list_dossiers():
 
         return jsonify({'dossiers': dossiers})
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("Failed to list dossiers")
         return jsonify({'dossiers': []})
 
 
 @app.route('/api/dossiers/<dossier_id>', methods=['GET'])
 @require_auth
+@limiter.limit("200/hour")
 def get_dossier(dossier_id):
     """Load a specific saved dossier."""
     try:
@@ -778,12 +1800,12 @@ def get_dossier(dossier_id):
             return jsonify({'error': 'Dossier not found'}), 404
         return jsonify(doc.to_dict())
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/research/poll', methods=['POST'])
 @require_auth
+@limiter.limit("200/hour")
 def poll_research():
     """
     Poll an async Deep Research Agent interaction for results.
@@ -817,10 +1839,29 @@ def poll_research():
         notebook_results = [{"question": "Deep Research Report", "answer": research_text}]
         dossier = build_research_dossier(topic, template_id, notebook_results)
 
+        # Optional: extract a structured schema from the unstructured blob.
+        # The deep_research_agent API does not expose grounding metadata, so this
+        # is best-effort — empty sources are acceptable.
+        structured = None
+        if RESEARCH_STRUCTURED_ENABLED:
+            try:
+                print(f"[Deep Research] RESEARCH_STRUCTURED enabled — extracting structure from blob")
+                structured = structure_from_blob(
+                    text=research_text,
+                    topic=topic,
+                    template_id=template_id,
+                    mode='deep_research_agent',
+                    model='deep-research-pro-preview-12-2025',
+                    api_key=g.api_key,
+                )
+            except Exception as e:
+                print(f"[Deep Research] Structure extraction failed: {e}")
+                structured = None
+
         # Save to Firestore
         try:
             dossier_ref = db.collection('users').document(g.uid).collection('dossiers').document()
-            dossier_ref.set({
+            dossier_payload = {
                 'topic': topic,
                 'template_id': template_id,
                 'template_name': template["metadata"]["name"] if template else template_id,
@@ -830,7 +1871,11 @@ def poll_research():
                 'summary': research_text[:500],
                 'created_at': firestore.SERVER_TIMESTAMP,
                 'research_model': 'deep_research_agent'
-            })
+            }
+            if structured is not None:
+                dossier_payload['structured'] = structured
+                dossier_payload['schema_version'] = RESEARCH_SCHEMA_VERSION
+            dossier_ref.set(dossier_payload)
             print(f"[Deep Research] Dossier saved to Firestore: {dossier_ref.id}")
         except Exception as fs_err:
             print(f"[Deep Research] Warning: Firestore save failed: {fs_err}")
@@ -851,33 +1896,40 @@ def poll_research():
         if project_id:
             try:
                 project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
-                project_ref.set({
+                project_payload = {
                     'research_dossier': dossier,
                     'research_summary': research_text[:500],
                     'research_key_facts': [],
                     'research_sources': [],
-                    'updated_at': firestore.SERVER_TIMESTAMP
-                }, merge=True)
+                    'last_updated_at': firestore.SERVER_TIMESTAMP
+                }
+                if structured is not None:
+                    project_payload['research_structured'] = structured
+                    project_payload['research_schema_version'] = RESEARCH_SCHEMA_VERSION
+                project_ref.set(project_payload, merge=True)
                 print(f"[Deep Research] Saved to project document {project_id}")
             except Exception as e:
                 print(f"[Deep Research] Warning: Failed to save to project document: {e}")
 
-        return jsonify({
+        response = {
             'status': 'completed',
             'dossier': dossier,
             'key_facts': [],
             'sources': [],
             'summary': research_text[:500],
             'template_name': template["metadata"]["name"] if template else template_id,
-        })
+        }
+        if structured is not None:
+            response['structured'] = structured
+        return jsonify(response)
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/suggest-titles', methods=['POST'])
 @require_auth
+@limiter.limit("60/hour")
 def suggest_titles():
     """
     Generate 5 YouTube title suggestions based on research results.
@@ -891,6 +1943,7 @@ def suggest_titles():
         template_id = data.get('template_id', 'educational_explainer')
         dossier = data.get('dossier', '')
         audience = data.get('audience', 'General')
+        project_id = data.get('project_id')
 
         if not topic:
             return jsonify({'error': 'Topic is required'}), 400
@@ -902,6 +1955,7 @@ def suggest_titles():
             topic=topic,
             dossier=dossier,
             audience=audience,
+            structured=_load_project_structured(project_id),
         )
 
         print(f"[Titles] Generating 5 title suggestions for '{topic}' (audience: {audience})")
@@ -927,12 +1981,12 @@ def suggest_titles():
         return jsonify({'success': True, 'titles': titles[:5]})
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/auto-suggest-tone', methods=['POST'])
 @require_auth
+@limiter.limit("60/hour")
 def auto_suggest_tone_route():
     """Auto-suggest the best tone for a selected title and audience."""
     try:
@@ -957,12 +2011,12 @@ def auto_suggest_tone_route():
         return jsonify({'success': True, **result})
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/generate-script', methods=['POST'])
 @require_auth
+@limiter.limit("30/hour")
 def generate_script_route():
     """
     Generate narration from research results (acts/beats, no scene breakdown).
@@ -971,10 +2025,16 @@ def generate_script_route():
     """
     try:
         data = request.json
-        topic = data.get('topic', '').strip()
+        topic, err = validate_input(data, 'topic', max_length=500)
+        if err:
+            return jsonify({'error': err}), 400
+        topic = topic.strip()
         template_id = data.get('template_id', 'educational_explainer')
         dossier = data.get('dossier', '')
-        duration = int(data.get('duration_minutes', 10))
+        duration, err = validate_input(data, 'duration_minutes', field_type=int, required=False, min_val=1, max_val=60)
+        if err:
+            return jsonify({'error': err}), 400
+        duration = duration if duration is not None else 10
         audience = data.get('audience', 'general')
         tone = data.get('tone', '')
         focus = data.get('focus', '')
@@ -988,9 +2048,6 @@ def generate_script_route():
         style_mode = data.get('style_mode', 'template')  # 'template' or 'transcript'
         style_transcript = data.get('style_transcript', '')
         style_blend_mode = data.get('style_blend_mode', 'clone')  # 'clone' or 'blend'
-
-        if not topic:
-            return jsonify({'error': 'Topic is required'}), 400
         if not dossier:
             return jsonify({'error': 'Research dossier is required. Run research first.'}), 400
 
@@ -1021,6 +2078,7 @@ def generate_script_route():
             custom_audience=custom_audience,
             custom_tone=custom_tone,
             api_key=g.api_key,
+            structured=_load_project_structured(project_id),
         )
 
         if "error" in result:
@@ -1031,8 +2089,8 @@ def generate_script_route():
             try:
                 project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
                 project_ref.set({
-                    'narration_data': result,
-                    'updated_at': firestore.SERVER_TIMESTAMP
+                    'narration_data': result.get('narration', result),
+                    'last_updated_at': firestore.SERVER_TIMESTAMP
                 }, merge=True)
                 print(f"[Narration] Saved to project document {project_id}")
             except Exception as e:
@@ -1053,12 +2111,12 @@ def generate_script_route():
         return jsonify(result)
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/regenerate-beat', methods=['POST'])
 @require_auth
+@limiter.limit("60/hour")
 def regenerate_beat_route():
     """
     Regenerate specific beats or an entire act within a narration.
@@ -1078,6 +2136,7 @@ def regenerate_beat_route():
         audience = data.get('audience', 'General')
         tone = data.get('tone', '')
         duration_minutes = int(data.get('duration_minutes', 10))
+        project_id = data.get('project_id')
 
         if not narration:
             return jsonify({'error': 'Narration is required'}), 400
@@ -1099,6 +2158,7 @@ def regenerate_beat_route():
             tone=tone,
             duration_minutes=duration_minutes,
             api_key=g.api_key,
+            structured=_load_project_structured(project_id),
         )
 
         if "error" in result:
@@ -1108,12 +2168,12 @@ def regenerate_beat_route():
         return jsonify(result)
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/generate-production-table', methods=['POST'])
 @require_auth
+@limiter.limit("60/hour")
 def generate_production_table_route():
     """
     PHASE 3: Generate production-ready prompts from narration.
@@ -1139,6 +2199,7 @@ def generate_production_table_route():
         aspect_ratio = data.get('aspect_ratio', '16:9')
         pacing_tier = data.get('pacing_tier', 'Standard')
         quality_mode = data.get('quality_mode', 'fast')
+        format_preset = data.get('format_preset', '')
 
         if style_analysis:
             summary = style_analysis.get('style_summary', 'custom') if isinstance(style_analysis, dict) else 'custom'
@@ -1152,6 +2213,11 @@ def generate_production_table_route():
             dir_summary = creative_direction.get('direction_summary', '')[:80]
             print(f"[Production] Using creative direction: {dir_summary}")
 
+        # Check for cast definition
+        cast = data.get('cast')
+        if cast and cast.get('has_characters') and cast.get('cast'):
+            print(f"[Production] Using cast: {len(cast['cast'])} characters")
+
         result = generate_production_table(
             narration_json=narration,
             duration_minutes=duration_minutes,
@@ -1160,7 +2226,9 @@ def generate_production_table_route():
             api_key=g.api_key,
             pacing_tier=pacing_tier,
             quality_mode=quality_mode,
-            creative_direction=creative_direction
+            creative_direction=creative_direction,
+            cast=cast,
+            format_preset=format_preset
         )
 
         if "error" in result:
@@ -1171,8 +2239,8 @@ def generate_production_table_route():
             try:
                 project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
                 project_ref.set({
-                    'production_data': result,
-                    'updated_at': firestore.SERVER_TIMESTAMP
+                    'production_data': result.get('production_table', result),
+                    'last_updated_at': firestore.SERVER_TIMESTAMP
                 }, merge=True)
                 print(f"[Production] Saved to project document {project_id}")
             except Exception as e:
@@ -1194,8 +2262,7 @@ def generate_production_table_route():
         return jsonify(result)
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 # ────────────────────────────────────────────────────────────────
@@ -1204,11 +2271,34 @@ def generate_production_table_route():
 
 @app.route('/api/latest-production-table', methods=['GET'])
 @require_auth
+@limiter.limit("200/hour")
 def get_latest_production_table():
-    """Return the most recently saved production table JSON from .tmp/."""
+    """Return the most recently saved production table JSON.
+
+    Priority: 1) Firestore project doc, 2) .tmp/{project_id}/ folder.
+    Requires project_id to prevent cross-project contamination.
+    """
     try:
         project_id = request.args.get('project_id')
-        search_dir = os.path.join(TMP_DIR, project_id) if project_id else TMP_DIR
+        if not project_id:
+            return jsonify({'error': 'project_id is required'}), 400
+
+        # Priority 1: Try Firestore (authoritative source)
+        try:
+            project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
+            doc = project_ref.get()
+            if doc.exists:
+                proj_data = doc.to_dict()
+                if proj_data.get('production_data'):
+                    pd = proj_data['production_data']
+                    pt = pd.get('production_table', pd) if isinstance(pd, dict) else pd
+                    print(f"[Visuals] Loaded production table from Firestore for project {project_id}")
+                    return jsonify({'success': True, 'production_table': pt})
+        except Exception as e:
+            print(f"[Visuals] Firestore lookup failed, falling back to .tmp/: {e}")
+
+        # Priority 2: .tmp/ folder scoped to project_id only
+        search_dir = os.path.join(TMP_DIR, project_id)
         pattern = os.path.join(search_dir, "production_table_*.json")
         files = glob_module.glob(pattern)
         if not files:
@@ -1222,16 +2312,16 @@ def get_latest_production_table():
         # Unwrap if saved file has {success, production_table: {...}} structure
         pt = data.get('production_table', data) if isinstance(data, dict) else data
 
-        print(f"[Visuals] Loaded latest production table: {os.path.basename(latest)}")
+        print(f"[Visuals] Loaded latest production table from .tmp/: {os.path.basename(latest)}")
         return jsonify({'success': True, 'production_table': pt})
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/visuals/sync-storage-images', methods=['POST'])
 @require_auth
+@limiter.limit("200/hour")
 def visuals_sync_storage_images():
     """Scan Firebase Storage for orphaned images and link them back to project scenes.
     
@@ -1268,23 +2358,20 @@ def visuals_sync_storage_images():
                 # Sort by name (contains timestamp) → last = most recent
                 scene_blobs.sort(key=lambda b: b.name)
                 latest = scene_blobs[-1]
-                # Ensure it's public and get the URL
-                try:
-                    latest.make_public()
-                except Exception:
-                    pass  # May already be public
-                matches[str(sid)] = latest.public_url
+                url = _generate_signed_url(latest)
+                if url:
+                    matches[str(sid)] = url
 
         print(f"[Sync] Found {len(matches)} orphaned images for {len(scene_ids)} scene IDs")
         return jsonify({'matches': matches})
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/visuals/scene-image-history', methods=['POST'])
 @require_auth
+@limiter.limit("200/hour")
 def visuals_scene_image_history():
     """Return ALL generated images per scene from Firebase Storage.
 
@@ -1306,66 +2393,80 @@ def visuals_scene_image_history():
             return jsonify({'history': {}})
 
         history = {}
-        search_prefix = f"images/{project_id}/scene_" if project_id else "images/scene_"
-        all_blobs = list(bucket.list_blobs(prefix=search_prefix))
 
-        for sid in scene_ids:
-            safe_id = str(sid).replace("/", "_").replace(" ", "_")
-            prefix = f"scene_{safe_id}_"
-            scene_blobs = [b for b in all_blobs if b.name.split('/')[-1].startswith(prefix)]
+        # Fetch from project-scoped path
+        all_blobs = list(bucket.list_blobs(prefix=f"images/{project_id}/scene_")) if project_id else []
+        # Only fall back to legacy root path when no project_id is provided
+        if not project_id:
+            all_blobs = list(bucket.list_blobs(prefix="images/scene_"))
 
-            if scene_blobs:
-                # Sort by name (contains timestamp) descending -> newest first
-                scene_blobs.sort(key=lambda b: b.name, reverse=True)
-                entries = []
-                for blob in scene_blobs:
-                    try:
-                        blob.make_public()
-                    except Exception:
-                        pass
-                    filename = blob.name.split('/')[-1]
-                    # Extract timestamp from filename: scene_{safe_id}_{timestamp}.{ext}
-                    ts_part = filename.replace(f"scene_{safe_id}_", "").rsplit(".", 1)[0]
-                    try:
-                        timestamp = int(ts_part)
-                    except ValueError:
-                        timestamp = 0
+        def _make_entries(blobs_for_scene, prefix):
+            blobs_for_scene.sort(key=lambda b: b.name, reverse=True)
+            entries = []
+            for blob in blobs_for_scene:
+                filename = blob.name.split('/')[-1]
+                ts_part = filename.replace(prefix, "").rsplit(".", 1)[0]
+                try:
+                    timestamp = int(ts_part)
+                except ValueError:
+                    timestamp = 0
+                signed_url = _generate_signed_url(blob)
+                if signed_url:
                     entries.append({
-                        'url': blob.public_url,
+                        'url': signed_url,
                         'timestamp': timestamp,
                         'filename': filename,
                     })
-                history[str(sid)] = entries
+            return entries
+
+        for sid in scene_ids:
+            safe_id = str(sid).replace("/", "_").replace(" ", "_")
+            prefix = f"{safe_id}_" if safe_id.startswith("scene_") else f"scene_{safe_id}_"
+
+            scene_blobs = [b for b in all_blobs if b.name.split('/')[-1].startswith(prefix)]
+
+            if scene_blobs:
+                # De-duplicate by filename (same image may appear in both paths)
+                seen = {}
+                for b in scene_blobs:
+                    fn = b.name.split('/')[-1]
+                    if fn not in seen:
+                        seen[fn] = b
+                unique_blobs = list(seen.values())
+                history[str(sid)] = _make_entries(unique_blobs, prefix)
 
         total_images = sum(len(v) for v in history.values())
         print(f"[History] Returned image history for {len(history)} scenes ({total_images} total images)")
         return jsonify({'history': history})
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/visuals/generate-image', methods=['POST'])
 @require_auth
+@limiter.limit("600/hour")
 def visuals_generate_image():
     """Generate a single scene image using Gemini image models."""
     try:
         data = request.json
         scene_id = data.get('scene_id')
-        prompt = data.get('prompt')
-
-        if not prompt:
-            return jsonify({'error': 'Prompt is required'}), 400
+        prompt, err = validate_input(data, 'prompt', max_length=10000)
+        if err:
+            return jsonify({'error': err}), 400
         if not scene_id:
             return jsonify({'error': 'scene_id is required'}), 400
 
         model = data.get('model', 'gemini-3-pro-image-preview')
         aspect_ratio = data.get('aspect_ratio', '16:9')
         resolution = data.get('resolution', '2K')
-        style_images = data.get('style_images', [])
+        style_images = [r for r in (resolve_image_input(img) for img in data.get('style_images', []) if img) if r]
         characters = data.get('characters', [])
-        character_images = data.get('character_images', [])
+        # Resolve character image URLs to base64 (filter out any that fail to resolve)
+        for char in (characters or []):
+            if 'images' in char:
+                char['images'] = [r for r in (resolve_image_input(img) for img in char['images'] if img) if r]
+        character_images = [r for r in (resolve_image_input(img) for img in data.get('character_images', []) if img) if r]
         additional_context = data.get('additional_context', '')
         style_mode = data.get('style_mode', 'art_only')
 
@@ -1402,12 +2503,63 @@ def visuals_generate_image():
         return jsonify(result)
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
+
+
+@app.route('/api/visuals/edit-image', methods=['POST'])
+@require_auth
+@limiter.limit("600/hour")
+def visuals_edit_image():
+    """Edit an existing scene image using Gemini's image-to-image capability."""
+    try:
+        data = request.json
+        scene_id = data.get('scene_id')
+        source_image = data.get('source_image')
+        edit_prompt, err = validate_input(data, 'edit_prompt', max_length=5000)
+        if err:
+            return jsonify({'error': err}), 400
+        if not scene_id:
+            return jsonify({'error': 'scene_id is required'}), 400
+        if not source_image:
+            return jsonify({'error': 'source_image is required'}), 400
+
+        # Resolve source image (signed URL → base64, or pass through if already base64)
+        resolved_source = resolve_image_input(source_image)
+        if not resolved_source:
+            return jsonify({'error': 'Could not resolve source image (URL may be expired)'}), 400
+
+        model = data.get('model', 'gemini-3-pro-image-preview')
+        aspect_ratio = data.get('aspect_ratio', '16:9')
+
+        print(f"[Visuals] Editing image for scene {scene_id} with {model}: {edit_prompt[:80]}")
+        result = edit_scene_image(
+            source_image_data=resolved_source,
+            edit_prompt=edit_prompt,
+            model_name=model,
+            aspect_ratio=aspect_ratio,
+            scene_id=scene_id,
+            api_key=g.api_key,
+        )
+
+        if "error" in result:
+            return jsonify({'error': result['error']}), 500
+
+        project_id = data.get('project_id')
+        if result.get("success") and "local_path" in result:
+            public_url = upload_to_storage(result["local_path"], "images", project_id=project_id)
+            if public_url:
+                result["image_url"] = public_url
+            del result["local_path"]
+
+        return jsonify(result)
+
+    except Exception as e:
+        return safe_error_response(e)
 
 
 @app.route('/api/visuals/generate-batch-images', methods=['POST'])
 @require_auth
+@limiter.limit("600/hour")
 def visuals_generate_batch_images():
     """Generate images for multiple scenes in parallel."""
     try:
@@ -1417,6 +2569,20 @@ def visuals_generate_batch_images():
 
         if not scenes:
             return jsonify({'error': 'No scenes provided'}), 400
+
+        # Resolve any Storage URLs to base64 in global config (filter out failed resolves)
+        if global_config.get('style_images'):
+            global_config['style_images'] = [r for r in (resolve_image_input(img) for img in global_config['style_images'] if img) if r]
+        if global_config.get('character_images'):
+            global_config['character_images'] = [r for r in (resolve_image_input(img) for img in global_config['character_images'] if img) if r]
+        for char in (global_config.get('characters') or []):
+            if 'images' in char:
+                char['images'] = [r for r in (resolve_image_input(img) for img in char['images'] if img) if r]
+        # Also resolve per-scene characters
+        for scene in scenes:
+            for char in (scene.get('characters') or []):
+                if 'images' in char:
+                    char['images'] = [r for r in (resolve_image_input(img) for img in char['images'] if img) if r]
 
         api_key = g.api_key
 
@@ -1463,36 +2629,161 @@ def visuals_generate_batch_images():
         return jsonify({'results': results})
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
+
+
+# KIE video model keys that support image-to-video
+KIE_VIDEO_MODELS = {"kling-3.0", "kling-2.6", "sora-2", "grok-imagine-video", "wan-2.6", "hailuo-2.3", "midjourney-video", "seedance-2", "seedance-2-fast", "topaz-video-upscale"}
+
+
+def _is_kie_video_model(model: str) -> bool:
+    """Check if a model key is a KIE video model (not Veo)."""
+    return model in KIE_VIDEO_MODELS
+
+
+def _snap_kie_duration(model: str, duration: int) -> str:
+    """Snap a duration to the nearest valid value for a KIE video model."""
+    from kie_client import KIE_MODELS
+    model_info = KIE_MODELS.get(model, {})
+    allowed = model_info.get("durations", [])
+    if not allowed:
+        return str(duration)
+    # Find closest allowed duration
+    allowed_ints = [int(d) for d in allowed]
+    closest = min(allowed_ints, key=lambda d: abs(d - duration))
+    return str(closest)
 
 
 @app.route('/api/visuals/start-animation', methods=['POST'])
 @require_auth
+@limiter.limit("60/hour")
 def visuals_start_animation():
-    """Start Veo video animation for a single scene."""
+    """Start video animation for a single scene (Veo or KIE models)."""
     try:
         data = request.json
         scene_id = data.get('scene_id')
         image_url = data.get('image_url', '')
-        prompt = data.get('prompt', '')
+        prompt, err = validate_input(data, 'prompt', max_length=10000)
+        if err:
+            return jsonify({'error': err}), 400
 
         if not scene_id:
             return jsonify({'error': 'scene_id is required'}), 400
-        if not image_url:
-            return jsonify({'error': 'image_url is required (generate an image first)'}), 400
-        if not prompt:
-            return jsonify({'error': 'Animation prompt is required'}), 400
-
-        # Resolve image URL to local file path
-        image_path = ensure_local_image(image_url)
-        if not image_path:
-            return jsonify({'error': f'Image file could not be downloaded/resolved: {image_url}'}), 404
 
         model = data.get('model', 'veo-3.1-generate-preview')
         aspect_ratio = data.get('aspect_ratio', '16:9')
         duration = data.get('duration', 6)
         resolution = data.get('resolution', '720p')
+
+        # ── Topaz Video Upscaler (video-to-video, no image upload) ──
+        if model == 'topaz-video-upscale':
+            if not g.kie_api_key:
+                return jsonify({'error': 'Kie.ai API key is required for Topaz. Add it in Settings.'}), 400
+            video_url = data.get('video_url', '')
+            if not video_url:
+                return jsonify({'error': 'video_url is required for Topaz upscaling (animate a scene first)'}), 400
+            upscale_factor = str(data.get('upscale_factor', '2'))
+            print(f"[Visuals/Topaz] Upscaling video for scene {scene_id} with factor={upscale_factor}")
+            gen_result = kie_create_task(model, '', g.kie_api_key, video_url=video_url, upscale_factor=upscale_factor)
+            if not gen_result.get('success'):
+                return jsonify({'error': f"Topaz task creation failed: {gen_result.get('error', 'unknown')}"}), 500
+            task_id = gen_result.get('taskId')
+            return jsonify({
+                'status': 'in_progress',
+                'operation_name': f"kie:{task_id}",
+                'scene_id': scene_id,
+                'provider': 'kie',
+            })
+
+        # ── Seedance multi-reference params ──
+        seedance_mode = data.get('seedance_mode', 'first_frame')
+        generate_audio = data.get('generate_audio', True)
+        last_frame_url = data.get('last_frame_url')
+        ref_image_urls = data.get('ref_image_urls') or []
+        ref_video_urls = data.get('ref_video_urls') or []
+        ref_audio_urls = data.get('ref_audio_urls') or []
+
+        is_multimodal = model in ('seedance-2', 'seedance-2-fast') and seedance_mode == 'multimodal'
+
+        if not is_multimodal and not image_url:
+            return jsonify({'error': 'image_url is required (generate an image first)'}), 400
+
+        # ── KIE Video Models ──
+        if _is_kie_video_model(model):
+            if not g.kie_api_key:
+                return jsonify({'error': 'Kie.ai API key is required for this model. Add it in Settings.'}), 400
+
+            print(f"[Visuals/KIE] Starting animation for scene {scene_id} with model={model}, mode={seedance_mode}")
+
+            # Step 1: Upload first-frame image to Kie.ai (skip for multimodal mode)
+            kie_image_url = None
+            if not is_multimodal and image_url:
+                upload_result = kie_upload_image(image_url, g.kie_api_key)
+                if not upload_result.get('success'):
+                    return jsonify({'error': f"Failed to upload image to Kie.ai: {upload_result.get('error', 'unknown')}"}), 500
+                kie_image_url = upload_result['url']
+
+            # Step 2: Create generation task
+            is_mj = model.startswith('midjourney-')
+            snapped_duration = _snap_kie_duration(model, int(duration))
+            task_params = {
+                'aspect_ratio': aspect_ratio,
+                'duration': snapped_duration,
+                'resolution': resolution,
+            }
+            # Remove params not applicable to certain models
+            if is_mj:
+                task_params.pop('resolution', None)
+                task_params.pop('duration', None)
+
+            # ── Seedance-specific params ──
+            if model in ('seedance-2', 'seedance-2-fast'):
+                task_params['audio'] = generate_audio
+                if seedance_mode == 'first_last_frame' and last_frame_url:
+                    task_params['last_frame_url'] = last_frame_url
+                elif seedance_mode == 'multimodal':
+                    # Upload ref images to Kie.ai CDN; pass ref videos/audio directly
+                    if ref_image_urls:
+                        uploaded_refs = []
+                        for img_url in ref_image_urls[:9]:
+                            up = kie_upload_image(img_url, g.kie_api_key)
+                            if up.get('success'):
+                                uploaded_refs.append(up['url'])
+                        task_params['ref_image_urls'] = uploaded_refs
+                    if ref_video_urls:
+                        task_params['ref_video_urls'] = [u for u in ref_video_urls[:3] if u]
+                    if ref_audio_urls:
+                        task_params['ref_audio_urls'] = [u for u in ref_audio_urls[:3] if u]
+
+            print(f"[Visuals/KIE] Task params: {task_params}")
+
+            image_args = [kie_image_url] if kie_image_url else None
+            if is_mj:
+                gen_result = kie_mj_create_task(model, prompt, g.kie_api_key,
+                                                 image_urls=image_args, **task_params)
+            else:
+                gen_result = kie_create_task(model, prompt, g.kie_api_key,
+                                             image_urls=image_args, **task_params)
+
+            if not gen_result.get('success'):
+                return jsonify({'error': f"KIE task creation failed: {gen_result.get('error', 'unknown')}"}), 500
+
+            task_id = gen_result.get('taskId')
+            print(f"[Visuals/KIE] Task created: {task_id}")
+
+            return jsonify({
+                'status': 'in_progress',
+                'operation_name': f"kie:{task_id}",  # Prefix to distinguish from Veo operations
+                'scene_id': scene_id,
+                'provider': 'kie',
+                'is_midjourney': is_mj,
+            })
+
+        # ── Veo Models (existing flow) ──
+        # Resolve image URL to local file path
+        image_path = ensure_local_image(image_url)
+        if not image_path:
+            return jsonify({'error': f'Image file could not be downloaded/resolved: {image_url}'}), 404
 
         print(f"[Visuals] Starting animation for scene {scene_id}")
         result = start_video_generation(
@@ -1512,14 +2803,14 @@ def visuals_start_animation():
         return jsonify(result)
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/visuals/poll-animation', methods=['POST'])
 @require_auth
+@limiter.limit("200/hour")
 def visuals_poll_animation():
-    """Poll a Veo animation operation for completion."""
+    """Poll a video animation operation for completion (Veo or KIE)."""
     try:
         data = request.json
         operation_name = data.get('operation_name')
@@ -1528,6 +2819,63 @@ def visuals_poll_animation():
         if not operation_name:
             return jsonify({'error': 'operation_name is required'}), 400
 
+        # ── KIE Tasks (prefixed with "kie:") ──
+        if operation_name.startswith("kie:"):
+            if not g.kie_api_key:
+                return jsonify({'error': 'Kie.ai API key not configured'}), 400
+
+            task_id = operation_name[4:]  # Strip "kie:" prefix
+            is_mj = data.get('is_midjourney', False)
+            project_id = data.get('project_id')
+
+            if is_mj:
+                poll_result = kie_mj_poll_task(task_id, g.kie_api_key)
+            else:
+                poll_result = kie_poll_task(task_id, g.kie_api_key)
+
+            status = poll_result.get('status', 'processing')
+
+            if status == 'completed' and poll_result.get('result_urls'):
+                # Download from Kie.ai and upload to Firebase Storage
+                video_url = None
+                for kie_url in poll_result['result_urls']:
+                    local_path = kie_download_result(kie_url, task_id)
+                    if local_path:
+                        try:
+                            firebase_url = upload_to_storage(local_path, "videos", project_id=project_id)
+                            if firebase_url:
+                                video_url = firebase_url
+                                print(f"[Visuals/KIE] Video uploaded to Firebase: {firebase_url[:120]}")
+                        finally:
+                            try:
+                                os.unlink(local_path)
+                                os.rmdir(os.path.dirname(local_path))
+                            except OSError:
+                                pass
+                    if not video_url:
+                        video_url = kie_url  # Fallback to Kie URL (24hr expiry)
+
+                return jsonify({
+                    'status': 'completed',
+                    'video_url': video_url,
+                    'scene_id': scene_id,
+                })
+
+            elif status == 'failed':
+                return jsonify({
+                    'status': 'failed',
+                    'error': poll_result.get('error', 'KIE video generation failed'),
+                    'scene_id': scene_id,
+                }), 500
+
+            else:
+                return jsonify({
+                    'status': 'processing',
+                    'progress': poll_result.get('progress'),
+                    'scene_id': scene_id,
+                })
+
+        # ── Veo Operations (existing flow) ──
         result = poll_video_generation(
             operation_name=operation_name,
             scene_id=scene_id,
@@ -1547,14 +2895,14 @@ def visuals_poll_animation():
         return jsonify(result)
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/visuals/start-batch-animation', methods=['POST'])
 @require_auth
+@limiter.limit("60/hour")
 def visuals_start_batch_animation():
-    """Start Veo animation for multiple scenes (max 5 concurrent submissions)."""
+    """Start video animation for multiple scenes (Veo or KIE, max 5 concurrent)."""
     try:
         data = request.json
         scenes = data.get('scenes', [])
@@ -1563,26 +2911,64 @@ def visuals_start_batch_animation():
         if not scenes:
             return jsonify({'error': 'No scenes provided'}), 400
 
-        api_key = g.api_key
+        gemini_key = g.api_key
+        kie_key = g.kie_api_key
 
         def start_one(scene):
             sid = scene.get('scene_id')
             image_url = scene.get('image_url', '')
-            image_path = ensure_local_image(image_url)
+            model = scene.get('model') or global_config.get('model', 'veo-3.1-generate-preview')
+            ar = scene.get('aspect_ratio') or global_config.get('aspect_ratio', '16:9')
+            dur = scene.get('duration', 6)
+            res = scene.get('resolution') or global_config.get('resolution', '720p')
 
-            if not image_path:
-                return {"error": f"Image could not be resolved: {image_url}", "scene_id": sid}
+            if _is_kie_video_model(model):
+                if not kie_key:
+                    return {"error": "Kie.ai API key required for this model", "scene_id": sid}
+                # Upload image to Kie.ai
+                upload_result = kie_upload_image(image_url, kie_key)
+                if not upload_result.get('success'):
+                    return {"error": f"Image upload failed: {upload_result.get('error')}", "scene_id": sid}
 
-            return start_video_generation(
-                image_path=image_path,
-                prompt=scene.get('prompt', ''),
-                model_name=scene.get('model') or global_config.get('model', 'veo-3.1-generate-preview'),
-                aspect_ratio=scene.get('aspect_ratio') or global_config.get('aspect_ratio', '16:9'),
-                duration=scene.get('duration', 6),
-                resolution=scene.get('resolution') or global_config.get('resolution', '720p'),
-                scene_id=sid,
-                api_key=api_key,
-            )
+                is_mj = model.startswith('midjourney-')
+                snapped_dur = _snap_kie_duration(model, int(dur))
+                task_params = {'aspect_ratio': ar, 'duration': snapped_dur, 'resolution': res}
+                if is_mj:
+                    task_params.pop('resolution', None)
+                    task_params.pop('duration', None)
+
+                if is_mj:
+                    gen_result = kie_mj_create_task(model, scene.get('prompt', ''), kie_key,
+                                                     image_urls=[upload_result['url']], **task_params)
+                else:
+                    gen_result = kie_create_task(model, scene.get('prompt', ''), kie_key,
+                                                 image_urls=[upload_result['url']], **task_params)
+
+                if not gen_result.get('success'):
+                    return {"error": f"Task creation failed: {gen_result.get('error')}", "scene_id": sid}
+
+                return {
+                    'status': 'in_progress',
+                    'operation_name': f"kie:{gen_result['taskId']}",
+                    'scene_id': sid,
+                    'provider': 'kie',
+                    'is_midjourney': is_mj,
+                }
+            else:
+                # Veo flow
+                image_path = ensure_local_image(image_url)
+                if not image_path:
+                    return {"error": f"Image could not be resolved: {image_url}", "scene_id": sid}
+                return start_video_generation(
+                    image_path=image_path,
+                    prompt=scene.get('prompt', ''),
+                    model_name=model,
+                    aspect_ratio=ar,
+                    duration=dur,
+                    resolution=res,
+                    scene_id=sid,
+                    api_key=gemini_key,
+                )
 
         print(f"[Visuals] Batch starting animation for {len(scenes)} scenes (max 5 parallel)")
         operations = []
@@ -1602,18 +2988,18 @@ def visuals_start_batch_animation():
         return jsonify({'operations': operations})
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/video/<path:filename>')
 def serve_video_file(filename):
-    """Serve generated video files."""
+    """Serve generated videos (local fallback when Storage upload fails)."""
     return send_from_directory(VIDEO_DIR, filename)
 
 
 @app.route('/api/download-asset', methods=['GET'])
 @require_auth
+@limiter.limit("200/hour")
 def download_asset():
     """Proxy download for Firebase Storage files.
     Fetches the file from the given URL and serves it as a download.
@@ -1626,9 +3012,10 @@ def download_asset():
         if not url:
             return jsonify({'error': 'url parameter is required'}), 400
 
-        # Only allow downloading from our Firebase Storage bucket
-        if not (url.startswith('https://storage.googleapis.com/') or
-                url.startswith('https://firebasestorage.googleapis.com/')):
+        # Validate URL against allowlist (SSRF protection)
+        try:
+            validate_url(url)
+        except ValueError as ve:
             return jsonify({'error': 'Invalid download URL'}), 400
 
         # Fetch the file
@@ -1645,42 +3032,100 @@ def download_asset():
         )
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 @app.route('/api/visuals/download-all', methods=['GET'])
 @require_auth
+@limiter.limit("200/hour")
 def download_all_assets():
-    """Download all generated images and videos as a zip file."""
+    """Download all generated assets for a specific project as a zip file.
+    Streams the zip to avoid loading everything into memory at once."""
     try:
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            # Add images
-            if os.path.exists(GENERATED_DIR):
-                for fname in os.listdir(GENERATED_DIR):
-                    if fname.startswith('scene_'):
-                        fpath = os.path.join(GENERATED_DIR, fname)
-                        zf.write(fpath, f"images/{fname}")
+        from flask import Response
 
-            # Add videos
-            if os.path.exists(VIDEO_DIR):
-                for fname in os.listdir(VIDEO_DIR):
-                    if fname.startswith('scene_'):
-                        fpath = os.path.join(VIDEO_DIR, fname)
-                        zf.write(fpath, f"videos/{fname}")
+        project_id = request.args.get('project_id')
+        mode = request.args.get('mode', 'active')  # 'active' or 'all'
+        if not project_id:
+            return jsonify({'error': 'project_id is required'}), 400
+
+        # Verify user owns this project
+        project_doc = db.collection('users').document(g.uid).collection('projects').document(project_id).get()
+        if not project_doc.exists:
+            return jsonify({'error': 'Project not found'}), 404
+
+        if not bucket:
+            return jsonify({'error': 'Storage not configured'}), 500
+
+        # Collect blob references first (lightweight — no downloads yet)
+        image_blobs = list(bucket.list_blobs(prefix=f"images/{project_id}/"))
+        video_blobs = list(bucket.list_blobs(prefix=f"videos/{project_id}/"))
+        audio_blobs = list(bucket.list_blobs(prefix=f"audio/{project_id}/"))
+
+        # If 'active' mode, keep only the latest image per scene
+        if mode == 'active':
+            scene_latest = {}
+            for blob in image_blobs:
+                fname = blob.name.split('/')[-1]
+                if not fname.startswith('scene_'):
+                    continue
+                # Extract scene id: scene_{id}_{timestamp}.ext
+                parts = fname.rsplit('_', 1)
+                scene_key = parts[0] if len(parts) > 1 else fname
+                if scene_key not in scene_latest or blob.name > scene_latest[scene_key].name:
+                    scene_latest[scene_key] = blob
+            image_blobs = list(scene_latest.values())
+
+        total = len(image_blobs) + len(video_blobs) + len(audio_blobs)
+        print(f"[Download] Building zip for project {project_id}: "
+              f"{len(image_blobs)} images, {len(video_blobs)} videos, "
+              f"{len(audio_blobs)} audio files (mode={mode})")
+
+        # Build zip in memory but download blobs one at a time to reduce peak memory
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_STORED) as zf:  # STORED = no compression (faster, images already compressed)
+            for blob in image_blobs:
+                fname = blob.name.split('/')[-1]
+                try:
+                    data = blob.download_as_bytes()
+                    zf.writestr(f"images/{fname}", data)
+                except Exception as e:
+                    print(f"[Download] Failed to download {blob.name}: {e}")
+
+            for blob in video_blobs:
+                fname = blob.name.split('/')[-1]
+                try:
+                    data = blob.download_as_bytes()
+                    zf.writestr(f"videos/{fname}", data)
+                except Exception as e:
+                    print(f"[Download] Failed to download {blob.name}: {e}")
+
+            for blob in audio_blobs:
+                fname = blob.name.split('/')[-1]
+                try:
+                    data = blob.download_as_bytes()
+                    zf.writestr(f"audio/{fname}", data)
+                except Exception as e:
+                    print(f"[Download] Failed to download {blob.name}: {e}")
 
         buffer.seek(0)
+        print(f"[Download] Zip ready: {buffer.getbuffer().nbytes / 1024 / 1024:.1f} MB")
+
+        # Get project title for filename
+        project_data = project_doc.to_dict()
+        title = project_data.get('title', 'project')
+        safe_title = ''.join(c if c.isalnum() or c in ('-', '_', ' ') else '' for c in title)[:50].strip()
+        zip_name = f"{safe_title}.zip" if safe_title else f"project_{project_id}.zip"
+
         return send_file(
             buffer,
             mimetype='application/zip',
             as_attachment=True,
-            download_name='visuals_assets.zip',
+            download_name=zip_name,
         )
 
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return safe_error_response(e)
 
 
 if __name__ == '__main__':
@@ -1688,4 +3133,4 @@ if __name__ == '__main__':
     os.makedirs(AUDIO_DIR, exist_ok=True)
     os.makedirs(VIDEO_DIR, exist_ok=True)
     os.makedirs(TMP_DIR, exist_ok=True)
-    app.run(debug=True, port=8080)
+    app.run(debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true', port=8080)

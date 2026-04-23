@@ -235,25 +235,56 @@ TONE_DEFINITIONS = {
 #  FORMAT PRESETS — Duration + pacing intent bundles
 # ═══════════════════════════════════════════════════════════════════
 FORMAT_PRESETS = {
+    "micro": {
+        "label": "🎯 Micro (30-60 sec)",
+        "duration_minutes": 1,
+        "pacing_instruction": (
+            "This is a 30-60 second piece. Every single word must hit. "
+            "No setup, no preamble. Open with the most compelling statement. "
+            "One core idea only. End with an unforgettable punchline or revelation. "
+            "Think TikTok, Reels, Shorts — maximum density, zero filler."
+        ),
+        "auto_pacing_tier": "High Energy",
+        "shot_range": (4, 8),
+    },
+    "quick_take": {
+        "label": "⚡ Quick Take (1-3 min)",
+        "duration_minutes": 2,
+        "pacing_instruction": (
+            "This is a 1-3 minute punchy explainer. Get to the point in the first sentence. "
+            "Two ideas maximum. No deep backstory. Use one killer example, one surprising fact. "
+            "Keep momentum relentless — if a sentence doesn't move the story forward, cut it."
+        ),
+        "auto_pacing_tier": "High Energy",
+        "shot_range": (8, 20),
+    },
     "short_form": {
-        "label": "⚡ Short Form (5-7 min)",
+        "label": "📱 Short Form (5-7 min)",
         "duration_minutes": 5,
         "pacing_instruction": "Every sentence must earn its place. Fast cuts. No long explanations. Get in, make your point, get out. Ruthlessly cut anything that doesn't serve the hook or the payoff.",
+        "auto_pacing_tier": "Standard",
+        "shot_range": (20, 40),
     },
     "standard": {
         "label": "📺 Standard (10-12 min)",
         "duration_minutes": 10,
         "pacing_instruction": "Standard YouTube pacing. Build tension, allow beats to breathe. Include character moments and supporting evidence. Balance depth with momentum.",
+        "auto_pacing_tier": "Standard",
+        "shot_range": None,
     },
     "deep_dive": {
         "label": "📖 Deep Dive (18-22 min)",
         "duration_minutes": 20,
         "pacing_instruction": "Documentary pacing. Long scenes, rich detail, full character arcs. Take your time building atmosphere. Include extended quotes, multiple perspectives, and layered arguments.",
+        "auto_pacing_tier": "Relaxed",
+        "shot_range": None,
     },
     "custom": {
         "label": "🔢 Custom",
         "duration_minutes": None,  # user provides
         "pacing_instruction": "Adapt pacing naturally to the specified duration.",
+        "auto_pacing_tier": None,
+        "shot_range": None,
     },
 }
 
@@ -291,6 +322,26 @@ VIEWER_OUTCOMES = {
         "instruction": "End with a callback to the hook or a perfectly timed punchline. Leave them laughing, satisfied, and immediately wanting to watch another video. The ending should feel like a mic drop.",
     },
 }
+
+
+def _resolve_structure_for_duration(template: dict, format_preset: str, duration_minutes: int) -> dict:
+    """Return the appropriate story structure for the given format/duration."""
+    sc = template["script_config"]
+    short_structures = sc.get("short_structures", {})
+
+    # Direct preset match
+    if format_preset in short_structures:
+        return short_structures[format_preset]
+
+    # Duration-based fallback for custom preset
+    if format_preset == "custom" or not format_preset:
+        if duration_minutes <= 1 and "micro" in short_structures:
+            return short_structures["micro"]
+        elif duration_minutes <= 3 and "quick_take" in short_structures:
+            return short_structures["quick_take"]
+
+    # Default: full structure
+    return sc["story_structure"]
 
 
 TEMPLATES = {
@@ -380,7 +431,55 @@ TEMPLATES = {
                     "reflection": 1
                 }
             },
+            "short_structures": {
+                "micro": {
+                    "acts": [{
+                        "name": "FULL PIECE",
+                        "percentage": 100,
+                        "beats": [
+                            "The Hook: One shocking fact, paradox, or statistic that stops the scroll",
+                            "The Core: The single most important insight — explained in one vivid analogy",
+                            "The Payoff: A memorable punchline, twist, or mind-bending final thought"
+                        ]
+                    }],
+                    "hook_types": ["Shocking Stat", "Bold Claim", "Direct Question"],
+                    "emotional_beats": {"curiosity": 1, "awe": 1}
+                },
+                "quick_take": {
+                    "acts": [
+                        {
+                            "name": "THE HOOK",
+                            "percentage": 25,
+                            "beats": [
+                                "Attention Grab: Open with the most surprising or counter-intuitive angle",
+                                "The Stakes: Why this matters to the viewer right now"
+                            ]
+                        },
+                        {
+                            "name": "THE SUBSTANCE",
+                            "percentage": 50,
+                            "beats": [
+                                "The Core Mechanism: The one thing you need to understand — with a concrete analogy",
+                                "The Evidence: One killer data point or example that makes it undeniable",
+                                "The Nuance: The twist or counter-perspective that makes this interesting"
+                            ]
+                        },
+                        {
+                            "name": "THE PAYOFF",
+                            "percentage": 25,
+                            "beats": [
+                                "The Takeaway: What this means for the viewer",
+                                "The Closer: End with an unforgettable final thought or question"
+                            ]
+                        }
+                    ],
+                    "hook_types": ["Shocking Stat", "Bold Claim", "Direct Question", "What If"],
+                    "emotional_beats": {"curiosity": 2, "clarity": 1, "awe": 1}
+                }
+            },
             "pacing_guide": {
+                1: 15,
+                2: 30,
                 5: 70,
                 10: 140,
                 15: 210,
@@ -472,7 +571,55 @@ TEMPLATES = {
                 }
             },
             "stakeholder_map": ["2+ Villains", "2+ Victims", "1+ Heroes", "1+ Enablers", "2+ Experts"],
+            "short_structures": {
+                "micro": {
+                    "acts": [{
+                        "name": "FULL PIECE",
+                        "percentage": 100,
+                        "beats": [
+                            "The Crime: The scandal in one devastating sentence — name the villain, name the damage",
+                            "The Proof: The single most damning piece of evidence or quote",
+                            "The Punchline: What happened to them — or why they got away with it"
+                        ]
+                    }],
+                    "hook_types": ["Statistic Shock", "Direct Address", "Result First"],
+                    "emotional_beats": {"outrage": 1, "shocking_reveal": 1}
+                },
+                "quick_take": {
+                    "acts": [
+                        {
+                            "name": "THE CRIME",
+                            "percentage": 30,
+                            "beats": [
+                                "The Scandal: Drop the audience into the middle of it — names, numbers, scale",
+                                "The Villain: Who did this and what was their justification"
+                            ]
+                        },
+                        {
+                            "name": "THE EVIDENCE",
+                            "percentage": 45,
+                            "beats": [
+                                "The Mechanism: Exactly how the fraud or wrongdoing worked",
+                                "The Human Cost: One specific victim's story that makes it real",
+                                "The Systemic Failure: Which watchdog looked the other way and why"
+                            ]
+                        },
+                        {
+                            "name": "THE RECKONING",
+                            "percentage": 25,
+                            "beats": [
+                                "The Aftermath: What happened to the villain",
+                                "The Warning: Why this could happen again"
+                            ]
+                        }
+                    ],
+                    "hook_types": ["Statistic Shock", "Result First", "Contradiction"],
+                    "emotional_beats": {"outrage": 1, "human_impact": 1, "shocking_reveal": 1}
+                }
+            },
             "pacing_guide": {
+                1: 15,
+                2: 35,
                 5: 75,
                 10: 150,
                 15: 225,
@@ -565,7 +712,55 @@ TEMPLATES = {
                     "surprise": 1
                 }
             },
+            "short_structures": {
+                "micro": {
+                    "acts": [{
+                        "name": "FULL PIECE",
+                        "percentage": 100,
+                        "beats": [
+                            "The Myth: State the common belief that everyone gets wrong",
+                            "The Truth: Reveal the actual answer with one killer analogy",
+                            "The Mind-Blow: Leave them with the most counter-intuitive implication"
+                        ]
+                    }],
+                    "hook_types": ["Wrong Assumption", "Surprising Stat", "What If Scenario"],
+                    "emotional_beats": {"curiosity": 1, "aha_moment": 1}
+                },
+                "quick_take": {
+                    "acts": [
+                        {
+                            "name": "THE QUESTION",
+                            "percentage": 20,
+                            "beats": [
+                                "The Illusion: State what everyone thinks they know — and why it's wrong",
+                                "The Promise: What the viewer will understand in the next 2 minutes"
+                            ]
+                        },
+                        {
+                            "name": "THE EXPLANATION",
+                            "percentage": 55,
+                            "beats": [
+                                "The Analogy: Compare the concept to something universally understood",
+                                "The Mechanism: Walk through how it actually works — step by step",
+                                "The Surprise: The counter-intuitive fact that makes experts different from novices"
+                            ]
+                        },
+                        {
+                            "name": "THE PAYOFF",
+                            "percentage": 25,
+                            "beats": [
+                                "The Application: One real-world example that makes it tangible",
+                                "The Mind-Bender: End with an awe-inspiring implication"
+                            ]
+                        }
+                    ],
+                    "hook_types": ["Wrong Assumption", "Surprising Stat", "Scale Comparison"],
+                    "emotional_beats": {"curiosity": 1, "aha_moment": 1, "wonder": 1}
+                }
+            },
             "pacing_guide": {
+                1: 12,
+                2: 25,
                 5: 60,
                 10: 120,
                 15: 180,
@@ -658,7 +853,55 @@ TEMPLATES = {
                     "satisfaction": 1
                 }
             },
+            "short_structures": {
+                "micro": {
+                    "acts": [{
+                        "name": "FULL PIECE",
+                        "percentage": 100,
+                        "beats": [
+                            "The Verdict: Give the recommendation immediately — buy, skip, or wait",
+                            "The Reason: The single most important thing that justifies the verdict",
+                            "The Caveat: The one catch or deal-breaker everyone should know"
+                        ]
+                    }],
+                    "hook_types": ["Hot Take", "Bold Claim", "The One Thing"],
+                    "emotional_beats": {"excitement": 1, "satisfaction": 1}
+                },
+                "quick_take": {
+                    "acts": [
+                        {
+                            "name": "THE HOT TAKE",
+                            "percentage": 20,
+                            "beats": [
+                                "The Verdict First: Open with the bold, unambiguous recommendation",
+                                "The Context: What this competes against and what it costs"
+                            ]
+                        },
+                        {
+                            "name": "THE BREAKDOWN",
+                            "percentage": 55,
+                            "beats": [
+                                "The Best Feature: The flagship capability with one specific test result",
+                                "The Worst Flaw: The biggest disappointment — be brutally honest",
+                                "The Competitor Check: How the direct rival compares on the thing that matters most"
+                            ]
+                        },
+                        {
+                            "name": "THE BOTTOM LINE",
+                            "percentage": 25,
+                            "beats": [
+                                "The Perfect Buyer: Exactly who should buy this",
+                                "The Skip: Who should save their money and buy what instead"
+                            ]
+                        }
+                    ],
+                    "hook_types": ["Hot Take", "Bold Claim", "Before/After"],
+                    "emotional_beats": {"excitement": 1, "disappointment": 1, "satisfaction": 1}
+                }
+            },
             "pacing_guide": {
+                1: 12,
+                2: 25,
                 5: 60,
                 10: 130,
                 15: 195,
@@ -758,7 +1001,55 @@ TEMPLATES = {
                     "reflection": 1
                 }
             },
+            "short_structures": {
+                "micro": {
+                    "acts": [{
+                        "name": "FULL PIECE",
+                        "percentage": 100,
+                        "beats": [
+                            "The Moment: Drop into the most dramatic, pivotal scene — sensory detail, emotion",
+                            "The Choice: What they decided to do and what it cost them",
+                            "The Legacy: What changed because of that one decision"
+                        ]
+                    }],
+                    "hook_types": ["In-Media-Res Scene", "A Single Detail", "Contrast (Then vs Now)"],
+                    "emotional_beats": {"empathy": 1, "tension": 1}
+                },
+                "quick_take": {
+                    "acts": [
+                        {
+                            "name": "THE SCENE",
+                            "percentage": 25,
+                            "beats": [
+                                "In Media Res: Open on the most vulnerable or dramatic moment — make us feel it",
+                                "The Setup: Who are they and why should we care"
+                            ]
+                        },
+                        {
+                            "name": "THE STRUGGLE",
+                            "percentage": 50,
+                            "beats": [
+                                "The Turning Point: The exact moment everything changed",
+                                "The Lowest Point: When they nearly gave up — what almost broke them",
+                                "The Decision: What they chose to do when it mattered most"
+                            ]
+                        },
+                        {
+                            "name": "THE TRANSFORMATION",
+                            "percentage": 25,
+                            "beats": [
+                                "The Outcome: What happened because of their choice",
+                                "The Lesson: The universal truth their story teaches us"
+                            ]
+                        }
+                    ],
+                    "hook_types": ["In-Media-Res Scene", "Contrast (Then vs Now)", "Opening Dialogue"],
+                    "emotional_beats": {"empathy": 2, "tension": 1, "triumph": 1}
+                }
+            },
             "pacing_guide": {
+                1: 13,
+                2: 28,
                 5: 65,
                 10: 130,
                 15: 200,
@@ -851,7 +1142,55 @@ TEMPLATES = {
                     "engagement": 1
                 }
             },
+            "short_structures": {
+                "micro": {
+                    "acts": [{
+                        "name": "FULL PIECE",
+                        "percentage": 100,
+                        "beats": [
+                            "What Happened: The headline in one explosive sentence — name names",
+                            "Why It Matters: The one implication nobody is talking about",
+                            "The Take: Your bold, unambiguous prediction or verdict"
+                        ]
+                    }],
+                    "hook_types": ["Breaking Statement", "Absurd Stat", "Calling Out"],
+                    "emotional_beats": {"urgency": 1, "conviction": 1}
+                },
+                "quick_take": {
+                    "acts": [
+                        {
+                            "name": "THE BOMB",
+                            "percentage": 25,
+                            "beats": [
+                                "The Explosive Opener: The most shocking, indisputable fact — right now",
+                                "The Real Stakes: Why the mainstream headline is wrong or incomplete"
+                            ]
+                        },
+                        {
+                            "name": "THE TAKE",
+                            "percentage": 50,
+                            "beats": [
+                                "The Backstory: 30-second speed-run of how we got here",
+                                "The Core Argument: Your bold thesis with one undeniable proof point",
+                                "The Counter: The strongest opposing view — and why it falls apart"
+                            ]
+                        },
+                        {
+                            "name": "THE PREDICTION",
+                            "percentage": 25,
+                            "beats": [
+                                "What Happens Next: The most likely outcome in the next 6 months",
+                                "The Provocation: A polarizing question to drive engagement"
+                            ]
+                        }
+                    ],
+                    "hook_types": ["Breaking Statement", "Absurd Stat", "Prediction"],
+                    "emotional_beats": {"urgency": 1, "conviction": 1, "surprise": 1}
+                }
+            },
             "pacing_guide": {
+                1: 15,
+                2: 32,
                 5: 80,
                 10: 160,
                 15: 240,
@@ -952,7 +1291,55 @@ TEMPLATES = {
                     "revelation": 1
                 }
             },
+            "short_structures": {
+                "micro": {
+                    "acts": [{
+                        "name": "FULL PIECE",
+                        "percentage": 100,
+                        "beats": [
+                            "The Fact: The one policy detail or political event everyone needs to know — stated neutrally",
+                            "The Money: Who profits and who pays — follow the money in one sentence",
+                            "The Objective Truth: The neutral, lingering implication that both sides would rather you didn't think about"
+                        ]
+                    }],
+                    "hook_types": ["Follow the Money", "Data Point", "The Hidden Detail"],
+                    "emotional_beats": {"clarity": 1, "revelation": 1}
+                },
+                "quick_take": {
+                    "acts": [
+                        {
+                            "name": "THE ISSUE",
+                            "percentage": 25,
+                            "beats": [
+                                "The Cold Open: Ground the abstract policy in a tangible, real-world example",
+                                "The Real Stakes: Why this affects the viewer's life, wallet, or freedom"
+                            ]
+                        },
+                        {
+                            "name": "THE MECHANICS",
+                            "percentage": 50,
+                            "beats": [
+                                "The Reality: What the law or policy actually says — not what politicians claim",
+                                "The Money Trail: Who profits and who pays — specific numbers",
+                                "The Steelman: The strongest argument from each side — presented neutrally"
+                            ]
+                        },
+                        {
+                            "name": "THE HORIZON",
+                            "percentage": 25,
+                            "beats": [
+                                "What Happens Next: The immediate procedural or political actions that will follow",
+                                "The Neutral Truth: An objective final thought that makes the viewer think"
+                            ]
+                        }
+                    ],
+                    "hook_types": ["Follow the Money", "Historical Parallel", "Data Point"],
+                    "emotional_beats": {"clarity": 2, "insight": 1, "revelation": 1}
+                }
+            },
             "pacing_guide": {
+                1: 15,
+                2: 32,
                 5: 75,
                 10: 150,
                 15: 225,
@@ -987,14 +1374,85 @@ def build_research_queries(template_id: str, topic: str) -> list:
     return queries
 
 
+def _format_structured_claims_block(structured: dict, max_claims: int = 40,
+                                     max_sources: int = 30) -> str:
+    """Render a structured research object as a CLAIMS/SOURCES block for prompts.
+
+    Returns empty string if `structured` is missing or has no claims.
+    Output shape:
+
+        ═══════ CLAIMS (cite via [s1], [s2]…) ═══════
+        [c1] Claim text [s1][s2]
+        [c2] Claim text [s3]
+        ...
+
+        ═══════ SOURCES ═══════
+        [s1] Title — Publisher (url) | "quote excerpt"
+        [s2] ...
+    """
+    if not structured or not isinstance(structured, dict):
+        return ""
+    claims = structured.get("claims") or []
+    sources = structured.get("sources") or []
+    if not claims:
+        return ""
+
+    lines = ["", "═══════ CLAIMS (cite via [s1], [s2]…) ═══════"]
+    for c in claims[:max_claims]:
+        cid = c.get("id", "")
+        text = c.get("text", "").strip()
+        src_ids = c.get("source_ids") or []
+        cite_tags = "".join(f"[{sid}]" for sid in src_ids)
+        lines.append(f"[{cid}] {text} {cite_tags}".rstrip())
+
+    if sources:
+        lines.append("")
+        lines.append("═══════ SOURCES ═══════")
+        for s in sources[:max_sources]:
+            sid = s.get("id", "")
+            title = s.get("title") or "(untitled)"
+            publisher = s.get("publisher", "")
+            url = s.get("url", "")
+            quote = s.get("quote", "")
+            line = f"[{sid}] {title}"
+            if publisher:
+                line += f" — {publisher}"
+            if url:
+                line += f" ({url})"
+            if quote:
+                line += f' | "{quote[:180]}"'
+            lines.append(line)
+
+    return "\n".join(lines) + "\n"
+
+
+def _top_claim_texts(structured: dict, limit: int = 20) -> str:
+    """Render the top claim texts as a bulleted list, for cases where we want
+    a compact claims-only summary (e.g. title suggestions). Returns "" when empty."""
+    if not structured or not isinstance(structured, dict):
+        return ""
+    claims = structured.get("claims") or []
+    if not claims:
+        return ""
+    top = claims[:limit]
+    return "\n".join(f"- {c.get('text', '').strip()}" for c in top if c.get('text'))
+
+
 def build_title_suggestions_prompt(template_id: str, topic: str, dossier: str,
-                                    audience: str = "General") -> str:
+                                    audience: str = "General",
+                                    structured: dict = None) -> str:
     """
     Build prompt for generating 5 YouTube title suggestions.
     Each title represents a genuinely different narrative angle.
     """
     template = TEMPLATES.get(template_id)
     template_name = template['metadata']['name'] if template else template_id
+
+    # When a structured research object is available, prefer its top claims over
+    # the truncated markdown blob — they're denser and carry source attribution.
+    claims_summary = _top_claim_texts(structured, limit=20) if structured else ""
+    research_block = (f"TOP FACTUAL CLAIMS:\n{claims_summary}"
+                      if claims_summary else dossier[:3000])
 
     prompt = f"""You are a YouTube content strategist who specializes in crafting viral, click-worthy titles.
 
@@ -1006,7 +1464,7 @@ TEMPLATE STYLE: {template_name}
 TARGET AUDIENCE: {audience}
 
 ═══════ RESEARCH SUMMARY ═══════
-{dossier[:3000]}
+{research_block}
 
 ═══════ REQUIREMENTS ═══════
 For each title:
@@ -1073,7 +1531,8 @@ def build_script_prompt(template_id: str, topic: str, research_dossier: str,
                         tone: str = "", focus: str = "", style_guide: str = None,
                         selected_title: str = None, format_preset: str = "",
                         viewer_outcome: str = "", style_blend_mode: str = "clone",
-                        custom_audience: str = "", custom_tone: str = "") -> str:
+                        custom_audience: str = "", custom_tone: str = "",
+                        structured: dict = None) -> str:
     """
     PHASE 1: Build prompt for the creative narration.
     
@@ -1090,7 +1549,20 @@ def build_script_prompt(template_id: str, topic: str, research_dossier: str,
         return f"Write a {duration_minutes}-minute video script about: {topic}"
 
     sc = template["script_config"]
-    structure = sc["story_structure"]
+
+    # ── Resolve Format Preset (pacing intent) — must happen before structure resolution ──
+    pacing_instruction = ""
+    if format_preset and format_preset in FORMAT_PRESETS:
+        preset = FORMAT_PRESETS[format_preset]
+        if preset["duration_minutes"]:
+            duration_minutes = preset["duration_minutes"]
+        pacing_instruction = preset["pacing_instruction"]
+
+    # Word-count target based on speech pacing
+    total_words = int(duration_minutes * 60 * 2.5)  # ~2.5 words/sec
+
+    # ── Resolve story structure (adaptive for short-form) ──
+    structure = _resolve_structure_for_duration(template, format_preset, duration_minutes)
 
     # Build act descriptions
     acts_text = ""
@@ -1103,16 +1575,24 @@ def build_script_prompt(template_id: str, topic: str, research_dossier: str,
         f"{count}+ {beat.replace('_', ' ').title()}" for beat, count in structure["emotional_beats"].items()
     )
 
-    # ── Resolve Format Preset (pacing intent) ──
-    pacing_instruction = ""
-    if format_preset and format_preset in FORMAT_PRESETS:
-        preset = FORMAT_PRESETS[format_preset]
-        if preset["duration_minutes"]:
-            duration_minutes = preset["duration_minutes"]
-        pacing_instruction = preset["pacing_instruction"]
-
-    # Word-count target based on speech pacing
-    total_words = int(duration_minutes * 60 * 2.5)  # ~2.5 words/sec
+    # ── Short-Form Constraints ──
+    short_form_block = ""
+    if format_preset in ("micro", "quick_take"):
+        short_form_block = (
+            f"\n══════════ SHORT-FORM CONSTRAINTS ══════════\n"
+            f"This is a SHORT-FORM video ({duration_minutes} minute{'s' if duration_minutes != 1 else ''}, ~{total_words} words).\n"
+            f"CRITICAL RULES FOR SHORT CONTENT:\n"
+            f"- Do NOT use multi-paragraph beats. Each beat = 1-3 sentences MAX.\n"
+            f"- Do NOT include transitions between beats. Jump-cut from idea to idea.\n"
+            f"- Do NOT build gradual context. Start with the payoff, then explain.\n"
+            f"- The hook must land in the FIRST sentence, not the first paragraph.\n"
+            f"- Total narration MUST be approximately {total_words} words. Do NOT exceed this.\n"
+        )
+        if format_preset == "micro":
+            short_form_block += (
+                f"- This is a MICRO piece (30-60 seconds). ONE idea. THREE beats. That's it.\n"
+                f"- Write like a social media post that became a voiceover. Dense, punchy, done.\n"
+            )
 
     # ── Resolve Audience Profile ──
     if audience == "custom" and custom_audience:
@@ -1196,6 +1676,8 @@ def build_script_prompt(template_id: str, topic: str, research_dossier: str,
     pacing_block = ""
     if pacing_instruction:
         pacing_block = f"\nPACING INTENT: {pacing_instruction}"
+    if short_form_block:
+        pacing_block += short_form_block
 
     # ── Handle Style Guide (clone vs blend) ──
     system_prompt = sc['system_prompt']
@@ -1241,6 +1723,15 @@ def build_script_prompt(template_id: str, topic: str, research_dossier: str,
         title_instruction = f"VIDEO TITLE (USE EXACTLY): {selected_title}"
         title_format = f'"title": "{selected_title}"'
 
+    # When a structured research object is available, append its CLAIMS + SOURCES
+    # block under the dossier. The block gives the model stable [sN] citation handles.
+    structured_block = _format_structured_claims_block(structured) if structured else ""
+    if structured_block:
+        system_prompt = (
+            system_prompt.rstrip() +
+            "\n\nWhen a claim comes from the research, reference the source id inline like [s3]."
+        )
+
     prompt = f"""{system_prompt}
 
 ═══════ ASSIGNMENT ═══════
@@ -1252,7 +1743,7 @@ LENGTH: {duration_minutes} minutes (~{total_words} words of narration){pacing_bl
 
 ═══════ RESEARCH DOSSIER ═══════
 {research_dossier}
-{style_section}{focus_block}{outcome_block}
+{structured_block}{style_section}{focus_block}{outcome_block}
 ═══════ STORY STRUCTURE (SCAFFOLDING) ═══════
 {acts_text}
 
@@ -1305,7 +1796,8 @@ def build_beat_regeneration_prompt(template_id: str, topic: str,
                                     mode: str = "restyle",
                                     audience: str = "General",
                                     tone: str = "",
-                                    duration_minutes: int = 10) -> str:
+                                    duration_minutes: int = 10,
+                                    structured: dict = None) -> str:
     """
     Build prompt for regenerating specific beats or an entire act.
 
@@ -1350,6 +1842,10 @@ def build_beat_regeneration_prompt(template_id: str, topic: str,
     # Truncate dossier to keep prompt reasonable
     dossier_excerpt = research_dossier[:4000]
 
+    # Append structured claims/sources block when available so the regenerated
+    # beat can cite the same source ids as the original script.
+    structured_block = _format_structured_claims_block(structured, max_claims=25, max_sources=20) if structured else ""
+
     if mode == "restyle":
         mode_instruction = """RESTYLE MODE — Rewrite these beats with:
 - SAME factual content and information
@@ -1375,7 +1871,7 @@ VIDEO LENGTH: {duration_minutes} minutes
 
 ═══════ RESEARCH DOSSIER (for reference) ═══════
 {dossier_excerpt}
-
+{structured_block}
 ═══════ SURROUNDING CONTEXT (for flow) ═══════
 {context_text}
 
@@ -1537,12 +2033,68 @@ Environments are rendered in the SAME overall visual style as the characters."""
     return section
 
 
+def _build_cast_section(cast: dict, context: str = "storyboard") -> str:
+    """Build a cast definition section for injection into prompts.
+
+    Args:
+        cast: Cast data dict {has_characters, cast: [{name, role, visual_identity, appears_in_beats, notes}]}
+        context: 'storyboard' or 'dp' — controls instruction phrasing
+    """
+    if not cast or not cast.get('has_characters') or not cast.get('cast'):
+        return ""
+
+    cast_list = cast['cast']
+    if not cast_list:
+        return ""
+
+    cast_entries = []
+    for i, char in enumerate(cast_list, 1):
+        name = char.get('name', f'Character {i}')
+        role = char.get('role', 'Unspecified')
+        visual = char.get('visual_identity', 'No visual identity defined')
+        beats = char.get('appears_in_beats', [])
+        notes = char.get('notes', '')
+        beats_str = ', '.join(str(b) for b in beats) if isinstance(beats, list) else str(beats)
+
+        entry = f"""  {i}. "{name}"
+     Role: {role}
+     Visual Identity: {visual}
+     Appears in beats: {beats_str or 'various'}"""
+        if notes:
+            entry += f"\n     Notes: {notes}"
+        cast_entries.append(entry)
+
+    cast_text = "\n".join(cast_entries)
+
+    if context == "storyboard":
+        instructions = """USE THIS CAST LIST when designing each shot:
+- When a character from the cast appears in a shot, reference them BY NAME.
+- Use their "Visual Identity" to inform the "character_outfit" field.
+- Each cast member must be VISUALLY CONSISTENT across all shots they appear in.
+- If the wardrobe mode is "story_driven", the Visual Identity is the DEFAULT —
+  you may deviate when the story demands it, but note WHY in continuity notes.
+- If the wardrobe mode is "locked", the Visual Identity is FIXED — do not deviate."""
+    else:  # dp
+        instructions = """USE THIS CAST LIST when writing prompts:
+- When a character from the cast appears, use their Visual Identity in the SUBJECT CORE field.
+- Each cast member must look IDENTICAL across all shots — same visual features, same distinguishing elements.
+- Combine the Character Rendering style (how to render) with the Cast Visual Identity (who to render)."""
+
+    return f"""
+═══════ CAST OF CHARACTERS ═══════
+The following characters have been defined for this production.
+{instructions}
+
+{cast_text}
+"""
+
+
 def _build_creative_direction_section(creative_direction: dict, agent_role: str) -> str:
     """Build a creative direction preamble tailored to each agent's role.
 
     Args:
         creative_direction: The expanded creative direction dict
-        agent_role: One of 'director', 'storyboard', 'dp', 'combined'
+        agent_role: One of 'script_doctor', 'director', 'cinematographer', 'storyboard', 'continuity_supervisor', 'dp', 'combined'
     Returns:
         Prompt section string, or empty string if creative_direction is None.
     """
@@ -1568,7 +2120,15 @@ Video Format: {video_format}
 Tone & Feel: {tone_and_feel}
 """
 
-    if agent_role == 'director':
+    if agent_role == 'script_doctor':
+        section += f"""
+YOUR VISUAL BRIEF must capture the creative essence of this direction:
+- Visual Language: {visual_language}
+- Narrative Approach: {narrative_approach}
+- Tone & Feel: {tone_and_feel}
+- Let these inform your metaphors, mood tags, and color suggestions.
+"""
+    elif agent_role == 'director':
         section += f"""
 YOUR EDITORIAL DECISIONS must reflect this creative vision:
 - Narrative Approach: {narrative_approach}
@@ -1576,7 +2136,15 @@ YOUR EDITORIAL DECISIONS must reflect this creative vision:
 - When deciding WHERE to cut: consider the "{video_format}" format.
   For example, if this is an "explainer," cut at idea boundaries.
   If this is a "documentary," allow longer observational shots.
-- Match your cutting rationale to the tone: "{tone_and_feel}"
+- Match your cutting rationale and camera_intent to the tone: "{tone_and_feel}"
+"""
+    elif agent_role == 'cinematographer':
+        section += f"""
+YOUR CAMERA TECHNIQUE must reflect this creative vision:
+- Video Format: {video_format} — this affects camera language choices.
+  Documentaries use more handheld and eye-level. Explainers use more static and structured.
+- Pacing Philosophy: {pacing_philosophy}
+- Tone & Feel: {tone_and_feel} — match your lighting_mood and lens_feel choices to this.
 """
     elif agent_role == 'storyboard':
         section += f"""
@@ -1587,6 +2155,13 @@ YOUR VISUAL COMPOSITIONS must reflect this creative vision:
 - When designing what each shot SHOWS: think about what a "{video_format}" looks like.
   For example, if this is a "stick figure explainer," scenes should be simple with one focal point.
   If this is a "documentary," scenes should feel observational and grounded.
+"""
+    elif agent_role == 'continuity_supervisor':
+        section += f"""
+VERIFY that the shot list maintains consistency with this creative vision:
+- Visual Language: {visual_language}
+- Tone & Feel: {tone_and_feel}
+- Flag any shots that deviate from the approved creative direction.
 """
     elif agent_role in ('dp', 'combined'):
         section += f"""
@@ -1761,7 +2336,8 @@ def build_production_prompt(narration_json: dict, duration_minutes: int = 10,
                             aspect_ratio: str = "16:9",
                             shot_start_number: int = 1,
                             pacing_tier: str = "Standard",
-                            creative_direction: dict = None) -> str:
+                            creative_direction: dict = None,
+                            format_preset: str = "") -> str:
     """
     Build prompt for the unified Production Table with dynamic style support.
 
@@ -1777,6 +2353,7 @@ def build_production_prompt(narration_json: dict, duration_minutes: int = 10,
         aspect_ratio: Video aspect ratio (Veo hardware constraint)
         shot_start_number: The number to start shot numbering from (important for batching)
         pacing_tier: Pacing speed (Meditative, Relaxed, Standard, High Energy, Frenetic)
+        format_preset: Format preset ID (micro, quick_take, short_form, standard, deep_dive)
     """
     # Extract narration beats
     beats = narration_json.get("narration", [])
@@ -1797,6 +2374,27 @@ def build_production_prompt(narration_json: dict, duration_minutes: int = 10,
     WORDS_PER_SHOT_TARGET = WORDS_PER_SHOT_TARGETS.get(pacing_tier, 9)
 
     estimated_shots = max(1, int(total_words / WORDS_PER_SHOT_TARGET))
+
+    # Apply shot range cap from format preset
+    if format_preset and format_preset in FORMAT_PRESETS:
+        shot_range = FORMAT_PRESETS[format_preset].get("shot_range")
+        if shot_range:
+            min_shots, max_shots = shot_range
+            estimated_shots = max(min_shots, min(max_shots, estimated_shots))
+
+    # Build short-form cutting instruction
+    short_form_cutting = ""
+    if format_preset in ("micro", "quick_take"):
+        sr = FORMAT_PRESETS[format_preset].get("shot_range", (4, 20))
+        short_form_cutting = (
+            f"\n⚠️ SHORT-FORM VIDEO — SHOT COUNT IS CRITICAL ⚠️\n"
+            f"This is a {format_preset.replace('_', ' ')} video ({duration_minutes} min).\n"
+            f"You MUST produce between {sr[0]} and {sr[1]} shots total.\n"
+            f"- Do NOT over-split beats. Each shot should carry a complete visual idea.\n"
+            f"- Prefer 4s shots for micro content, mix 4s/6s for quick_take.\n"
+            f"- Every shot must be visually distinct — no redundant angles of the same subject.\n"
+            f"- For micro: 1 beat = 1-2 shots max. For quick_take: 1 beat = 2-3 shots max.\n"
+        )
 
     # Build visual style section from structured style analysis
     if style_analysis and isinstance(style_analysis, dict):
@@ -1914,7 +2512,7 @@ Aspect Ratio: {aspect_ratio}
 ═══════ CREATIVE SCENE CUTTING ═══════
 
 {pacing_instruction}
-
+{short_form_cutting}
 You are making CREATIVE EDITORIAL DECISIONS about where to cut. This is NOT a mechanical word-count exercise.
 
 CONSIDER THESE FACTORS WHEN DECIDING WHERE TO CUT:
@@ -2082,20 +2680,485 @@ Return ONLY the JSON. Begin."""
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  THREE-PHASE PRODUCTION PIPELINE (Max Quality Mode)
+#  SIX-PHASE PRODUCTION PIPELINE
 # ═══════════════════════════════════════════════════════════════════
+
+
+def build_script_doctor_prompt(narration_json: dict,
+                                style_analysis: dict = None,
+                                creative_direction: dict = None) -> str:
+    """
+    Phase 0 of 6: THE SCRIPT DOCTOR — Visual Brief.
+
+    Reads the complete narration and distills a per-beat Visual Brief that serves
+    as a shared creative compass for all downstream agents (Director, Cinematographer,
+    Storyboard Artist, Continuity Supervisor, DP).
+
+    Returns a prompt string. Output is a JSON Visual Brief.
+    """
+    beats = narration_json.get("narration", [])
+    title = narration_json.get("title", "Untitled")
+
+    # Format narration beats
+    narration_text = ""
+    for i, beat in enumerate(beats):
+        act = beat.get("act", "")
+        beat_name = beat.get("beat", "")
+        text = beat.get("text", beat.get("narration", ""))
+        narration_text += f"\n[BEAT {i+1}] Act: {act} | Beat: {beat_name}\n{text}\n"
+
+    # Build context sections
+    creative_direction_section = _build_creative_direction_section(creative_direction, 'script_doctor')
+
+    style_context = ""
+    if style_analysis and isinstance(style_analysis, dict):
+        summary = style_analysis.get("style_summary", "")
+        intent = style_analysis.get("style_intent", {})
+        if summary:
+            style_context = f"""
+═══════ VISUAL STYLE CONTEXT ═══════
+The production has an approved visual style: "{summary}"
+Character rendering: {intent.get('character_description', 'Not specified')}
+Environment rendering: {intent.get('environment_description', 'Not specified')}
+Color palette: {intent.get('color_palette', 'Not specified')}
+Mood: {intent.get('mood_default', 'Not specified')}
+Your Visual Brief should COMPLEMENT this style, not contradict it.
+"""
+
+    prompt = f"""You are THE SCRIPT DOCTOR for a visual production. You read the complete narration and distill
+a Visual Brief for each beat — a compact creative compass that every downstream specialist
+(Director, Cinematographer, Storyboard Artist, Continuity Supervisor, DP) will reference.
+
+Your Visual Brief does NOT describe specific shots, camera angles, or image prompts.
+It captures the ESSENCE of each beat: the metaphors it evokes, the mood it carries,
+the colors it suggests, the symbolic imagery it implies, and the point of view that
+would best serve the storytelling.
+
+Think like a mood board creator, not a cinematographer.
+{creative_direction_section}
+{style_context}
+═══════ PROJECT ═══════
+Title: {title}
+Total Beats: {len(beats)}
+
+═══════ FULL NARRATION ═══════
+Read the ENTIRE narration first. Understand the complete arc before analyzing individual beats.
+{narration_text}
+
+═══════ YOUR TASK ═══════
+
+STEP 1 — GLOBAL ANALYSIS (think before you write):
+Before briefing individual beats, identify:
+- What are the 2-3 RECURRING VISUAL MOTIFS that should thread through the entire piece?
+- What is the overall COLOR ARC? (How should the palette evolve from opening to closing?)
+- What is the EMOTIONAL THROUGHLINE? (The viewer's journey in 3-5 words)
+
+STEP 2 — PER-BEAT VISUAL BRIEF:
+For each beat in the narration, produce a compact brief (50-80 words total per beat):
+
+1. "metaphors": What conceptual metaphors does this text evoke? Use concrete visual analogies.
+   NOT film references. NOT "like a Kubrick film." Instead: "Time as erosion — sand wearing stone smooth."
+
+2. "mood_atmosphere": 2-4 mood/atmosphere tags. Use evocative adjectives, not genre labels.
+   Good: ["suffocating", "amber-lit", "ancient"]. Bad: ["thriller", "noir", "action"].
+
+3. "color_palette_shift": How should the color feeling shift for this beat relative to the
+   beats around it? Describe as a transition or state: "Deep indigo fading to amber" or
+   "Stark white — clinical, sterile, blinding."
+
+4. "symbolic_imagery": 1-2 concrete visual symbols that could represent the beat's core idea.
+   These are SUGGESTIONS, not requirements. "Hourglass with sand flowing upward; cracked sundial."
+
+5. "suggested_pov": What point of view would best serve this beat's emotional truth?
+   "Intimate — as if whispering in the viewer's ear" or "Vast — the viewer is a speck observing."
+
+6. "tone_keywords": 3-5 single-word tone descriptors that should infuse every visual decision
+   for this beat. ["haunting", "reverent", "questioning"]
+
+═══════ OUTPUT FORMAT ═══════
+
+Return a JSON object:
+{{{{
+  "title": "{title}",
+  "global_motifs": {{{{
+    "recurring_symbols": ["symbol1", "symbol2", "symbol3"],
+    "color_arc": "Description of how color evolves across the full piece",
+    "emotional_throughline": "3-5 word summary of the viewer's emotional journey"
+  }}}},
+  "visual_brief": [
+    {{{{
+      "beat_number": 1,
+      "act": "ACT 1",
+      "beat": "The Hook",
+      "metaphors": "Concrete visual metaphor for this beat's ideas",
+      "mood_atmosphere": ["tag1", "tag2", "tag3"],
+      "color_palette_shift": "How color shifts for this beat",
+      "symbolic_imagery": "1-2 specific visual symbols",
+      "suggested_pov": "Ideal perspective for emotional truth",
+      "tone_keywords": ["word1", "word2", "word3"]
+    }}}}
+  ]
+}}}}
+
+═══════ RULES ═══════
+1. Keep each beat's brief COMPACT — 50-80 words total across all fields. Downstream agents
+   need creative direction, not essays.
+2. Use mood board language, NOT film references. No "like Blade Runner" or "Spielbergian."
+   Instead describe the actual mood: "rain-slicked neon reflections, lonely warmth."
+3. Metaphors must be VISUAL and CONCRETE — something that can be drawn or photographed.
+4. Color descriptions use natural language, not hex codes: "burnt sienna", "ice blue", "muted sage."
+5. The brief must be INTERNALLY CONSISTENT — the global motifs should feel present in each beat.
+6. Do NOT describe specific shots, camera angles, or compositions. That is not your job.
+
+⚠️ Return ONLY valid JSON. No commentary. Begin."""
+
+    return prompt
+
+
+def build_cinematographer_prompt(director_shots: list,
+                                  visual_brief: dict = None) -> str:
+    """
+    Phase 2 of 6: THE CINEMATOGRAPHER — Camera Language.
+
+    Takes the Director's shot list (with camera intent) and the Visual Brief,
+    translates intent into specific executable camera techniques from a 62-technique library.
+
+    Does NOT change cuts, timing, or emotion. Does NOT design scene content.
+    ONLY specifies HOW the camera sees each shot.
+    """
+    import json as _json
+    formatted_shots = _json.dumps(director_shots, indent=2, ensure_ascii=False)
+
+    # Build visual brief context
+    visual_brief_section = ""
+    if visual_brief:
+        global_motifs = visual_brief.get("global_motifs", {})
+        brief_entries = visual_brief.get("visual_brief", [])
+        visual_brief_section = f"""═══════ VISUAL BRIEF (SHARED CONTEXT) ═══════
+Global Motifs: {global_motifs.get('recurring_symbols', [])}
+Color Arc: {global_motifs.get('color_arc', 'Not specified')}
+Emotional Throughline: {global_motifs.get('emotional_throughline', 'Not specified')}
+
+Per-beat briefs (use mood_atmosphere and tone_keywords to guide technique selection):
+"""
+        for entry in brief_entries:
+            visual_brief_section += (
+                f"  Beat {entry.get('beat_number', '?')}: "
+                f"mood={entry.get('mood_atmosphere', [])}, "
+                f"tone={entry.get('tone_keywords', [])}, "
+                f"pov={entry.get('suggested_pov', 'N/A')}\n"
+            )
+
+    prompt = f"""You are THE CINEMATOGRAPHER for a video production. The Director has made all editorial
+decisions — cuts, timing, emotion, and camera INTENT for each shot. Your job is to translate
+that intent into specific, executable camera language.
+
+You have a vocabulary of 62 techniques across 7 categories. For each shot, you select the
+techniques that best serve the Director's intent and the Visual Brief's mood.
+
+You do NOT change the Director's decisions (cuts, timing, script_beat, emotion, intent).
+You do NOT design what appears in the shot (that is the Storyboard Artist's job).
+You ONLY specify HOW the camera sees it: movement, angle, lens, composition, lighting mood,
+depth/focus approach, and any visual storytelling technique.
+
+{visual_brief_section}
+
+═══════ YOUR TECHNIQUE LIBRARY ═══════
+
+CAMERA MOVEMENT:
+- Static / locked-off → Stability, contemplation, tension through stillness
+- Dolly-in (push) → Building intimacy, approaching revelation, tightening grip
+- Dolly-out (pull) → Revealing context, creating distance, expanding perspective
+- Tracking shot (lateral) → Following movement, surveying a space, momentum
+- Crane up → Elevating from personal to epic, transcendence, liberation
+- Crane down → Descending into detail, grounding, focus narrowing
+- Steadicam float → Dreamlike movement, fluid immersion, ghost-like observation
+- Handheld → Urgency, chaos, raw emotion, immediacy, visceral presence
+- Whip pan → Sudden shift, surprise, disorientation, energy burst
+- Slow push-in → Dawning realization, creeping tension, subtle dread building
+- Orbit / arc → Examining from all angles, heroic presentation, gravitas
+- Zoom (optical) → Sudden focus shift, urgency without physical movement
+- Tilt up/down → Revealing scale (up) or grounding detail (down)
+- Boom shot → Vertical reveal, overhead perspective shift
+
+CAMERA ANGLE:
+- Eye level → Neutral, equality, documentary truth, connection
+- Low angle → Power, dominance, heroism, threat — subject feels imposing
+- High angle → Vulnerability, smallness, judgment — subject feels diminished
+- Bird's eye / top-down → Patterns, god-like perspective, omniscience
+- Worm's eye → Extreme power, surreal perspective, wonder
+- Dutch angle → Unease, instability, psychological disturbance
+- Over-the-shoulder → Conversation, confrontation, intimacy
+- POV (point of view) → Subjective experience, immersion, total identification
+- Profile / side-on → Objectivity, mythology, iconic quality
+
+LENS FEEL:
+- Wide-angle (14-24mm) → Expansive environments, epic scale, slight surrealism
+- Standard (35-50mm) → Natural perception, documentary, truthful
+- Telephoto (85-200mm) → Intimacy, compression, isolation, voyeuristic
+- Macro → Texture, detail, small-world discovery
+- Fisheye → Surreal distortion, paranoia, warped reality
+- Anamorphic → Cinematic width, lens flares, epic scope
+- Tilt-shift → Miniature effect, selective focus, toy-like wonder
+
+COMPOSITION:
+- Rule of thirds → Balanced, natural, pleasing
+- Center frame / symmetry → Power, formality, intensity
+- Golden ratio → Organic flow, subconscious harmony
+- Leading lines → Directed focus, depth, journey
+- Frame-within-frame → Isolation, layers of meaning, voyeurism
+- Negative space → Loneliness, weight of emptiness, minimalism
+- Foreground framing → Depth, immersion, peering through
+- Diagonal composition → Energy, dynamic action, visual excitement
+- Layered depth (fg/mg/bg) → Rich world-building, cinematic depth
+
+LIGHTING MOOD:
+- High-key → Optimism, clarity, openness, safety
+- Low-key → Mystery, drama, tension, hidden information
+- Rembrandt → Gravitas, human depth, timelessness
+- Split lighting → Duality, moral ambiguity, internal conflict
+- Silhouette → Mystery, iconic imagery, universal archetype
+- Rim light / backlight → Ethereal glow, separation, otherworldly
+- Practical lighting → Realism, warmth, authenticity
+- Chiaroscuro → Extreme contrast, theatrical intensity
+- Golden hour → Romance, nostalgia, fleeting beauty
+- Motivated lighting → Visible source, believable world
+
+VISUAL STORYTELLING:
+- Contrast cut → Juxtaposing opposites for shock, irony, commentary
+- Match cut → Connecting through visual similarity, continuity
+- Visual callback → Repeating earlier composition with variation, payoff
+- Reveal → Withholding then showing (pan, dolly, rack focus), surprise
+- Conceal → Hiding through framing or obstruction, suspense
+- Juxtaposition → Contrasting elements in same frame, tension
+- Visual metaphor → Composition representing abstract ideas, subtext
+
+DEPTH & FOCUS:
+- Deep focus → Everything sharp, democratic framing, viewer chooses
+- Shallow DOF → Isolating subject, romantic feel, laser focus
+- Rack focus → Shifting attention fg/bg, dramatic shift, cause-and-effect
+- Split diopter → Two planes sharp simultaneously, dual awareness
+- Bokeh → Background dissolves to soft light, dreamy, romantic
+- Pull focus through layers → Moving through depth planes, discovery
+
+═══════ DIRECTOR'S SHOT LIST ═══════
+{formatted_shots}
+
+═══════ YOUR TASK ═══════
+
+STEP 1 — READ THE EMOTIONAL ARC:
+Review the Director's "emotional_arc_analysis" and each shot's "camera_intent" and "emotion."
+Consider the Visual Brief's mood tags and tone keywords for each beat.
+
+STEP 2 — SELECT TECHNIQUES:
+For EACH shot, select techniques from your library. You must specify ALL of:
+
+1. "camera_movement": One primary movement. Must serve the Director's camera_intent.
+2. "camera_angle": One angle. Must serve the emotion and dramatic weight.
+3. "lens_feel": One lens feel. Must match the intimacy/distance the intent demands.
+4. "composition": One primary composition approach. Consider symbolic imagery from the Visual Brief.
+5. "lighting_mood": One lighting mood. Must match the Visual Brief's mood_atmosphere tags.
+6. "depth_focus": One depth/focus approach. Direct viewer attention appropriately.
+7. "visual_storytelling_technique": One technique from Visual Storytelling, OR "none".
+   Use sparingly — only 20-30% of shots should have one.
+
+For each selection, include a brief (5-10 word) justification after a dash (—).
+
+═══════ VARIETY RULES (MANDATORY) ═══════
+
+- No MORE than 2 consecutive shots with the same camera_movement
+- No MORE than 3 consecutive shots with the same camera_angle
+- No MORE than 2 consecutive shots with the same lighting_mood
+- The full shot list must use AT LEAST 4 different camera_movements,
+  3 different camera_angles, and 3 different lighting_moods
+- If the Director's intent is similar across adjacent shots, differentiate through
+  lens_feel, composition, or depth_focus instead
+- Think about RHYTHM: static-static needs a movement shot to break monotony;
+  handheld-handheld needs a locked-off shot for the viewer to breathe
+
+═══════ OUTPUT FORMAT ═══════
+
+Return a JSON object:
+{{{{
+  "shots": [
+    {{{{
+      "shot_number": "<from Director>",
+      "script_beat": "<from Director>",
+      "duration": "<from Director>",
+      "act": "<from Director>",
+      "beat": "<from Director>",
+      "emotion": "<from Director>",
+      "directors_intent": "<from Director>",
+      "camera_intent": "<from Director>",
+      "cutting_rationale": "<from Director>",
+      "emotional_arc_position": "<from Director>",
+
+      "camera_movement": "Slow push-in — building toward the revelation",
+      "camera_angle": "Eye level — honest, direct connection",
+      "lens_feel": "Telephoto compression — isolating subject from chaos",
+      "composition": "Center frame — subject commands full attention",
+      "lighting_mood": "Low-key — truth lives in shadow",
+      "depth_focus": "Shallow DOF — world falls away, only this matters",
+      "visual_storytelling_technique": "Reveal — camera movement uncovers what was hidden"
+    }}}}
+  ]
+}}}}
+
+═══════ RULES ═══════
+1. CARRY FORWARD every field from the Director's output exactly. Do NOT modify any.
+2. Every technique selection must be FROM THE LIBRARY above. Do not invent techniques.
+3. Each selection must include a brief justification after the dash (—).
+4. Serve the Director's camera_intent — it is your primary constraint.
+5. Use the Visual Brief's mood/atmosphere tags as secondary guide for lighting and composition.
+6. Think about RHYTHM across the sequence, not just individual shots.
+
+⚠️ Return ONLY valid JSON. No commentary. Begin."""
+
+    return prompt
+
+
+def build_continuity_supervisor_prompt(storyboard_shots: list,
+                                        visual_brief: dict = None) -> str:
+    """
+    Phase 4 of 6: THE CONTINUITY SUPERVISOR — Quality Review.
+
+    Reviews the complete shot list after Storyboard and auto-fixes:
+    shot variety issues, flow problems, color consistency, and continuity errors.
+    """
+    import json as _json
+    formatted_shots = _json.dumps(storyboard_shots, indent=2, ensure_ascii=False)
+
+    # Build visual brief context for color checking
+    visual_brief_section = ""
+    if visual_brief:
+        global_motifs = visual_brief.get("global_motifs", {})
+        visual_brief_section = f"""═══════ VISUAL BRIEF (REFERENCE FOR COLOR/MOOD CHECKS) ═══════
+Color Arc: {global_motifs.get('color_arc', 'Not specified')}
+Emotional Throughline: {global_motifs.get('emotional_throughline', 'Not specified')}
+Recurring Symbols: {global_motifs.get('recurring_symbols', [])}
+"""
+        brief_entries = visual_brief.get("visual_brief", [])
+        for entry in brief_entries:
+            visual_brief_section += (
+                f"  Beat {entry.get('beat_number', '?')}: "
+                f"color={entry.get('color_palette_shift', 'N/A')}, "
+                f"mood={entry.get('mood_atmosphere', [])}\n"
+            )
+
+    prompt = f"""You are THE CONTINUITY SUPERVISOR for a video production. The Director, Cinematographer,
+and Storyboard Artist have completed their work. You are the final quality check before
+the DP writes generation prompts.
+
+Your job is to review the COMPLETE shot list and flag + auto-fix:
+1. SHOT VARIETY issues — repetitive sizes, angles, or movements
+2. FLOW problems — jarring transitions, missing logic
+3. COLOR CONSISTENCY — palette drift contradicting the Visual Brief
+4. VISUAL CONTRAST — sequences lacking visual interest due to sameness
+5. CONTINUITY ERRORS — character/environment inconsistencies
+
+You have AUTHORITY to make targeted corrections. You do NOT redesign shots from scratch.
+You make SURGICAL fixes and annotate WHY.
+
+{visual_brief_section}
+
+═══════ COMPLETE SHOT LIST ═══════
+{formatted_shots}
+
+═══════ YOUR REVIEW PROCESS ═══════
+
+STEP 1 — SHOT SIZE VARIETY CHECK:
+Scan the sequence of shot_size values across all shots.
+RULE: No MORE than 2 consecutive shots with the SAME shot_size.
+If you find 3+ consecutive same-size shots:
+  - Change the MIDDLE shot(s) to a contrasting size
+  - Annotate the change in "continuity_fix"
+
+STEP 2 — CAMERA VARIETY CHECK:
+Scan camera_movement and camera_angle across all shots.
+RULE: No MORE than 2 consecutive shots with the same camera_movement.
+RULE: No MORE than 3 consecutive shots with the same camera_angle.
+If violated, suggest alternatives that still serve the Director's camera_intent.
+
+STEP 3 — VISUAL FLOW CHECK:
+Review adjacent shots for transition logic:
+- Does the sequence of visuals make spatial sense?
+- Are there abrupt location changes without an establishing visual?
+- Does the emotional intensity match the shot language (close-ups for emotion, wides for context)?
+If flow problems exist, suggest a fix in the visual description or add a transitional note.
+
+STEP 4 — COLOR CONSISTENCY CHECK:
+Reference the Visual Brief's color_palette_shift per beat and the global color_arc.
+- Does each shot's lighting_mood align with the brief's color guidance?
+- Are there sudden palette jumps that are not motivated by the narrative?
+If inconsistencies exist, annotate which shots need palette adjustment.
+
+STEP 5 — CONTINUITY CHECK:
+For characters appearing in multiple shots:
+- Is their outfit consistent (unless story-driven change is noted)?
+- Is their visual description consistent?
+For environments spanning multiple shots:
+- Is the environment description consistent?
+- Are time-of-day and lighting conditions consistent within a scene?
+
+═══════ OUTPUT FORMAT ═══════
+
+Return the COMPLETE shot list with corrections applied. For EACH shot, carry forward ALL
+existing fields. ADD these fields:
+
+1. "continuity_fix": If you changed anything, describe what and why.
+   If no changes: "No issues — approved as-is."
+
+2. "continuity_grade": One of:
+   "A" (no issues),
+   "B" (minor fix applied),
+   "C" (significant fix applied),
+   "F" (fundamental problem — flagged for review).
+
+Return a JSON object:
+{{{{
+  "review_summary": {{{{
+    "total_shots": 0,
+    "shots_modified": 0,
+    "variety_fixes": 0,
+    "flow_fixes": 0,
+    "color_fixes": 0,
+    "continuity_fixes": 0,
+    "overall_grade": "A"
+  }}}},
+  "shots": [
+    {{{{
+      "...all existing fields from storyboard...",
+      "continuity_fix": "Changed shot_size from Medium to Wide — broke 3-shot Medium streak",
+      "continuity_grade": "B"
+    }}}}
+  ]
+}}}}
+
+═══════ RULES ═══════
+1. CARRY FORWARD every field from every shot. Do NOT remove fields.
+2. When you modify a field, ALWAYS explain the change in "continuity_fix."
+3. Prefer MINIMAL changes. If a shot is fine, leave it alone with grade "A".
+4. Your fixes must still serve the Director's camera_intent and emotion.
+5. Do NOT add first_frame_prompt, last_frame_prompt, or veo_prompt. That is the DP's job.
+6. If you encounter a problem you cannot fix, grade it "F" and describe the issue.
+
+⚠️ Return ONLY valid JSON. No commentary. Begin."""
+
+    return prompt
+
 
 def build_director_prompt(narration_json: dict, duration_minutes: int = 10,
                           shot_start_number: int = 1,
                           pacing_tier: str = "Standard",
-                          creative_direction: dict = None) -> str:
+                          creative_direction: dict = None,
+                          format_preset: str = "",
+                          visual_brief: dict = None) -> str:
     """
-    Phase 1 of 3: THE DIRECTOR — Editorial Pass.
+    Phase 1 of 6: THE DIRECTOR — Editorial + Camera Intent.
 
-    Focuses ONLY on cutting decisions: where to split the narration into shots,
-    shot duration, emotional intent, and editorial rationale.
-
-    NO visual descriptions, NO prompts, NO style — purely editorial.
+    Makes cutting decisions AND expresses camera intent per shot.
+    Upgraded from pure editorial to include emotional arc mapping
+    and storytelling goals for the Cinematographer.
     """
     beats = narration_json.get("narration", [])
     title = narration_json.get("title", "Untitled")
@@ -2114,15 +3177,59 @@ def build_director_prompt(narration_json: dict, duration_minutes: int = 10,
     words_per_shot = WORDS_PER_SHOT_TARGETS.get(pacing_tier, 9)
     estimated_shots = max(1, int(total_words / words_per_shot))
 
+    # Apply shot range cap from format preset
+    short_form_cutting = ""
+    if format_preset and format_preset in FORMAT_PRESETS:
+        shot_range = FORMAT_PRESETS[format_preset].get("shot_range")
+        if shot_range:
+            min_shots, max_shots = shot_range
+            estimated_shots = max(min_shots, min(max_shots, estimated_shots))
+        if format_preset in ("micro", "quick_take"):
+            sr = shot_range or (4, 20)
+            short_form_cutting = (
+                f"\n⚠️ SHORT-FORM VIDEO — SHOT COUNT IS CRITICAL ⚠️\n"
+                f"This is a {format_preset.replace('_', ' ')} video ({duration_minutes} min).\n"
+                f"You MUST produce between {sr[0]} and {sr[1]} shots total.\n"
+                f"- Do NOT over-split beats. Each shot should carry a complete visual idea.\n"
+                f"- Prefer 4s shots for micro content, mix 4s/6s for quick_take.\n"
+            )
+
     # Build creative direction section for director
     creative_direction_section = _build_creative_direction_section(creative_direction, 'director')
 
-    prompt = f"""You are THE DIRECTOR for a video production. Your ONLY job is editorial:
-decide where to cut the narration into shots.
+    # Build visual brief context
+    visual_brief_section = ""
+    if visual_brief:
+        global_motifs = visual_brief.get("global_motifs", {})
+        visual_brief_section = f"""
+═══════ VISUAL BRIEF (from Script Doctor) ═══════
+Color Arc: {global_motifs.get('color_arc', 'Not specified')}
+Emotional Throughline: {global_motifs.get('emotional_throughline', 'Not specified')}
+Recurring Symbols: {global_motifs.get('recurring_symbols', [])}
 
-You do NOT design visuals. You do NOT write image prompts. You do NOT describe what the shot looks like.
-You ONLY make cutting decisions — where each shot starts, where it ends, how long it lasts, and WHY.
+Use this brief to inform your emotional pacing and camera intent decisions.
+When the brief suggests a mood shift, consider matching it with a pacing change.
+"""
+        for entry in visual_brief.get("visual_brief", []):
+            visual_brief_section += (
+                f"  Beat {entry.get('beat_number', '?')}: "
+                f"mood={entry.get('mood_atmosphere', [])}, "
+                f"pov={entry.get('suggested_pov', 'N/A')}\n"
+            )
+
+    prompt = f"""You are THE DIRECTOR for a video production. Your job is editorial decision-making:
+- WHERE to cut the narration into shots
+- HOW LONG each shot lasts
+- WHAT EMOTION each shot carries
+- WHAT CAMERA INTENT each shot needs (the storytelling goal, not specific technique)
+
+You are NOT a cinematographer. You do not pick specific lenses, angles, or movements.
+You express INTENT: "this needs a slow reveal," "this needs claustrophobic intimacy,"
+"pull back to show the enormity," "let the viewer lean in."
+
+The Cinematographer will translate your intent into specific camera technique.
 {creative_direction_section}
+{visual_brief_section}
 ═══════ PROJECT INFO ═══════
 Title: {title}
 Hook Type: {hook_type}
@@ -2134,16 +3241,27 @@ Estimated Shots: ~{estimated_shots}
 ⚠️ USE THESE EXACT WORDS — DO NOT REWRITE, PARAPHRASE, OR DROP ANY TEXT ⚠️
 {narration_text}
 
-═══════ EDITORIAL DECISIONS ═══════
+═══════ STEP 1: EMOTIONAL ARC MAPPING (THINK FIRST) ═══════
+
+Before making ANY cuts, read the entire narration and map the emotional arc:
+- Where is the TENSION PEAK? (Moment of highest dramatic intensity)
+- Where are the BREATHING POINTS? (Moments of release or contemplation)
+- Where are the TRANSITIONS? (Shifts between topics, moods, or energy levels)
+- What is the overall SHAPE? (Building? Wavelike? Escalating staircase? U-shaped?)
+
+Write your arc analysis in "emotional_arc_analysis" in the output.
+Your cutting decisions MUST serve this arc — fast cuts at peaks, held shots at breathing points.
+
+═══════ STEP 2: EDITORIAL DECISIONS ═══════
 
 {pacing_instruction}
-
+{short_form_cutting}
 You are making CREATIVE EDITORIAL DECISIONS about where to cut. This is NOT a mechanical word-count exercise.
 
 CONSIDER THESE FACTORS WHEN DECIDING WHERE TO CUT:
 1. NARRATIVE BEATS: Cut when the idea shifts, a new claim begins, or a new subject is introduced
 2. EMOTIONAL SHIFTS: Cut when the emotion changes (curiosity → surprise, tension → release)
-3. VISUAL LOGIC: Cut when what the audience should SEE would naturally change (new location, new subject, new angle)
+3. VISUAL LOGIC: Cut when what the audience should SEE would naturally change
 4. DRAMATIC TIMING: Use shorter shots (4s) for high-impact moments, longer shots (6-8s) for contemplation
 5. BREATHING ROOM: Not every cut must align with a word boundary — consider dramatic pauses
 
@@ -2154,18 +3272,52 @@ GUIDELINES:
 - EVERY word from the narration must appear in exactly one shot's script_beat
 - Split sentences at natural pause points (commas, periods, em-dashes, semicolons)
 
-EXAMPLE of creative cutting:
-  Original: "Imagine a world where your word is law, your wealth immense, and your enemies silenced."
+═══════ STEP 3: CAMERA INTENT ═══════
 
-  CREATIVE split:
-  Shot 1 | 4s | "Imagine a world where your word is law," | rationale: "Opening invitation — wide establishing"
-  Shot 2 | 4s | "your wealth immense," | rationale: "Brief flash of opulence — CUT for impact"
-  Shot 3 | 4s | "and your enemies silenced." | rationale: "Dark turn — shift in tone"
+For EACH shot, write a "camera_intent" — the storytelling GOAL for how this shot should feel visually.
+This is NOT a technique. It's the EMOTIONAL REASON for a camera choice.
+
+GOOD camera_intent examples:
+- "Slow reveal — start tight, then expand to show the scale of devastation"
+- "Claustrophobic intimacy — the viewer is trapped in this moment with the subject"
+- "Grand establishing — let the audience absorb the world before we dive in"
+- "Punch cut — a jarring visual shift that mirrors the narrative shock"
+- "Contemplative distance — observe from afar, let the weight settle"
+- "Creeping approach — the viewer senses something before seeing it"
+
+BAD camera_intent examples (too vague or too technical):
+- "Wide shot" (that's a technique, not intent)
+- "Show the scene" (too vague — show it HOW? WHY?)
+- "Dolly-in with 85mm lens" (too specific — that's the Cinematographer's job)
+
+═══════ EXAMPLE: MULTI-ACT PACING ═══════
+
+ACT 1 (Setup — curiosity, world-building):
+  Shot 1 | 6s | "In 1347, a ship arrived..." | intent: "Grand establishing — the viewer sees the scale"
+  Shot 2 | 4s | "carrying death itself." | intent: "Tight punch — shock of the dark turn"
+
+ACT 2 (Escalation — tension, revelation):
+  Shot 5 | 4s | "No one understood why." | intent: "Intimate confusion — close, personal, lost"
+  Shot 6 | 8s | "Until one physician dared to look closer." | intent: "Slow approach — anticipation"
+  Shot 7 | 4s | "What he found changed everything." | intent: "The reveal — dramatic pause before payoff"
+
+ACT 3 (Resolution — awe, reflection):
+  Shot 12 | 8s | "And so began the age of modern medicine." | intent: "Wide pullback — sweep of consequence"
+  Shot 13 | 6s | "A legacy born from horror." | intent: "Quiet close — let the weight settle"
+
+Notice: ACT 1 mixes 6s (scene-setting) with 4s (punch). ACT 2 uses 8s for anticipation, 4s for reveals.
+ACT 3 breathes with 8s and 6s. The RHYTHM creates the experience.
 
 ═══════ OUTPUT FORMAT ═══════
 
 Return a JSON object:
 {{{{
+  "emotional_arc_analysis": {{{{
+    "shape": "Description of the overall arc shape",
+    "tension_peaks": ["Beat N (description)", "Beat M (description)"],
+    "breathing_points": ["Beat N (description)"],
+    "transitions": ["Beat N→M (what shifts)"]
+  }}}},
   "shots": [
     {{{{
       "shot_number": "{shot_start_number}",
@@ -2174,28 +3326,24 @@ Return a JSON object:
       "act": "ACT 1",
       "beat": "Hook",
       "emotion": "Curiosity",
-      "directors_intent": "What the audience should feel at this moment",
-      "cutting_rationale": "Why the cut happens here (narrative shift, emotion change, visual logic, etc.)"
+      "directors_intent": "What the audience should FEEL at this moment",
+      "camera_intent": "The storytelling GOAL for how this shot should feel visually",
+      "cutting_rationale": "Why the cut happens here",
+      "emotional_arc_position": "Where this shot sits in the overall arc (e.g., 'Rising tension', 'Peak', 'Release')"
     }}}}
   ]
 }}}}
 
-═══════════════════════════════════════════════════════
-CRITICAL RULES:
-═══════════════════════════════════════════════════════
+═══════ CRITICAL RULES ═══════
 1. Use the EXACT narration words in script_beat. Do not paraphrase or rewrite.
 2. Every word from the narration must appear in exactly one shot's script_beat.
 3. Each script_beat: 5-15 words (3-4 allowed for dramatic emphasis).
 4. Every duration MUST be exactly 4s, 6s, or 8s.
-5. Include a cutting_rationale for every shot explaining the editorial decision.
-6. Do NOT include any visual descriptions, prompts, or style information.
-
-⚠️⚠️⚠️ JSON SYNTAX VALIDATION ⚠️⚠️⚠️
-CRITICAL: You MUST generate VALID JSON with correct syntax:
-1. Every field MUST end with a comma EXCEPT the last field in an object
-2. All string values MUST be properly escaped (use \\" for quotes, \\\\ for backslashes)
-3. Do NOT put commas after the last field in an object
-4. ALWAYS put a comma after every object in the "shots" array EXCEPT the last one
+5. Include a cutting_rationale for every shot.
+6. Include a camera_intent for every shot — a storytelling goal, not a technique.
+7. Include emotional_arc_position for every shot.
+8. Fill in emotional_arc_analysis BEFORE the shots array.
+9. Do NOT include visual descriptions, image prompts, or camera techniques.
 
 ⚠️ Return ONLY valid JSON. No commentary. Begin."""
 
@@ -2204,14 +3352,18 @@ CRITICAL: You MUST generate VALID JSON with correct syntax:
 
 def build_storyboard_prompt(director_shots: list, narration_json: dict,
                             style_intent: dict = None,
-                            creative_direction: dict = None) -> str:
+                            creative_direction: dict = None,
+                            cast: dict = None,
+                            visual_brief: dict = None) -> str:
     """
-    Phase 2 of 3: THE STORYBOARD ARTIST — Visual Composition.
+    Phase 3 of 6: THE STORYBOARD ARTIST — Visual Composition.
 
-    Takes the Director's shot list and designs what each shot LOOKS LIKE.
-    Also receives the full original narration for story arc context.
+    Takes the Cinematographer's shot list (with camera technique decisions) and designs
+    what each shot LOOKS LIKE — layered visual compositions with foreground/midground/background,
+    visual metaphor execution, and environmental storytelling.
 
-    Does NOT write final prompts — just visual direction, shot sizes, and continuity.
+    Also receives the full original narration for story arc context and the Visual Brief
+    for mood/metaphor guidance.
     """
     import json as _json
 
@@ -2230,6 +3382,9 @@ def build_storyboard_prompt(director_shots: list, narration_json: dict,
     # Build creative direction section for storyboard
     creative_direction_section = _build_creative_direction_section(creative_direction, 'storyboard')
 
+    # Build cast section
+    cast_section = _build_cast_section(cast, context='storyboard')
+
     # Build style direction section
     intent = style_intent or {}
     character_section = _build_character_section(intent)
@@ -2245,60 +3400,263 @@ Texture: {intent.get('texture', 'As appropriate')}
 Default Mood: {intent.get('mood_default', 'As appropriate')}
 {character_section}"""
 
-    prompt = f"""You are THE STORYBOARD ARTIST for a video production. The Director has already
-decided the cuts — where each shot starts and ends, how long it lasts, and what emotion it carries.
+    # Build wardrobe mode instructions
+    wardrobe_mode = intent.get('wardrobe_mode', 'locked')
+    character_desc = intent.get('character_description', '')
 
-Your job is to design what each shot LOOKS LIKE. You add visual composition and staging.
+    # Common multi-subject and no-subject guidance (appended to both modes)
+    wardrobe_edge_cases = """
+HANDLING SPECIAL SHOT TYPES:
+- NO CHARACTERS IN SHOT (drone shots, landscapes, equipment, vehicles, objects):
+  Set "character_outfit" to "N/A — no characters in shot". Do NOT invent characters for these shots.
+- MULTIPLE CHARACTERS IN SHOT: Describe ALL visible characters' clothing in one string.
+  Format: "Character A: [outfit]; Character B: [outfit]" (e.g., "Officer: Navy dress whites with gold shoulder boards and commander's cap; Enlisted sailors: NWU Type III camouflage work uniforms").
+- DIFFERENT SUBJECTS ACROSS SHOTS (documentary/explainer style): Each shot may feature
+  entirely different people or subjects. Treat each shot independently — describe whoever
+  is visible in THAT shot. Continuity only applies when the SAME character reappears."""
 
-You do NOT change any of the Director's decisions (cuts, timing, script_beat, emotion, intent).
+    if wardrobe_mode == 'story_driven':
+        wardrobe_instructions = f"""═══════ WARDROBE MODE: STORY-DRIVEN ═══════
+You MUST determine the appropriate outfit for each shot based on the story context.
+- Read the full narration and environment for each beat.
+- Choose clothing that fits the setting (e.g., lab coat in a lab, winter coat outdoors in snow, flight suit in a cockpit, dress uniform at a ceremony).
+- KEEP the outfit CONSISTENT within the same scene/location for the SAME character — only change it when the setting clearly demands it.
+- If the character description already mentions specific clothing, use that as the DEFAULT, but override it when the story environment requires different attire.
+- If the character description has NO clothing details, invent a contextually appropriate outfit in Shot 1 and maintain it until the scene/location changes.
+- In "character_outfit", write a specific, detailed description of what is worn in THIS shot.
+{wardrobe_edge_cases}"""
+    else:
+        if character_desc:
+            wardrobe_instructions = f"""═══════ WARDROBE MODE: LOCKED ═══════
+The primary character's wardrobe is LOCKED to the master Character Description.
+- Copy the wardrobe/clothing details from the character description into "character_outfit" for EVERY shot where that character appears.
+- Do NOT change, adapt, or reinterpret the primary character's clothing across shots.
+- If the character description does not mention clothing, set their outfit to "As described in character rendering style".
+- Character Description for reference: "{character_desc[:200]}..."
+{wardrobe_edge_cases}"""
+        else:
+            wardrobe_instructions = f"""═══════ WARDROBE MODE: LOCKED ═══════
+The primary character's wardrobe is LOCKED.
+- Since no specific clothing was described, invent a simple default outfit in Shot 1 (e.g., "plain white t-shirt and blue jeans") and copy it EXACTLY for EVERY subsequent shot where that character appears.
+- Do NOT change the primary character's outfit across shots.
+{wardrobe_edge_cases}"""
+
+    # Build expression mode instructions
+    expression_mode = intent.get('expression_mode', 'dynamic')
+
+    # Common multi-subject and no-subject guidance for expressions
+    expression_edge_cases = """
+HANDLING SPECIAL SHOT TYPES:
+- NO CHARACTERS IN SHOT (drone shots, landscapes, equipment, vehicles):
+  Set "character_expression" to "N/A — no characters in shot".
+- MULTIPLE CHARACTERS IN SHOT: Describe the PRIMARY/foreground character's expression.
+  If multiple characters have distinct emotional states, describe both:
+  "Commander: steely focus, narrowed eyes, set jaw; Recruit: wide-eyed awe, mouth slightly open"."""
+
+    if expression_mode == 'dynamic':
+        expression_instructions = f"""═══════ EXPRESSION MODE: DYNAMIC ═══════
+You MUST define a specific facial expression for each shot based on the Director's "emotion" field.
+- Translate each shot's "emotion" into concrete facial details: eyes (wide, narrowed, soft), mouth (smile, frown, open), brows (raised, furrowed, relaxed), overall energy.
+- Expressions should EVOLVE across the video — track the emotional arc.
+- Make expressions match the story beat (surprise at a reveal, determination during a challenge, joy at resolution).
+- Write the expression in "character_expression" as a specific, actable description.
+{expression_edge_cases}"""
+    else:
+        expression_instructions = f"""═══════ EXPRESSION MODE: LOCKED/NEUTRAL ═══════
+Facial expressions are LOCKED to neutral throughout the video.
+- Set "character_expression" to "Neutral expression" for EVERY shot that has characters.
+- Do NOT vary expressions based on emotion or story beats.
+{expression_edge_cases}"""
+
+    # Build visual brief context for storyboard
+    visual_brief_section = ""
+    if visual_brief:
+        global_motifs = visual_brief.get("global_motifs", {})
+        visual_brief_section = f"""═══════ VISUAL BRIEF (from Script Doctor) ═══════
+Recurring Symbols: {global_motifs.get('recurring_symbols', [])}
+Color Arc: {global_motifs.get('color_arc', 'Not specified')}
+Emotional Throughline: {global_motifs.get('emotional_throughline', 'Not specified')}
+
+Use this brief to guide your visual compositions. When the brief suggests symbolic imagery,
+find ways to incorporate it into your foreground/background layers. When it suggests a mood,
+let that mood influence your environmental storytelling.
+
+Per-beat guidance:
+"""
+        for entry in visual_brief.get("visual_brief", []):
+            visual_brief_section += (
+                f"  Beat {entry.get('beat_number', '?')}: "
+                f"metaphor=\"{entry.get('metaphors', 'N/A')}\", "
+                f"symbols=\"{entry.get('symbolic_imagery', 'N/A')}\", "
+                f"mood={entry.get('mood_atmosphere', [])}\n"
+            )
+
+    prompt = f"""You are THE STORYBOARD ARTIST for a video production. The Director has decided the cuts
+and camera intent. The Cinematographer has specified camera technique (movement, angle, lens,
+composition approach, lighting mood, depth/focus). Your job is to design the CONTENT of each frame.
+
+You think in terms of VISUAL STORYTELLING:
+- Composition layers: foreground, midground, background — what occupies each?
+- Visual metaphor execution: how do the Script Doctor's symbolic suggestions manifest?
+- Character staging: where in the frame, doing what, relating to whom/what?
+- Environmental storytelling: what does the location communicate beyond "setting"?
+
+You do NOT change the Director's cuts, timing, or emotion.
+You do NOT change the Cinematographer's camera technique decisions.
 You do NOT write final image or video generation prompts.
-You ONLY design visual direction: what the audience SEES.
+You design the CONTENT of the frame — what the camera captures.
 
 {creative_direction_section}
+{visual_brief_section}
 {style_direction}
+{cast_section}
+{wardrobe_instructions}
+
+{expression_instructions}
 
 ═══════ FULL STORY CONTEXT ═══════
-Read this first to understand the complete story arc, themes, and character journey
-BEFORE designing visuals for individual shots:
+Read this ENTIRE script first to understand the complete story arc, themes, character journey,
+locations, and tone BEFORE designing visuals for individual shots. This context is critical
+for making wardrobe and expression decisions that serve the narrative:
 {full_narration_text}
 
-═══════ DIRECTOR'S SHOT LIST ═══════
-These are the locked editorial decisions. Do NOT modify any existing fields.
+═══════ SHOT LIST (from Director + Cinematographer) ═══════
+These shots include locked editorial AND camera technique decisions. Do NOT modify any existing fields.
 {formatted_shots}
 
 ═══════ YOUR TASK ═══════
 
-For EACH shot in the list above, ADD these three new fields:
+⚠️ STEP 1 — STORY ANALYSIS (DO THIS FIRST):
+Before touching any individual shot, analyze the ENTIRE script holistically.
+Fill in the "story_analysis" object in your output with:
+- All distinct LOCATIONS/SETTINGS in the story (in order of appearance)
+- The PRIMARY SUBJECTS: who or what is featured? Characters, objects, environments, or abstract concepts.
+  - CHARACTERS: list each with when they appear and their baseline look
+  - NO CHARACTERS: list primary VISUAL SUBJECTS (e.g., "Tectonic plates", "The Grand Canyon")
+- The EMOTIONAL/TONAL ARC across the full video
+- VISUAL TRANSITION POINTS: where major visual changes occur
+This analysis is your PLAN. Every per-shot decision below must be consistent with it.
 
-1. "visual": A 1-2 sentence description of what this shot SHOWS. What is the scene?
-   What is the character doing? What does the environment look like? This must come
-   from the narration — depict the STORY MOMENT happening at that point.
+⚠️ STEP 2 — PER-SHOT FIELDS:
+Using your story_analysis as reference, for EACH shot ADD these seven fields:
+
+1. "visual": A 3-4 sentence LAYERED description of what this shot shows:
+   - SENTENCE 1: The primary subject and their action (what is happening)
+   - SENTENCE 2: The environment and atmospheric context (where, what conditions)
+   - SENTENCE 3: Composition detail — what is in the foreground vs background,
+     what draws the eye, what visual metaphor or symbolic element is present
+   - SENTENCE 4 (optional): Any dynamic element — movement, change, interaction
+
+   The Cinematographer has already specified camera_movement, camera_angle, lens_feel,
+   composition approach, lighting_mood, and depth_focus for this shot. Your visual description
+   should WORK WITH those decisions — describe content that serves the chosen technique.
+
+   WEAK: "A man stands in a forest."
+   STRONG: "A weathered explorer pauses mid-stride on a root-tangled trail, machete
+   lowered to his side. Dense canopy filters jade-green light onto his sweat-streaked face.
+   In the foreground, a spider's web stretches between two branches — a natural gate he
+   must break through. Behind him, the path disappears into shadow."
 
 2. "shot_size": One of: Extreme Wide, Wide, Medium Wide, Medium, Medium Close-Up,
-   Close-Up, Extreme Close-Up, Macro. Choose based on the emotion and visual logic:
-   - Use Wide/Extreme Wide for establishing shots and showing the world
-   - Use Medium for character actions and dialogue
-   - Use Close-Up/Extreme Close-Up for emotional moments and reactions
-   - Use Macro for important objects or details
-   - VARY your choices — do not use the same shot size repeatedly
+   Close-Up, Extreme Close-Up, Macro. Choose based on the emotion, camera_angle,
+   and the Cinematographer's composition approach.
+   VARY your choices — no more than 2 consecutive shots at the same size.
 
-3. "visual_continuity_notes": How this shot connects to the previous and next shot.
-   What must stay consistent? Note any subject, environment, lighting, or wardrobe
-   that must be maintained across shots.
+3. "fg_mg_bg_layers": What occupies each depth plane in this shot:
+   - "fg": Foreground element (can be "none" if nothing in foreground)
+   - "mg": Midground / primary subject
+   - "bg": Background element
+   Example: {{"fg": "out-of-focus candle flame", "mg": "scientist hunched over microscope", "bg": "shelves of specimen jars"}}
+   For shots with no depth layering: {{"fg": "none", "mg": "the primary subject", "bg": "the environment"}}
+
+4. "visual_metaphor_execution": If the Visual Brief suggests symbolic imagery or metaphors
+   for this beat, describe how you are visually executing it in this shot's composition.
+   If no metaphor applies: "N/A — straightforward narrative shot."
+   Example: "The Script Doctor suggested 'time as erosion.' Executed by placing a crumbling
+   stone wall behind the subject, with sand visibly trickling from its cracks."
+
+5. "character_outfit": What characters are wearing in THIS specific shot.
+   Follow the WARDROBE MODE instructions above. Be specific.
+   - No characters: "N/A — no characters in shot"
+   - Multiple characters: describe each (e.g., "Officer: dress whites; Sailors: NWU camo")
+   This field will be used directly by the DP.
+
+6. "character_expression": The facial expression(s) in THIS specific shot.
+   Follow the EXPRESSION MODE instructions above.
+   - No characters: "N/A — no characters in shot"
+   This field will be used directly by the DP.
+
+7. "visual_continuity_notes": How this shot connects to the previous and next shot.
+   What must stay consistent? Note subject, environment, lighting, wardrobe continuity.
+   If a major visual transition occurred, note WHY.
 
 CRITICAL RULES:
 1. EVERY shot must depict what the narration describes. Read the script_beat carefully.
-2. Characters must be DOING things (walking, talking, reacting, holding objects), NOT posing statically.
-3. Backgrounds come from the STORY (forest, room, street, battlefield), NOT "studio backdrops" or "seamless backgrounds."
-4. Vary shot sizes — use the full range to tell the story visually.
-5. Maintain visual consistency: same character looks the same across all shots.
-6. Do NOT add "first_frame_prompt", "last_frame_prompt", or "veo_prompt" fields.
-7. CARRY FORWARD every existing field exactly as given: shot_number, script_beat, duration, act, beat, emotion, directors_intent, cutting_rationale. Do NOT modify any of them.
+2. Characters must be DOING things (walking, talking, reacting), NOT posing statically.
+3. No characters? Focus on environments, objects, processes, or phenomena from the narration.
+4. Backgrounds come from the STORY, NOT "studio backdrops."
+5. Vary shot sizes — no more than 2 consecutive shots at the same size.
+6. Maintain visual consistency: same subjects look the same across shots.
+7. Wardrobe/expression decisions are YOUR responsibility — the DP uses your choices directly.
+8. Work WITH the Cinematographer's camera decisions — your visual content should serve the
+   chosen camera_movement, composition, and lighting_mood. If the Cinematographer chose
+   "foreground framing" as composition, make sure your fg_mg_bg_layers has a foreground element.
+9. Do NOT add "first_frame_prompt", "last_frame_prompt", or "veo_prompt" fields.
+10. CARRY FORWARD every existing field exactly as given. Do NOT modify any of them.
 
 ═══════ OUTPUT FORMAT ═══════
 
-Return a JSON object:
+Return a JSON object. IMPORTANT: Fill in "story_analysis" FIRST, then use it as your guide for every shot.
+
+Example A — CHARACTER-DRIVEN video (narrative, explainer with mascot):
 {{
+  "story_analysis": {{
+    "locations": [
+      {{"name": "The Lab", "shots": "1-5, 9-12", "description": "University research laboratory"}},
+      {{"name": "The Beach", "shots": "6-8", "description": "Tropical beach flashback"}}
+    ],
+    "subjects": [
+      {{"name": "The Scientist", "type": "character", "appears_in_shots": "1-12", "base_look": "Blue lab coat, round glasses"}},
+      {{"name": "The Assistant", "type": "character", "appears_in_shots": "3-5, 10-12", "base_look": "Green scrubs"}}
+    ],
+    "tonal_arc": "Curiosity (Act 1) → Nostalgia (Act 2 flashback) → Triumph (Act 3)",
+    "visual_transitions": [
+      {{"at_shot": "6", "reason": "Location changes from lab to beach", "change": "Lab coat → casual beach clothes"}},
+      {{"at_shot": "9", "reason": "Returns to lab", "change": "Beach clothes → lab coat returns"}}
+    ]
+  }},
+  "shots": [...]
+}}
+
+Example B — NON-CHARACTER video (geography, nature, documentary, architecture):
+{{
+  "story_analysis": {{
+    "locations": [
+      {{"name": "Earth orbit", "shots": "1-3", "description": "Satellite view of Earth showing tectonic plates"}},
+      {{"name": "Cross-section", "shots": "4-7", "description": "Animated geological cross-section of Earth's crust"}},
+      {{"name": "Ocean floor", "shots": "8-12", "description": "Underwater volcanic vent at mid-ocean ridge"}}
+    ],
+    "subjects": [
+      {{"name": "Tectonic plates", "type": "phenomenon", "appears_in_shots": "1-12", "base_look": "Massive rock formations with glowing fault lines"}},
+      {{"name": "Volcanic vent", "type": "object", "appears_in_shots": "8-12", "base_look": "Black smoker chimney with superheated mineral plumes"}}
+    ],
+    "tonal_arc": "Wonder/scale (opening) → Scientific precision (middle) → Awe at raw power (climax)",
+    "visual_transitions": [
+      {{"at_shot": "4", "reason": "Zoom from space into cross-section diagram", "change": "Satellite view → illustrated cutaway"}},
+      {{"at_shot": "8", "reason": "Dive into ocean to show real footage", "change": "Diagram → photorealistic underwater"}}
+    ]
+  }},
+  "shots": [...]
+}}
+
+ACTUAL OUTPUT SCHEMA (use for both types):
+{{
+  "story_analysis": {{
+    "locations": [{{"name": "...", "shots": "...", "description": "..."}}],
+    "subjects": [{{"name": "...", "type": "character|object|phenomenon|environment", "appears_in_shots": "...", "base_look": "..."}}],
+    "tonal_arc": "The viewer's emotional journey across the full video",
+    "visual_transitions": [{{"at_shot": "...", "reason": "...", "change": "..."}}]
+  }},
   "shots": [
     {{
       "shot_number": "<same as input>",
@@ -2308,9 +3666,22 @@ Return a JSON object:
       "beat": "<same as input>",
       "emotion": "<same as input>",
       "directors_intent": "<same as input>",
+      "camera_intent": "<same as input>",
       "cutting_rationale": "<same as input>",
-      "visual": "Description of what this shot shows — the story moment",
+      "emotional_arc_position": "<same as input>",
+      "camera_movement": "<same as input>",
+      "camera_angle": "<same as input>",
+      "lens_feel": "<same as input>",
+      "composition": "<same as input>",
+      "lighting_mood": "<same as input>",
+      "depth_focus": "<same as input>",
+      "visual_storytelling_technique": "<same as input>",
+      "visual": "3-4 sentence LAYERED description of what this shot shows",
       "shot_size": "Medium Close-Up",
+      "fg_mg_bg_layers": {{"fg": "foreground element", "mg": "primary subject", "bg": "background"}},
+      "visual_metaphor_execution": "How the Visual Brief's symbolism manifests here (or N/A)",
+      "character_outfit": "Clothing for this shot (or 'N/A — no characters in shot')",
+      "character_expression": "Expression for this shot (or 'N/A — no characters in shot')",
       "visual_continuity_notes": "What must stay consistent with adjacent shots"
     }}
   ]
@@ -2328,16 +3699,245 @@ CRITICAL: You MUST generate VALID JSON with correct syntax:
     return prompt
 
 
+def build_script_structuring_prompt(raw_text: str, duration_minutes: int = 10) -> str:
+    """
+    Script Structurer — takes raw plain-text narration and breaks it into
+    proper acts and beats, matching the narration JSON format used throughout the pipeline.
+    """
+    prompt = f"""You are a Script Structure Editor. You receive a raw, unstructured narration script
+and your job is to break it into clean acts and beats — the same format a professional scriptwriter would produce.
+
+═══════ RAW SCRIPT ═══════
+{raw_text}
+
+═══════ YOUR TASK ═══════
+Analyze the full text above and split it into logical ACTS and BEATS.
+
+RULES:
+1. Read the ENTIRE script first to understand the narrative arc
+2. Identify natural topic shifts, emotional turns, and structural transitions
+3. Group related paragraphs/sentences into BEATS (each beat = one distinct narrative moment or topic)
+4. Group beats into ACTS (each act = a major phase of the story — setup, development, climax, resolution, etc.)
+5. The narration text within each beat must be the EXACT words from the original script — do NOT rewrite, summarize, or paraphrase. Copy word-for-word.
+6. Every single word from the original script must appear in exactly one beat — nothing dropped, nothing duplicated
+7. Give each act a clear name (e.g., "ACT 1: THE SETUP", "ACT 2: THE CONFLICT")
+8. Give each beat a specific, descriptive name that reflects its content (e.g., "The Discovery", "Rising Stakes", "The Paradox Revealed")
+9. Aim for 3-5 acts with 2-5 beats each, depending on script length
+10. Target duration: approximately {duration_minutes} minutes
+
+═══════ OUTPUT FORMAT ═══════
+Return a JSON object with this EXACT structure:
+{{
+  "title": "Best-guess title based on the script content",
+  "duration_minutes": {duration_minutes},
+  "narration": [
+    {{
+      "act": "ACT 1: THE SETUP",
+      "beat": "The Hook",
+      "text": "Exact narration text for this beat, copied verbatim from the original."
+    }},
+    {{
+      "act": "ACT 1: THE SETUP",
+      "beat": "Setting the Stage",
+      "text": "Exact narration text for this beat..."
+    }},
+    {{
+      "act": "ACT 2: THE CONFLICT",
+      "beat": "The Turning Point",
+      "text": "Exact narration text for this beat..."
+    }}
+  ]
+}}
+
+CRITICAL:
+- The text fields must contain the EXACT original words — you are STRUCTURING, not rewriting
+- Every word from the input must appear in the output — no content may be dropped
+- Return ONLY valid JSON. No commentary. Begin."""
+
+    return prompt
+
+
+def build_cast_suggestion_prompt(narration_json: dict, character_description: str = "",
+                                 rendering_split: str = "unified",
+                                 creative_direction: dict = None) -> str:
+    """
+    Casting Director — analyzes the finalized script and suggests a cast of characters/subjects.
+
+    Reads the full narration and identifies all distinct characters, their roles, visual identity,
+    and which beats they appear in. Returns structured cast data for user review.
+    """
+    import json as _json
+
+    # Format the full narration
+    beats = narration_json.get("narration", [])
+    full_narration_text = ""
+    for i, beat in enumerate(beats):
+        act = beat.get("act", "")
+        beat_name = beat.get("beat", "")
+        text = beat.get("text", beat.get("narration", ""))
+        full_narration_text += f"\n[BEAT {i+1}] Act: {act} | Beat: {beat_name}\n{text}\n"
+
+    title = narration_json.get("title", "Untitled")
+
+    # Build character rendering context
+    rendering_context = ""
+    if character_description:
+        rendering_context = f"""═══════ CHARACTER RENDERING STYLE ═══════
+All characters must be rendered in this style:
+"{character_description}"
+
+Your cast suggestions define WHO each character is WITHIN this rendering style.
+- Do NOT describe photorealistic features if the style is cartoon/stick figure.
+- Differentiate characters through: clothing color/style, accessories, size, headwear,
+  props they carry — NOT through realistic facial features.
+- The rendering style is the TEMPLATE. Your job is to make each character DISTINCT within it.
+{"- This is HYBRID mode: characters use the style above, environments use a different (cinematic) style." if rendering_split == "hybrid" else ""}
+"""
+    else:
+        rendering_context = """═══════ CHARACTER RENDERING STYLE ═══════
+No specific rendering style has been defined. Describe characters naturally based on
+what the script implies. You can use realistic descriptions, stylized descriptions,
+or whatever best fits the story's tone.
+"""
+
+    # Build creative direction context for portrait prompts
+    creative_direction_context = ""
+    if creative_direction:
+        cd_parts = []
+        if creative_direction.get('visual_language'):
+            cd_parts.append(f"Visual Language: {creative_direction['visual_language']}")
+        if creative_direction.get('character_approach'):
+            cd_parts.append(f"Character Approach: {creative_direction['character_approach']}")
+        if cd_parts:
+            creative_direction_context = f"""═══════ CREATIVE DIRECTION CONTEXT ═══════
+{chr(10).join(cd_parts)}
+Use this context when crafting portrait generation prompts — they should match the creative vision.
+"""
+
+    prompt = f"""You are THE CASTING DIRECTOR for a video production. The script has been finalized.
+Your job is to read the entire script and identify every distinct character, creature, or
+recurring visual subject that appears across the narrative.
+
+For each one, you will suggest a visual identity that makes them immediately recognizable
+and visually distinct from other characters.
+
+{rendering_context}
+{creative_direction_context}
+═══════ PROJECT ═══════
+Title: {title}
+
+═══════ FULL SCRIPT ═══════
+Read this ENTIRE script carefully. Pay attention to:
+- Every person, character, creature, or personified concept mentioned
+- Whether they appear once or recur across multiple beats
+- Their role in the story (protagonist, antagonist, supporting, background)
+- Any clothing, appearance, or personality clues the script gives
+- Shots that have NO characters (landscapes, objects, abstract visuals)
+{full_narration_text}
+
+═══════ YOUR TASK ═══════
+
+Analyze the script and output a cast list. For EACH distinct character or recurring subject:
+
+1. "name": A short identifier (e.g., "The Scientist", "Hero", "Narrator Character", "The Robot")
+2. "role": Their function in the story (e.g., "Protagonist — drives the discovery",
+   "Antagonist — represents the obstacle", "Supporting — appears in flashbacks only")
+3. "visual_identity": A specific, detailed description of how this character looks
+   WITHIN the rendering style. Focus on what makes them VISUALLY DISTINCT from other characters.
+   Include: clothing/outfit, accessories, size/proportions, any defining visual feature.
+4. "appears_in_beats": Array of beat numbers where this character appears or is referenced.
+5. "notes": Any casting notes (e.g., "Always carries a briefcase", "Gets progressively disheveled",
+   "Same character as Hero but in flashback — younger version")
+6. "portrait_prompts": An object with two keys for generating character reference images:
+   - "face_closeup": A detailed image generation prompt for a HEAD AND SHOULDERS PORTRAIT of this character.
+     Must describe: face shape, skin tone, hair color/style, eye color/shape, age range, neutral expression,
+     and any defining accessories visible from chest up. Background should be plain/neutral.
+     Format: "[RENDERING STYLE]. Head and shoulders portrait of [character description]. [specific facial features]. Neutral expression. Plain background."
+   - "full_body": A detailed image generation prompt for a FULL BODY STANDING PORTRAIT of this character.
+     Must describe: everything in the face closeup PLUS body build, height impression, full outfit, shoes, posture, and any props.
+     Format: "[RENDERING STYLE]. Full body standing portrait of [character description]. [outfit details]. [pose/posture]. Plain background."
+   IMPORTANT: Both prompts must produce CHARACTER REFERENCE images — neutral pose, plain background, no dramatic lighting.
+   The goal is IDENTITY REFERENCE, not a cinematic shot. Incorporate the rendering style into both prompts.
+
+IMPORTANT GUIDELINES:
+- If the script has NO characters (e.g., geography explainer, nature documentary, abstract concepts):
+  set "has_characters" to false and return an empty cast array. This is perfectly valid.
+- If characters appear but are GENERIC/UNNAMED (e.g., "people walking", "a crowd"):
+  only create cast entries for characters that RECUR or have narrative importance.
+  Background crowds don't need cast entries.
+- If the script mentions a narrator but they are VOICE-ONLY (never seen on screen):
+  do NOT include them unless the visual style places the narrator character on screen.
+- Look for IMPLIED characters: if the narration says "you discover a hidden lab", the "you"
+  might be a character that needs a visual identity — or it might be camera-POV with no character.
+  Use your judgment based on the overall script tone.
+
+═══════ OUTPUT FORMAT ═══════
+
+Return a JSON object:
+{{
+  "title": "{title}",
+  "has_characters": true,
+  "total_beats": {len(beats)},
+  "cast": [
+    {{
+      "name": "The Scientist",
+      "role": "Protagonist — the researcher making the breakthrough discovery",
+      "visual_identity": "Wears a long blue lab coat over the body, round glasses perched on top of the head, always carries a clipboard tucked under one arm. Slightly taller than other characters.",
+      "appears_in_beats": [1, 2, 3, 4, 5, 7, 8, 9, 10],
+      "notes": "Central character — appears in most shots. Outfit may change in beach flashback (beats 6-8).",
+      "portrait_prompts": {{
+        "face_closeup": "Stick figure style. Head and shoulders portrait of The Scientist — large white circular head, dot eyes behind round glasses perched on the head, thin smile line. Neutral expression. Plain light gray background.",
+        "full_body": "Stick figure style. Full body standing portrait of The Scientist — tall stick figure with large circular head, dot eyes, round glasses. Wearing a long blue lab coat, clipboard tucked under one arm. Relaxed standing pose. Plain light gray background."
+      }}
+    }},
+    {{
+      "name": "The Robot",
+      "role": "Supporting — the scientist's creation, revealed in Act 2",
+      "visual_identity": "Boxy metallic torso instead of organic body shape, antenna sticking up from the circular head, glowing blue dot eyes instead of standard dark dot eyes. Shorter and wider than The Scientist.",
+      "appears_in_beats": [5, 6, 7, 8, 9, 10],
+      "notes": "Non-human character. No clothing needed — the metallic body IS the visual identity.",
+      "portrait_prompts": {{
+        "face_closeup": "Stick figure style. Head and shoulders portrait of The Robot — circular metallic head with antenna on top, glowing blue dot eyes, boxy metallic neck/shoulders. Neutral expression. Plain light gray background.",
+        "full_body": "Stick figure style. Full body standing portrait of The Robot — short and wide boxy metallic torso, circular head with antenna, glowing blue dot eyes. No clothing — metallic body. Standing upright. Plain light gray background."
+      }}
+    }}
+  ],
+  "casting_notes": "Brief summary of the visual differentiation strategy and any special considerations."
+}}
+
+For NON-CHARACTER videos, return:
+{{
+  "title": "{title}",
+  "has_characters": false,
+  "total_beats": {len(beats)},
+  "cast": [],
+  "casting_notes": "This script is a [geography/nature/architecture/etc.] explainer with no recurring characters. Visual subjects are environments and objects — no cast definition needed."
+}}
+
+⚠️⚠️⚠️ JSON SYNTAX VALIDATION ⚠️⚠️⚠️
+CRITICAL: You MUST generate VALID JSON with correct syntax:
+1. Every field MUST end with a comma EXCEPT the last field in an object
+2. All string values MUST be properly escaped
+3. "appears_in_beats" MUST be an array of integers, not a string
+
+⚠️ Return ONLY valid JSON. No commentary. Begin."""
+
+    return prompt
+
+
 def build_dp_prompt(storyboard_shots: list, style_analysis: dict = None,
                     aspect_ratio: str = "16:9", title: str = "Untitled",
-                    creative_direction: dict = None) -> str:
+                    creative_direction: dict = None,
+                    cast: dict = None,
+                    visual_brief: dict = None) -> str:
     """
-    Phase 3 of 3: THE DIRECTOR OF PHOTOGRAPHY — Prompt Writer.
+    Phase 5 of 6: THE DIRECTOR OF PHOTOGRAPHY — Final Prompt Writer.
 
-    Takes the storyboarded shots (with visual direction) and writes the final
-    first_frame_prompt, last_frame_prompt, and veo_prompt for each shot.
+    Takes the continuity-reviewed shots (with full visual + camera direction) and writes
+    the final first_frame_prompt, last_frame_prompt, and veo_prompt for each shot.
 
-    Uses the approved style analysis and prompt schema.
+    Upgraded with creative authority over lighting design, atmosphere, and texture.
+    Uses the Visual Brief for mood-informed lighting and atmospheric choices.
     """
     import json as _json
 
@@ -2429,27 +4029,91 @@ Default Mood: As appropriate for the narrative"""
 
     # Build creative direction section for DP
     creative_direction_section = _build_creative_direction_section(creative_direction, 'dp')
+    cast_section = _build_cast_section(cast, context='dp')
 
-    prompt = f"""You are THE DIRECTOR OF PHOTOGRAPHY for a video production. The Director chose the cuts.
-The Storyboard Artist designed the visual composition. Your job is to write the final
-generation prompts: first_frame_prompt, last_frame_prompt, and veo_prompt.
+    # Build visual brief context for DP
+    dp_visual_brief_section = ""
+    if visual_brief:
+        global_motifs = visual_brief.get("global_motifs", {})
+        dp_visual_brief_section = f"""═══════ VISUAL BRIEF (USE FOR LIGHTING & ATMOSPHERE) ═══════
+Color Arc: {global_motifs.get('color_arc', 'Not specified')}
+Emotional Throughline: {global_motifs.get('emotional_throughline', 'Not specified')}
 
-You do NOT change the cuts, timing, emotions, or visual descriptions.
-You ONLY write technically precise prompts following the approved style and schema.
+Reference the mood_atmosphere and color_palette_shift for each beat when deciding:
+- What color temperature to use for lighting
+- What atmospheric effects to include (dust motes, fog, rain, heat shimmer)
+- What overall mood the prompts should convey
+
+"""
+        for entry in visual_brief.get("visual_brief", []):
+            dp_visual_brief_section += (
+                f"  Beat {entry.get('beat_number', '?')}: "
+                f"color=\"{entry.get('color_palette_shift', 'N/A')}\", "
+                f"mood={entry.get('mood_atmosphere', [])}, "
+                f"tone={entry.get('tone_keywords', [])}\n"
+            )
+
+    prompt = f"""You are THE DIRECTOR OF PHOTOGRAPHY for a video production. The Director chose cuts and
+camera intent. The Cinematographer specified camera technique. The Storyboard Artist designed
+visual compositions. The Continuity Supervisor verified quality. Your job is to write the
+final generation prompts: first_frame_prompt, last_frame_prompt, and veo_prompt.
+
+You are NOT a mechanical transcriber. You bring CREATIVE AUTHORITY over:
+- LIGHTING DESIGN: Specify light source, direction, quality, color temperature, and how
+  it sculpts the subject and environment. Don't just say "dramatic lighting."
+- ATMOSPHERE & TEXTURE: Add environmental details that make the image feel real —
+  dust motes, moisture, heat haze, lens artifacts, surface textures.
+- PROMPT CRAFT: Translate visual descriptions into technically precise, generation-optimized
+  prompt language that produces the best results from AI image/video models.
+
+You do NOT change the cuts, timing, emotions, visual descriptions, or camera technique decisions.
+You translate them into the best possible generation prompts.
 {creative_direction_section}
+{dp_visual_brief_section}
+═══════ YOUR LIGHTING VOCABULARY ═══════
+
+Use this vocabulary when writing LIGHTING fields. Be SPECIFIC — not "dramatic lighting."
+
+Light Source: sun, overcast sky, window light, fluorescent tube, candle, campfire, neon sign,
+  screen glow, streetlamp, car headlights, moonlight, bioluminescence, explosion flash
+Light Quality: hard (sharp shadows), soft (diffused, wrapping), dappled (filtered through foliage),
+  specular (bright highlights on glossy), diffused (flat, even, cloudy day)
+Light Direction: front-lit (flat), side-lit (sculptural), back-lit (silhouette/rim),
+  top-lit (overhead, theatrical), under-lit (horror, campfire), rim-lit (edge glow)
+Color Temperature: warm candlelight, neutral daylight, cool overcast,
+  mixed (warm practicals + cool ambient), motivated color (neon pink, toxic green)
+Shadow Quality: crisp-edged (direct sun), soft gradient (overcast), deep black (noir), none (flat light)
+Atmosphere: haze, fog, dust motes in light beams, rain on surfaces, steam, smoke,
+  lens condensation, heat shimmer, morning mist, underwater caustics
+
 ═══════ PROJECT INFO ═══════
 Title: {title}
 Aspect Ratio: {aspect_ratio}
 
 {visual_style_section}
+{cast_section}
+═══════ PRODUCTION SHOTS ═══════
+Each shot has been through Director, Cinematographer, Storyboard Artist, and Continuity Supervisor.
+Fields include: shot_number, script_beat, duration, emotion, directors_intent, camera_intent,
+camera_movement, camera_angle, lens_feel, composition, lighting_mood, depth_focus,
+visual_storytelling_technique, visual, shot_size, fg_mg_bg_layers, visual_metaphor_execution,
+character_outfit, character_expression, visual_continuity_notes, continuity_fix, continuity_grade.
 
-═══════ STORYBOARDED SHOTS ═══════
-Each shot already has: shot_number, script_beat, duration, act, beat, emotion,
-directors_intent, cutting_rationale, visual, shot_size, visual_continuity_notes.
+Use "visual" + "fg_mg_bg_layers" for WHAT to depict.
+Use "camera_movement" + "camera_angle" + "lens_feel" for HOW the camera frames it.
+Use "lighting_mood" + the Visual Brief's color guidance for LIGHTING decisions.
+Use "emotion" + "directors_intent" for the MOOD of the prompts.
+Use "shot_size" for framing.
 
-Use the "visual" field as your guide for WHAT to depict in the prompts.
-Use the "emotion" and "directors_intent" to guide the MOOD of the prompts.
-Use the "shot_size" to guide your framing.
+⚠️ WARDROBE & EXPRESSION — USE STORYBOARD DECISIONS:
+- For the WARDROBE & FIT field in your prompts, use the "character_outfit" value from each shot.
+  The Storyboard Artist already decided what characters wear — do NOT invent your own.
+- For the FACIAL EXPRESSION field in your prompts, use the "character_expression" value from each shot.
+  The Storyboard Artist already decided the expression — do NOT override it.
+- Copy these values faithfully into the structured prompt fields.
+- If "character_outfit" or "character_expression" is "N/A — no characters in shot",
+  OMIT the WARDROBE & FIT and FACIAL EXPRESSION fields from that shot's prompt entirely.
+  Focus the prompt on the environment, objects, or landscape instead.
 
 {formatted_shots}
 
@@ -2526,6 +4190,8 @@ Return a JSON object with this EXACT structure:
       "directors_intent": "<from input>",
       "cutting_rationale": "<from input>",
       "shot_size": "<from input>",
+      "character_outfit": "<from input>",
+      "character_expression": "<from input>",
       "visual_continuity_notes": "<from input>",
       "first_frame_prompt": "Full structured first frame prompt using approved schema",
       "last_frame_prompt": "Full structured last frame prompt using approved schema",

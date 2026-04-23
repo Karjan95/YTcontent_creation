@@ -52,25 +52,34 @@ def _retry_api_call(api_fn, max_retries=MAX_RETRIES, description="API call"):
 
 
 def get_client(api_key=None):
-    key = api_key or os.getenv("GEMINI_API_KEY")
-    if not key:
-        raise ValueError("GEMINI_API_KEY not found. Please provide an API key.")
-    return genai.Client(api_key=key)
+    if not api_key:
+        raise ValueError("No API key provided. Please save your Gemini API key in Settings.")
+    return genai.Client(api_key=api_key)
 
 
-def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=False, temperature=None, api_key=None):
-    """Generate text content using Gemini, optionally with Google Search."""
+def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=False,
+                     temperature=None, api_key=None, max_output_tokens=None,
+                     return_response=False):
+    """Generate text content using Gemini, optionally with Google Search.
+
+    max_output_tokens: When set, unlocks Gemini's default 8192 cap (up to 65536 on Gemini 3).
+        If the model rejects the requested ceiling, we retry once with 16384 as a safe fallback.
+    return_response: When True, returns the raw response object instead of .text (needed to
+        extract grounding_metadata for structured research).
+    """
     try:
         client = get_client(api_key)
 
         # Configure tools if search is requested
         config = None
-        if use_search or temperature is not None:
+        if use_search or temperature is not None or max_output_tokens is not None:
             config = types.GenerateContentConfig()
             if use_search:
                 config.tools = [types.Tool(google_search=types.GoogleSearch())]
             if temperature is not None:
                 config.temperature = temperature
+            if max_output_tokens is not None:
+                config.max_output_tokens = max_output_tokens
 
         def _call():
             return client.models.generate_content(
@@ -79,11 +88,26 @@ def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=Fal
                 config=config
             )
 
-        response, retries = _retry_api_call(_call, description=f"generate_content({model_name})")
+        try:
+            response, retries = _retry_api_call(_call, description=f"generate_content({model_name})")
+        except Exception as e:
+            # Defensive fallback: if the model rejects our requested ceiling
+            # (unannounced model ceiling changes), retry once at 16384.
+            if max_output_tokens and max_output_tokens > 16384 and 'invalid' in str(e).lower():
+                print(f"[generate_content] Retrying with max_output_tokens=16384 after failure: {e}")
+                config.max_output_tokens = 16384
+                response, retries = _retry_api_call(_call, description=f"generate_content({model_name}) fallback")
+            else:
+                raise
+
+        if return_response:
+            return response
         if response.text is None:
             return "Error: Gemini returned an empty response (possibly blocked by safety filters)."
         return response.text
     except Exception as e:
+        if return_response:
+            raise
         return f"Error (after {MAX_RETRIES + 1} attempts): {str(e)}"
 
 
@@ -709,7 +733,7 @@ Also update the suggested_style_defaults if the changes affect visual style.
         return f"Error: {str(e)}"
 
 
-def generate_tts(text, voice_name="Kore", style_instructions="", api_key=None):
+def generate_tts(text, voice_name="kore", style_instructions="", api_key=None):
     """
     Generate speech audio from text using Gemini TTS.
     Returns the path to the saved WAV file, or an error string.
@@ -888,29 +912,25 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                 if not char_images:
                     continue
 
-                ref_mode = char.get('ref_mode', 'identity')
-                if ref_mode == 'full_look':
-                    char_instruction = (
-                        f"\n--- CHARACTER: \"{char_name}\" (Full Look) ---\n"
-                        f"The following {len(char_images)} image(s) show \"{char_name}\". "
-                        f"Preserve this character's COMPLETE appearance exactly: facial features, "
-                        f"hair, skin tone, body build, clothing, outfit, accessories, and overall "
-                        f"aesthetic. They must look identical to these references in every way:"
-                    )
-                else:  # identity (default)
-                    char_instruction = (
-                        f"\n--- CHARACTER: \"{char_name}\" (Identity Only) ---\n"
-                        f"The following {len(char_images)} image(s) show \"{char_name}\". "
-                        f"Preserve this character's exact facial structure, features, hair, "
-                        f"skin tone, body build, and age. Do NOT copy their clothing, outfit, "
-                        f"or accessories from these references — dress them according to the "
-                        f"scene prompt instead:"
-                    )
+                # Always use identity mode — wardrobe is handled via text in production table
+                char_instruction = (
+                    f"\n--- CHARACTER: \"{char_name}\" (Identity Only) ---\n"
+                    f"The following {len(char_images)} image(s) show \"{char_name}\". "
+                    f"Preserve this character's exact facial structure, features, hair, "
+                    f"skin tone, body build, and age. Do NOT copy their clothing, outfit, "
+                    f"or accessories from these references — dress them according to the "
+                    f"scene prompt instead:"
+                )
                 parts.append(types.Part(text=char_instruction))
 
                 for img_data in char_images[:4]:
-                    image_bytes, mime_type = _decode_ref_image(img_data)
-                    parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+                    if not img_data:
+                        continue
+                    try:
+                        image_bytes, mime_type = _decode_ref_image(img_data)
+                        parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+                    except Exception as e:
+                        print(f"[Scene Image] Failed to decode character image for {char_name}: {e}")
 
             # Character-to-scene binding instruction
             char_names = [c.get('name', 'Unknown') for c in characters if c.get('images')]
@@ -934,8 +954,13 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                 "Do NOT copy clothing or poses from these references:"
             )))
             for img_data in character_images[:10]:
-                image_bytes, mime_type = _decode_ref_image(img_data)
-                parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+                if not img_data:
+                    continue
+                try:
+                    image_bytes, mime_type = _decode_ref_image(img_data)
+                    parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+                except Exception as e:
+                    print(f"[Scene Image] Failed to decode legacy character image: {e}")
 
         # 3. Style reference images (mode-dependent instruction)
         if has_style:
@@ -966,34 +991,44 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                 )
             parts.append(types.Part(text=style_instruction))
             for img_data in style_images[:4]:
-                image_bytes, mime_type = _decode_ref_image(img_data)
-                parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+                if not img_data:
+                    continue
+                try:
+                    image_bytes, mime_type = _decode_ref_image(img_data)
+                    parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+                except Exception as e:
+                    print(f"[Scene Image] Failed to decode style reference image: {e}")
 
-        # 4. Scene prompt with additional context (LAST for recency bias)
+        # 4. Scene prompt (LAST section for recency bias)
         scene_block = f"\n--- SCENE TO GENERATE ---\n{prompt}"
         if additional_context:
-            scene_block += f"\n\nADDITIONAL STYLE NOTES: {additional_context}"
-
-        # Mode-dependent reminder
-        if style_mode == "full":
-            scene_block += (
-                "\n\nREMINDER: Each character MUST visually match their reference images. "
-                "The art style, lighting, and mood MUST match the style reference images. "
-                "Generate a single cohesive image."
-            )
-        elif style_mode == "loose":
-            scene_block += (
-                "\n\nREMINDER: Each character MUST visually match their reference images. "
-                "Follow the scene description above for style, lighting, and mood. "
-                "Style references are only loose inspiration. Generate a single cohesive image."
-            )
-        else:  # art_only
-            scene_block += (
-                "\n\nREMINDER: Each character MUST visually match their reference images. "
-                "Use the art style/medium from the style references, but follow THIS scene's "
-                "description for lighting, mood, and atmosphere. Generate a single cohesive image."
-            )
+            scene_block += f"\n\nADDITIONAL INSTRUCTIONS: {additional_context}"
         parts.append(types.Part(text=scene_block))
+
+        # 5. Character identity enforcement (VERY LAST — maximum recency bias)
+        # This is a separate part so Gemini sees it as the final instruction.
+        if has_structured_chars or has_legacy_chars:
+            char_names = [c.get('name', 'Unknown') for c in characters if c.get('images')] if has_structured_chars else []
+            if char_names:
+                enforcement = (
+                    f"\n⚠️ FINAL MANDATORY CHECK — DO NOT SKIP:\n"
+                    f"Before outputting the image, verify that EVERY character matches their reference images EXACTLY.\n"
+                    f"Characters in this scene: {', '.join(char_names)}.\n"
+                    f"For EACH character listed above:\n"
+                    f"- Face shape, eyes, nose, mouth, skin tone → MUST match reference images\n"
+                    f"- Hair color, style, length → MUST match reference images\n"
+                    f"- Body type, age, proportions → MUST match reference images\n"
+                    f"- Clothing/outfit → follow the SCENE PROMPT description (NOT reference images)\n"
+                    f"If a character in the generated image does NOT look like their reference, regenerate.\n"
+                    f"This is the HIGHEST PRIORITY instruction — it overrides all style and composition choices."
+                )
+            else:
+                enforcement = (
+                    "\n⚠️ FINAL MANDATORY CHECK: Every character in this image MUST exactly match "
+                    "the character reference images provided above. Face, hair, body type, age, and "
+                    "skin tone must be identical to the references. This overrides all other instructions."
+                )
+            parts.append(types.Part(text=enforcement))
 
         # Log what we're sending
         if has_structured_chars:
@@ -1029,7 +1064,10 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                 if part.inline_data and part.inline_data.mime_type.startswith("image/"):
                     image_data = part.inline_data.data
                     ext = part.inline_data.mime_type.split("/")[-1]
-                    filename = f"scene_{safe_id}_{timestamp}.{ext}"
+                    if safe_id.startswith("scene_"):
+                        filename = f"{safe_id}_{timestamp}.{ext}"
+                    else:
+                        filename = f"scene_{safe_id}_{timestamp}.{ext}"
                     filepath = os.path.join(
                         os.path.dirname(__file__), '..', 'generated_images', filename
                     )
@@ -1051,6 +1089,83 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
         return {"error": str(e)}
 
 
+def edit_scene_image(source_image_data, edit_prompt, model_name="gemini-3-pro-image-preview",
+                     aspect_ratio="16:9", scene_id=None, api_key=None):
+    """
+    Edit an existing image using Gemini's image-to-image capability.
+
+    Args:
+        source_image_data: Base64 data URI of the image to edit
+        edit_prompt: Instructions describing what to change
+        model_name: Gemini model to use
+        aspect_ratio: Output aspect ratio
+        scene_id: Scene identifier for file naming
+        api_key: User's Gemini API key
+    """
+    try:
+        client = get_client(api_key)
+        os.makedirs(os.path.join(os.path.dirname(__file__), '..', 'generated_images'), exist_ok=True)
+        safe_id = str(scene_id or "edit").replace("/", "_").replace(" ", "_")
+        timestamp = int(time.time())
+
+        # Decode the source image
+        image_bytes, mime_type = _decode_ref_image(source_image_data)
+
+        # Build parts: instruction + source image + edit prompt
+        parts = [
+            types.Part(text="You are an image editor. You will receive an image and instructions on how to modify it. "
+                            "Apply ONLY the requested changes while preserving everything else in the image as closely as possible."),
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+            types.Part(text=f"Edit this image: {edit_prompt}"),
+        ]
+
+        print(f"[Edit Image] Editing scene {scene_id} with {model_name}: {edit_prompt[:80]}")
+
+        def _call_gemini_edit():
+            return client.models.generate_content(
+                model=model_name,
+                contents=types.Content(parts=parts),
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE", "TEXT"],
+                    image_config=types.ImageConfig(
+                        aspect_ratio=aspect_ratio,
+                    ),
+                )
+            )
+
+        response, _retries = _retry_api_call(_call_gemini_edit, description=f"edit_gemini({scene_id})")
+
+        # Extract image from response (same pattern as generate_scene_image)
+        if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if part.inline_data and part.inline_data.mime_type.startswith("image/"):
+                    image_data = part.inline_data.data
+                    ext = part.inline_data.mime_type.split("/")[-1]
+                    if safe_id.startswith("scene_"):
+                        filename = f"{safe_id}_{timestamp}.{ext}"
+                    else:
+                        filename = f"scene_{safe_id}_{timestamp}.{ext}"
+                    filepath = os.path.join(
+                        os.path.dirname(__file__), '..', 'generated_images', filename
+                    )
+                    with open(filepath, "wb") as f:
+                        f.write(image_data)
+                    print(f"[Edit Image] Scene {scene_id} edited and saved to {filepath}")
+                    return {
+                        "success": True,
+                        "image_url": f"/generated/{filename}",
+                        "scene_id": scene_id,
+                        "local_path": filepath,
+                    }
+
+        return {"error": f"No image returned for edit on scene {scene_id}. Model returned no image data."}
+
+    except Exception as e:
+        print(f"[Edit Image] Failed for scene {scene_id}: {e}")
+        traceback.print_exc()
+        return {"error": str(e)}
+
+
 def start_video_generation(image_path, prompt, model_name="veo-3.1-generate-preview",
                            aspect_ratio="16:9", duration=6,
                            resolution="720p", scene_id=None, api_key=None):
@@ -1060,7 +1175,7 @@ def start_video_generation(image_path, prompt, model_name="veo-3.1-generate-prev
     Args:
         image_path: Local path to the source image
         prompt: Animation/motion prompt (veo_prompt)
-        model_name: 'veo-3.1-generate-preview' (quality+audio) or 'veo-3.1-fast-generate-preview' (fast)
+        model_name: 'veo-3.1-generate-preview' (quality+audio), 'veo-3.1-fast-generate-preview' (fast), or 'veo-3.1-lite-generate-preview' (budget, no 4K)
         aspect_ratio: '16:9' or '9:16'
         duration: 4, 6, or 8 (seconds)
         resolution: '720p', '1080p', or '4k'
@@ -1081,6 +1196,11 @@ def start_video_generation(image_path, prompt, model_name="veo-3.1-generate-prev
         ext = os.path.splitext(image_path)[1].lower()
         mime_map = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
         mime_type = mime_map.get(ext, "image/png")
+
+        # Veo 3.1 Lite does not support 4K — cap to 1080p
+        if model_name == "veo-3.1-lite-generate-preview" and resolution == "4k":
+            resolution = "1080p"
+            print(f"[Veo] Lite model selected — capping resolution to 1080p")
 
         print(f"[Veo] Starting animation for scene {scene_id} with {model_name} "
               f"(duration={duration}s, resolution={resolution})")
