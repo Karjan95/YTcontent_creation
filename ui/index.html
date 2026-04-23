@@ -2750,14 +2750,14 @@ No formatting needed — just paste your narration!"></textarea>
             }
             const items = sources.map(s => {
                 const title = escapeHtml(s.title || s.url || '(untitled)');
-                const quote = s.quote ? `<blockquote>${escapeHtml(s.quote)}</blockquote>` : '';
+                const quote = s.quote ? `<blockquote class="source-quote">${escapeHtml(s.quote)}</blockquote>` : '';
                 const link = s.url
-                    ? `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${title}</a>`
-                    : title;
+                    ? `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener noreferrer">${title}</a>`
+                    : `<span class="source-title">${title}</span>`;
                 const sid = s.id ? `<span class="source-id">[${escapeHtml(s.id)}]</span> ` : '';
                 return `<li>${sid}${link}${quote}</li>`;
             }).join('');
-            el.innerHTML = `<h4>Verified Sources</h4><ul class="sources">${items}</ul>`;
+            el.innerHTML = `<h4>Verified Sources (${sources.length})</h4><ul class="structured-sources">${items}</ul>`;
         }
 
         function displayResearchResults(data, projectId) {

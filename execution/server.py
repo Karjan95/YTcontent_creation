@@ -9,7 +9,7 @@ import zipfile
 import socket
 import ipaddress
 from functools import wraps
-from datetime import timedelta
+from datetime import timedelta, datetime
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, render_template, request, jsonify, send_from_directory, send_file, g
@@ -1674,11 +1674,15 @@ def create_project():
             'last_updated_at': firestore.SERVER_TIMESTAMP,
         }
         project_ref.set(new_project)
-        
+
+        # Firestore SERVER_TIMESTAMP is a sentinel that isn't JSON-serializable;
+        # replace with an ISO string (client only needs a sortable value here).
+        now_iso = datetime.utcnow().isoformat() + 'Z'
+        response_project = {**new_project, 'created_at': now_iso, 'last_updated_at': now_iso}
         return jsonify({
             'success': True,
             'project_id': project_ref.id,
-            'project': new_project
+            'project': response_project
         })
     except Exception as e:
         return safe_error_response(e)
