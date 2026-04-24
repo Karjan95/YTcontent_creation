@@ -9,6 +9,13 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 
+# Cost tracking: all Gemini calls emit an event via cost_tracker. Import is
+# tolerated-to-fail so CLI usage (no Firestore context) still works.
+try:
+    import cost_tracker
+except Exception:  # pragma: no cover
+    cost_tracker = None
+
 # Load environment variables from project root
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
@@ -59,14 +66,19 @@ def get_client(api_key=None):
 
 def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=False,
                      temperature=None, api_key=None, max_output_tokens=None,
-                     return_response=False):
+                     return_response=False, uid=None, project_id=None,
+                     description=None):
     """Generate text content using Gemini, optionally with Google Search.
 
     max_output_tokens: When set, unlocks Gemini's default 8192 cap (up to 65536 on Gemini 3).
         If the model rejects the requested ceiling, we retry once with 16384 as a safe fallback.
     return_response: When True, returns the raw response object instead of .text (needed to
         extract grounding_metadata for structured research).
+    uid / project_id: Identify the billing owner + project for cost tracking. When absent
+        (CLI, unauthenticated) the tracker is a no-op.
+    description: Short label for the call (e.g. "director", "storyboard") shown on events.
     """
+    desc = description or f"generate_content({model_name})"
     try:
         client = get_client(api_key)
 
@@ -89,16 +101,22 @@ def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=Fal
             )
 
         try:
-            response, retries = _retry_api_call(_call, description=f"generate_content({model_name})")
+            response, retries = _retry_api_call(_call, description=desc)
         except Exception as e:
             # Defensive fallback: if the model rejects our requested ceiling
             # (unannounced model ceiling changes), retry once at 16384.
             if max_output_tokens and max_output_tokens > 16384 and 'invalid' in str(e).lower():
                 print(f"[generate_content] Retrying with max_output_tokens=16384 after failure: {e}")
                 config.max_output_tokens = 16384
-                response, retries = _retry_api_call(_call, description=f"generate_content({model_name}) fallback")
+                response, retries = _retry_api_call(_call, description=f"{desc} fallback")
             else:
                 raise
+
+        if cost_tracker is not None:
+            cost_tracker.track_text(
+                uid=uid, project_id=project_id, model=model_name,
+                response=response, retries=retries, description=desc,
+            )
 
         if return_response:
             return response
@@ -111,7 +129,8 @@ def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=Fal
         return f"Error (after {MAX_RETRIES + 1} attempts): {str(e)}"
 
 
-def _generate_with_gemini_model(client, model_name, prompt, timestamp):
+def _generate_with_gemini_model(client, model_name, prompt, timestamp,
+                                uid=None, project_id=None):
     """Generate image using Gemini's native image generation (generate_content API)."""
     print(f"[Image Gen] Trying Gemini model: {model_name}...")
 
@@ -124,7 +143,14 @@ def _generate_with_gemini_model(client, model_name, prompt, timestamp):
             )
         )
 
-    response, _retries = _retry_api_call(_call, description=f"image_gen({model_name})")
+    response, retries = _retry_api_call(_call, description=f"image_gen({model_name})")
+
+    if cost_tracker is not None:
+        cost_tracker.track_image(
+            uid=uid, project_id=project_id, model=model_name,
+            response=response, retries=retries, description=f"image_gen({model_name})",
+        )
+
     if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
         for part in response.candidates[0].content.parts:
             if part.inline_data and part.inline_data.mime_type.startswith("image/"):
@@ -141,7 +167,8 @@ def _generate_with_gemini_model(client, model_name, prompt, timestamp):
     return None
 
 
-def _generate_with_imagen_model(client, model_name, prompt, timestamp):
+def _generate_with_imagen_model(client, model_name, prompt, timestamp,
+                                uid=None, project_id=None):
     """Generate image using Imagen API (generate_images endpoint)."""
     print(f"[Image Gen] Trying Imagen model: {model_name}...")
 
@@ -154,7 +181,14 @@ def _generate_with_imagen_model(client, model_name, prompt, timestamp):
             )
         )
 
-    response, _retries = _retry_api_call(_call, description=f"imagen_gen({model_name})")
+    response, retries = _retry_api_call(_call, description=f"imagen_gen({model_name})")
+
+    if cost_tracker is not None:
+        cost_tracker.track_imagen(
+            uid=uid, project_id=project_id, model=model_name,
+            response=response, retries=retries, description=f"imagen_gen({model_name})",
+        )
+
     if response.generated_images:
         image_data = response.generated_images[0].image.image_bytes
         filename = os.path.join(
@@ -168,7 +202,8 @@ def _generate_with_imagen_model(client, model_name, prompt, timestamp):
     return None
 
 
-def generate_image_content(prompt, model_name=None, api_key=None):
+def generate_image_content(prompt, model_name=None, api_key=None,
+                           uid=None, project_id=None):
     """
     Generate an image using the specified model.
 
@@ -194,9 +229,11 @@ def generate_image_content(prompt, model_name=None, api_key=None):
     if model_name:
         try:
             if model_name.startswith("imagen-"):
-                result = _generate_with_imagen_model(client, model_name, prompt, timestamp)
+                result = _generate_with_imagen_model(client, model_name, prompt, timestamp,
+                                                     uid=uid, project_id=project_id)
             else:
-                result = _generate_with_gemini_model(client, model_name, prompt, timestamp)
+                result = _generate_with_gemini_model(client, model_name, prompt, timestamp,
+                                                     uid=uid, project_id=project_id)
 
             if result:
                 return result
@@ -207,7 +244,8 @@ def generate_image_content(prompt, model_name=None, api_key=None):
 
     # Auto mode (backward compat): Gemini 3 Pro → Imagen 4 fallback
     try:
-        result = _generate_with_gemini_model(client, "gemini-3-pro-image-preview", prompt, timestamp)
+        result = _generate_with_gemini_model(client, "gemini-3-pro-image-preview", prompt, timestamp,
+                                             uid=uid, project_id=project_id)
         if result:
             return result
         print(f"[Image Gen] Gemini 3 Pro returned no image. Trying Imagen fallback...")
@@ -215,7 +253,8 @@ def generate_image_content(prompt, model_name=None, api_key=None):
         print(f"[Image Gen] Gemini 3 Pro failed: {e}. Trying Imagen fallback...")
 
     try:
-        result = _generate_with_imagen_model(client, "imagen-4.0-generate-001", prompt, timestamp)
+        result = _generate_with_imagen_model(client, "imagen-4.0-generate-001", prompt, timestamp,
+                                             uid=uid, project_id=project_id)
         if result:
             return result
         return "Error: Both models failed to generate an image. Try a different prompt (avoid real person names)."
@@ -347,7 +386,7 @@ Return a JSON object with EXACTLY this structure:
 }"""
 
 
-def analyze_style_from_images(image_data_list, api_key=None):
+def analyze_style_from_images(image_data_list, api_key=None, uid=None, project_id=None):
     """
     Analyze visual style from 1-4 base64-encoded images using Gemini Vision.
     Returns a structured dict with style_summary, style_intent, and prompt_schema.
@@ -390,7 +429,13 @@ def analyze_style_from_images(image_data_list, api_key=None):
                 )
             )
 
-        response, _retries = _retry_api_call(_call, description="analyze_style_from_images")
+        response, retries = _retry_api_call(_call, description="analyze_style_from_images")
+
+        if cost_tracker is not None:
+            cost_tracker.track_text(
+                uid=uid, project_id=project_id, model="gemini-3-flash-preview",
+                response=response, retries=retries, description="analyze_style_from_images",
+            )
 
         try:
             result = json.loads(response.text)
@@ -419,7 +464,7 @@ def analyze_style_from_images(image_data_list, api_key=None):
         return f"Error: {str(e)}"
 
 
-def analyze_style_from_text(style_description, api_key=None):
+def analyze_style_from_text(style_description, api_key=None, uid=None, project_id=None):
     """
     Analyze visual style from a free-text description using Gemini.
     Returns the same structured dict as analyze_style_from_images().
@@ -449,7 +494,13 @@ def analyze_style_from_text(style_description, api_key=None):
                 )
             )
 
-        response, _retries = _retry_api_call(_call, description="analyze_style_from_text")
+        response, retries = _retry_api_call(_call, description="analyze_style_from_text")
+
+        if cost_tracker is not None:
+            cost_tracker.track_text(
+                uid=uid, project_id=project_id, model="gemini-3-flash-preview",
+                response=response, retries=retries, description="analyze_style_from_text",
+            )
 
         try:
             result = json.loads(response.text)
@@ -573,7 +624,8 @@ Return a JSON object with EXACTLY this structure:
 }"""
 
 
-def expand_creative_direction(user_direction, narration_context=None, api_key=None):
+def expand_creative_direction(user_direction, narration_context=None, api_key=None,
+                              uid=None, project_id=None):
     """
     Expand a user's free-form creative direction into structured guidance
     plus auto-suggested style defaults.
@@ -619,7 +671,13 @@ Opening beats:
                 )
             )
 
-        response, _retries = _retry_api_call(_call, description="expand_creative_direction")
+        response, retries = _retry_api_call(_call, description="expand_creative_direction")
+
+        if cost_tracker is not None:
+            cost_tracker.track_text(
+                uid=uid, project_id=project_id, model="gemini-3-flash-preview",
+                response=response, retries=retries, description="expand_creative_direction",
+            )
 
         try:
             result = json.loads(response.text)
@@ -650,7 +708,8 @@ Opening beats:
         return f"Error: {str(e)}"
 
 
-def refine_creative_direction(current_direction, user_feedback, narration_context=None, api_key=None):
+def refine_creative_direction(current_direction, user_feedback, narration_context=None, api_key=None,
+                              uid=None, project_id=None):
     """
     Refine an already-expanded creative direction based on user feedback.
 
@@ -703,7 +762,13 @@ Also update the suggested_style_defaults if the changes affect visual style.
                 )
             )
 
-        response, _retries = _retry_api_call(_call, description="refine_creative_direction")
+        response, retries = _retry_api_call(_call, description="refine_creative_direction")
+
+        if cost_tracker is not None:
+            cost_tracker.track_text(
+                uid=uid, project_id=project_id, model="gemini-3-flash-preview",
+                response=response, retries=retries, description="refine_creative_direction",
+            )
 
         try:
             result = json.loads(response.text)
@@ -733,7 +798,8 @@ Also update the suggested_style_defaults if the changes affect visual style.
         return f"Error: {str(e)}"
 
 
-def generate_tts(text, voice_name="kore", style_instructions="", api_key=None):
+def generate_tts(text, voice_name="kore", style_instructions="", api_key=None,
+                 uid=None, project_id=None):
     """
     Generate speech audio from text using Gemini TTS.
     Returns the path to the saved WAV file, or an error string.
@@ -769,7 +835,15 @@ def generate_tts(text, voice_name="kore", style_instructions="", api_key=None):
                 )
             )
 
-        response, _retries = _retry_api_call(_call, description="generate_tts")
+        response, retries = _retry_api_call(_call, description="generate_tts")
+
+        if cost_tracker is not None:
+            cost_tracker.track_tts(
+                uid=uid, project_id=project_id,
+                model="gemini-2.5-flash-preview-tts",
+                char_count=len(prompt),
+                retries=retries, description="generate_tts",
+            )
 
         # Extract raw PCM audio data
         data = response.candidates[0].content.parts[0].inline_data.data
@@ -813,7 +887,8 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                          aspect_ratio="16:9", resolution="2K",
                          style_images=None, characters=None,
                          character_images=None, additional_context="",
-                         style_mode="art_only", scene_id=None, api_key=None):
+                         style_mode="art_only", scene_id=None, api_key=None,
+                         uid=None, project_id=None):
     """
     Generate an image for a specific scene using Gemini or Imagen models.
     Supports style/character reference images for Gemini models.
@@ -860,7 +935,14 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                     )
                 )
 
-            response, _retries = _retry_api_call(_call_imagen, description=f"scene_imagen({scene_id})")
+            response, retries = _retry_api_call(_call_imagen, description=f"scene_imagen({scene_id})")
+
+            if cost_tracker is not None:
+                cost_tracker.track_imagen(
+                    uid=uid, project_id=project_id, model=model_name,
+                    response=response, retries=retries,
+                    description=f"scene_imagen({scene_id})",
+                )
 
             if response.generated_images:
                 image_data = response.generated_images[0].image.image_bytes
@@ -1056,7 +1138,14 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                 )
             )
 
-        response, _retries = _retry_api_call(_call_gemini_scene, description=f"scene_gemini({scene_id})")
+        response, retries = _retry_api_call(_call_gemini_scene, description=f"scene_gemini({scene_id})")
+
+        if cost_tracker is not None:
+            cost_tracker.track_image(
+                uid=uid, project_id=project_id, model=model_name,
+                response=response, retries=retries,
+                description=f"scene_gemini({scene_id})",
+            )
 
         # Extract image from response
         if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
@@ -1090,7 +1179,8 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
 
 
 def edit_scene_image(source_image_data, edit_prompt, model_name="gemini-3-pro-image-preview",
-                     aspect_ratio="16:9", scene_id=None, api_key=None):
+                     aspect_ratio="16:9", scene_id=None, api_key=None,
+                     uid=None, project_id=None):
     """
     Edit an existing image using Gemini's image-to-image capability.
 
@@ -1133,7 +1223,14 @@ def edit_scene_image(source_image_data, edit_prompt, model_name="gemini-3-pro-im
                 )
             )
 
-        response, _retries = _retry_api_call(_call_gemini_edit, description=f"edit_gemini({scene_id})")
+        response, retries = _retry_api_call(_call_gemini_edit, description=f"edit_gemini({scene_id})")
+
+        if cost_tracker is not None:
+            cost_tracker.track_image(
+                uid=uid, project_id=project_id, model=model_name,
+                response=response, retries=retries,
+                description=f"edit_gemini({scene_id})",
+            )
 
         # Extract image from response (same pattern as generate_scene_image)
         if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
@@ -1168,7 +1265,8 @@ def edit_scene_image(source_image_data, edit_prompt, model_name="gemini-3-pro-im
 
 def start_video_generation(image_path, prompt, model_name="veo-3.1-generate-preview",
                            aspect_ratio="16:9", duration=6,
-                           resolution="720p", scene_id=None, api_key=None):
+                           resolution="720p", scene_id=None, api_key=None,
+                           uid=None, project_id=None):
     """
     Start async video generation (image-to-video) using Veo 3.1.
 
@@ -1220,11 +1318,29 @@ def start_video_generation(image_path, prompt, model_name="veo-3.1-generate-prev
                 ),
             )
 
-        operation, _retries = _retry_api_call(_call, description=f"veo_start({scene_id})")
+        operation, retries = _retry_api_call(_call, description=f"veo_start({scene_id})")
 
-        # Store operation for later polling
+        # Store operation for later polling — keep billing context so that
+        # poll_video_generation can emit a refund event if the op fails.
         op_name = operation.name
-        _video_operations[op_name] = operation
+        _video_operations[op_name] = {
+            "operation": operation,
+            "uid": uid,
+            "project_id": project_id,
+            "duration": int(duration),
+            "model": model_name,
+            "scene_id": scene_id,
+        }
+
+        # Bill provisionally at submit. If the async op later fails, the poll
+        # path will emit a track_veo_refund() event with negative cost.
+        if cost_tracker is not None:
+            cost_tracker.track_veo(
+                uid=uid, project_id=project_id, model=model_name,
+                duration_seconds=int(duration),
+                retries=retries, description=f"veo_start({scene_id})",
+                status="provisional", op_name=op_name,
+            )
 
         print(f"[Veo] Operation started: {op_name}")
         return {
@@ -1254,14 +1370,30 @@ def poll_video_generation(operation_name, scene_id=None, api_key=None):
     try:
         client = get_client(api_key)
 
-        # Retrieve stored operation
-        operation = _video_operations.get(operation_name)
-        if not operation:
+        # Retrieve stored operation + billing context
+        op_entry = _video_operations.get(operation_name)
+        if not op_entry:
             return {"error": f"Operation {operation_name} not found. Server may have restarted."}
+
+        # Support both the new dict shape and any stale bare-operation entries.
+        if isinstance(op_entry, dict):
+            operation = op_entry.get("operation")
+            bill_uid = op_entry.get("uid")
+            bill_pid = op_entry.get("project_id")
+            bill_duration = op_entry.get("duration", 0)
+            bill_model = op_entry.get("model")
+        else:
+            operation = op_entry
+            bill_uid = bill_pid = bill_model = None
+            bill_duration = 0
 
         # Refresh operation status
         operation = client.operations.get(operation)
-        _video_operations[operation_name] = operation
+        if isinstance(op_entry, dict):
+            op_entry["operation"] = operation
+            _video_operations[operation_name] = op_entry
+        else:
+            _video_operations[operation_name] = operation
 
         if not operation.done:
             return {"status": "in_progress", "scene_id": scene_id}
@@ -1295,7 +1427,15 @@ def poll_video_generation(operation_name, scene_id=None, api_key=None):
                 "local_path": filepath,
             }
 
-        # Operation done but no video (possibly blocked by safety filters)
+        # Operation done but no video (possibly blocked by safety filters).
+        # The submit already billed provisionally, so emit a refund event
+        # to zero out the charge.
+        if cost_tracker is not None and bill_uid and bill_model:
+            cost_tracker.track_veo_refund(
+                uid=bill_uid, project_id=bill_pid, model=bill_model,
+                duration_seconds=bill_duration,
+                description=f"veo_failed({scene_id})", op_name=operation_name,
+            )
         del _video_operations[operation_name]
         return {
             "status": "failed",
@@ -1306,6 +1446,18 @@ def poll_video_generation(operation_name, scene_id=None, api_key=None):
     except Exception as e:
         print(f"[Veo] Poll failed for scene {scene_id}: {e}")
         traceback.print_exc()
+        # If we still have billing context, issue a refund for the failed op.
+        if cost_tracker is not None:
+            op_entry = _video_operations.get(operation_name)
+            if isinstance(op_entry, dict) and op_entry.get("uid") and op_entry.get("model"):
+                try:
+                    cost_tracker.track_veo_refund(
+                        uid=op_entry["uid"], project_id=op_entry.get("project_id"),
+                        model=op_entry["model"], duration_seconds=op_entry.get("duration", 0),
+                        description=f"veo_error({scene_id})", op_name=operation_name,
+                    )
+                except Exception:
+                    pass
         return {"status": "failed", "error": str(e), "scene_id": scene_id}
 
 

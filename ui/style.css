@@ -4371,3 +4371,32 @@ textarea.review-input {
         flex-direction: column;
     }
 }
+
+/* ─── Usage / Cost Dashboard ─── */
+.usage-kpi {
+    background: var(--card-bg-solid);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 14px 16px;
+}
+
+.usage-kpi-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 6px;
+}
+
+.usage-kpi-value {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+#tab-usage code {
+    background: rgba(255, 255, 255, 0.06);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+}

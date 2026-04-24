@@ -12,6 +12,10 @@
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+
+    <!-- Chart.js for the Usage dashboard (trend + donut). Loaded here so the
+         Usage tab can render charts without a second network fetch on click. -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 
 <body>
@@ -195,6 +199,13 @@
                         <path d="M2 12l10 5 10-5" />
                     </svg>
                     Kie Studio
+                </button>
+                <button class="tab" data-tab="usage" onclick="switchTab('usage'); loadUsageDashboard();">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 3v18h18" />
+                        <path d="M7 14l4-4 4 4 5-5" />
+                    </svg>
+                    Usage
                 </button>
             </nav>
 
@@ -1513,6 +1524,94 @@ No formatting needed — just paste your narration!"></textarea>
 
                 <!-- Error -->
                 <div id="kieError" class="kie-error" style="display: none;"></div>
+            </main>
+
+            <!-- ============ USAGE / COST DASHBOARD TAB ============ -->
+            <main id="tab-usage" class="tab-content">
+                <div class="input-group">
+                    <h2 style="margin-top: 0;">Cost Dashboard</h2>
+                    <p class="modal-hint">Actual spend across your Gemini API key. Tokens are captured live from
+                        every API response; costs apply current rates from the <code>config/gemini_pricing</code>
+                        Firestore doc.</p>
+
+                    <!-- KPI row -->
+                    <div id="usageKpiRow" style="display: grid; grid-template-columns: repeat(3, 1fr);
+                         gap: 12px; margin: 16px 0;">
+                        <div class="usage-kpi" data-kpi="today">
+                            <div class="usage-kpi-label">Today</div>
+                            <div class="usage-kpi-value" id="usageKpiToday">$—</div>
+                        </div>
+                        <div class="usage-kpi" data-kpi="mtd">
+                            <div class="usage-kpi-label">Month-to-date</div>
+                            <div class="usage-kpi-value" id="usageKpiMtd">$—</div>
+                        </div>
+                        <div class="usage-kpi" data-kpi="30d">
+                            <div class="usage-kpi-label">Last 30 days</div>
+                            <div class="usage-kpi-value" id="usageKpi30d">$—</div>
+                        </div>
+                    </div>
+
+                    <!-- Date range + presets -->
+                    <div class="param-row" style="margin-bottom: 12px; align-items: end;">
+                        <div class="param-field">
+                            <label class="input-label">Start</label>
+                            <input type="date" id="usageStart" onchange="loadUsageDashboard()">
+                        </div>
+                        <div class="param-field">
+                            <label class="input-label">End</label>
+                            <input type="date" id="usageEnd" onchange="loadUsageDashboard()">
+                        </div>
+                        <div class="param-field" style="flex: 2;">
+                            <label class="input-label">Presets</label>
+                            <div style="display: flex; gap: 6px;">
+                                <button class="btn-secondary" onclick="setUsagePreset(7)">7d</button>
+                                <button class="btn-secondary" onclick="setUsagePreset(30)">30d</button>
+                                <button class="btn-secondary" onclick="setUsagePreset(90)">90d</button>
+                            </div>
+                        </div>
+                        <div class="param-field" style="flex: 0;">
+                            <button onclick="loadUsageDashboard()">Refresh</button>
+                        </div>
+                    </div>
+
+                    <div id="usageError" class="error-message" style="display: none;"></div>
+
+                    <!-- Trend chart -->
+                    <div style="background: var(--bg-elevated, #1a1a1a); padding: 12px;
+                         border-radius: 8px; margin-bottom: 16px;">
+                        <h3 style="margin: 0 0 8px 0; font-size: 15px;">Daily spend (stacked by tool)</h3>
+                        <div style="position: relative; height: 260px;">
+                            <canvas id="usageTrendChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- By-tool + By-project side-by-side -->
+                    <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 16px;">
+                        <div style="background: var(--bg-elevated, #1a1a1a); padding: 12px; border-radius: 8px;">
+                            <h3 style="margin: 0 0 8px 0; font-size: 15px;">By tool</h3>
+                            <div style="position: relative; height: 220px;">
+                                <canvas id="usageToolDonut"></canvas>
+                            </div>
+                        </div>
+                        <div style="background: var(--bg-elevated, #1a1a1a); padding: 12px; border-radius: 8px;">
+                            <h3 style="margin: 0 0 8px 0; font-size: 15px;">By project</h3>
+                            <table id="usageProjectTable" style="width: 100%; font-size: 13px;
+                                   border-collapse: collapse;">
+                                <thead>
+                                    <tr style="text-align: left; border-bottom: 1px solid #333;">
+                                        <th style="padding: 6px 4px;">Project</th>
+                                        <th style="padding: 6px 4px; text-align: right;">Calls</th>
+                                        <th style="padding: 6px 4px; text-align: right;">Cost</th>
+                                        <th style="padding: 6px 4px; text-align: right;">% of total</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="usageProjectTableBody">
+                                    <tr><td colspan="4" style="padding: 12px; opacity: 0.6;">Loading…</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             </main>
 
         </div>
@@ -9349,6 +9448,197 @@ RESOLUTION: ${visualsConfig.resolution}`;
             } catch (e) {
                 showKieError('Vary failed: ' + e.message);
             }
+        }
+
+        /* ══════════════════════════════════════
+           USAGE / COST DASHBOARD
+           ══════════════════════════════════════ */
+
+        // Cached Chart.js instances so we can destroy before re-rendering.
+        let _usageTrendChart = null;
+        let _usageToolDonut = null;
+        const _TOOL_COLORS = {
+            text: '#6366f1',
+            image: '#10b981',
+            imagen: '#f59e0b',
+            tts: '#ec4899',
+            veo: '#ef4444',
+        };
+
+        function _fmtUsd(n) {
+            const v = Number(n || 0);
+            if (v === 0) return '$0';
+            if (v < 0.01) return '$' + v.toFixed(4);
+            if (v < 1) return '$' + v.toFixed(3);
+            return '$' + v.toFixed(2);
+        }
+
+        function _todayIso() {
+            return new Date().toISOString().slice(0, 10);
+        }
+
+        function _isoDaysAgo(n) {
+            const d = new Date();
+            d.setDate(d.getDate() - n);
+            return d.toISOString().slice(0, 10);
+        }
+
+        function setUsagePreset(days) {
+            document.getElementById('usageStart').value = _isoDaysAgo(days - 1);
+            document.getElementById('usageEnd').value = _todayIso();
+            loadUsageDashboard();
+        }
+
+        async function loadUsageDashboard() {
+            const startEl = document.getElementById('usageStart');
+            const endEl = document.getElementById('usageEnd');
+            if (!startEl.value) startEl.value = _isoDaysAgo(29);
+            if (!endEl.value) endEl.value = _todayIso();
+
+            const start = startEl.value;
+            const end = endEl.value;
+            const errEl = document.getElementById('usageError');
+            errEl.style.display = 'none';
+
+            try {
+                // KPIs are queried with their own windows (independent of the range picker).
+                const [todayRes, mtdRes, d30Res, accountRes, trendRes] = await Promise.all([
+                    authFetch(`/api/usage/account?start=${_todayIso()}&end=${_todayIso()}`),
+                    authFetch(`/api/usage/account?start=${_todayIso().slice(0, 8)}01&end=${_todayIso()}`),
+                    authFetch(`/api/usage/account?start=${_isoDaysAgo(29)}&end=${_todayIso()}`),
+                    authFetch(`/api/usage/account?start=${start}&end=${end}`),
+                    authFetch(`/api/usage/trend?start=${start}&end=${end}`),
+                ]);
+
+                const [todayJson, mtdJson, d30Json, accountJson, trendJson] =
+                    await Promise.all([
+                        todayRes.json(), mtdRes.json(), d30Res.json(),
+                        accountRes.json(), trendRes.json(),
+                    ]);
+
+                if (accountJson.error) throw new Error(accountJson.error);
+                if (trendJson.error) throw new Error(trendJson.error);
+
+                document.getElementById('usageKpiToday').textContent = _fmtUsd(todayJson.total_usd);
+                document.getElementById('usageKpiMtd').textContent = _fmtUsd(mtdJson.total_usd);
+                document.getElementById('usageKpi30d').textContent = _fmtUsd(d30Json.total_usd);
+
+                _renderUsageTrend(trendJson.series || []);
+                _renderUsageToolDonut(accountJson.by_tool || {});
+                _renderUsageProjectTable(accountJson.by_project || {}, accountJson.total_usd || 0);
+            } catch (e) {
+                errEl.textContent = 'Failed to load usage: ' + e.message;
+                errEl.style.display = 'block';
+            }
+        }
+
+        function _renderUsageTrend(series) {
+            const ctx = document.getElementById('usageTrendChart').getContext('2d');
+            const labels = series.map(s => s.day);
+            const tools = ['text', 'image', 'imagen', 'tts', 'veo'];
+            const datasets = tools.map(t => ({
+                label: t,
+                data: series.map(s => (s.by_tool && s.by_tool[t]) || 0),
+                backgroundColor: _TOOL_COLORS[t],
+                borderColor: _TOOL_COLORS[t],
+                borderWidth: 0,
+                fill: true,
+            }));
+
+            if (_usageTrendChart) _usageTrendChart.destroy();
+            _usageTrendChart = new Chart(ctx, {
+                type: 'bar',
+                data: { labels, datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { stacked: true, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
+                        y: { stacked: true, ticks: { callback: v => '$' + Number(v).toFixed(2) } },
+                    },
+                    plugins: {
+                        legend: { position: 'bottom' },
+                        tooltip: {
+                            callbacks: {
+                                label: ctx => `${ctx.dataset.label}: ${_fmtUsd(ctx.parsed.y)}`,
+                            },
+                        },
+                    },
+                },
+            });
+        }
+
+        function _renderUsageToolDonut(byTool) {
+            const ctx = document.getElementById('usageToolDonut').getContext('2d');
+            const entries = Object.entries(byTool)
+                .map(([tool, bucket]) => [tool, Number(bucket.cost_usd || 0)])
+                .filter(([, v]) => v > 0);
+
+            if (_usageToolDonut) _usageToolDonut.destroy();
+            if (entries.length === 0) {
+                ctx.font = '14px sans-serif';
+                ctx.fillStyle = '#888';
+                ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+                ctx.fillText('No spend in range', 20, 40);
+                return;
+            }
+
+            _usageToolDonut = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: entries.map(e => e[0]),
+                    datasets: [{
+                        data: entries.map(e => e[1]),
+                        backgroundColor: entries.map(e => _TOOL_COLORS[e[0]] || '#777'),
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'bottom' },
+                        tooltip: {
+                            callbacks: { label: ctx => `${ctx.label}: ${_fmtUsd(ctx.parsed)}` },
+                        },
+                    },
+                },
+            });
+        }
+
+        function _renderUsageProjectTable(byProject, total) {
+            const tbody = document.getElementById('usageProjectTableBody');
+            const rows = Object.entries(byProject)
+                .map(([pid, b]) => ({
+                    pid,
+                    calls: Number(b.calls || 0),
+                    cost: Number(b.cost_usd || 0),
+                }))
+                .filter(r => r.calls > 0 || r.cost > 0)
+                .sort((a, b) => b.cost - a.cost);
+
+            if (rows.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="padding: 12px; opacity: 0.6;">' +
+                    'No spend in this range yet.</td></tr>';
+                return;
+            }
+
+            const safeTotal = total > 0 ? total : rows.reduce((s, r) => s + r.cost, 0) || 1;
+            tbody.innerHTML = rows.map(r => {
+                const pct = ((r.cost / safeTotal) * 100).toFixed(1);
+                const label = r.pid === '_account' ? '(no project)' : r.pid;
+                return `<tr style="border-bottom: 1px solid #222;">
+                    <td style="padding: 6px 4px;">${_escapeHtml(label)}</td>
+                    <td style="padding: 6px 4px; text-align: right;">${r.calls}</td>
+                    <td style="padding: 6px 4px; text-align: right;">${_fmtUsd(r.cost)}</td>
+                    <td style="padding: 6px 4px; text-align: right; opacity: 0.7;">${pct}%</td>
+                </tr>`;
+            }).join('');
+        }
+
+        function _escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[c]);
         }
 
     </script>

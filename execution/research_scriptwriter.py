@@ -109,7 +109,8 @@ def generate_narration(topic: str, template_id: str, research_dossier: str,
                        selected_title: str = None, format_preset: str = "",
                        viewer_outcome: str = "", style_blend_mode: str = "clone",
                        custom_audience: str = "", custom_tone: str = "",
-                       api_key: str = None, structured: dict = None) -> dict:
+                       api_key: str = None, structured: dict = None,
+                       uid: str = None, project_id: str = None) -> dict:
     """
     PHASE 1: Generate a flowing narration script using Gemini.
 
@@ -137,7 +138,10 @@ def generate_narration(topic: str, template_id: str, research_dossier: str,
         structured=structured,
     )
 
-    raw_response = generate_content(prompt, model_name="gemini-3-flash-preview", api_key=api_key)
+    raw_response = generate_content(
+        prompt, model_name="gemini-3-flash-preview", api_key=api_key,
+        uid=uid, project_id=project_id, description="narration",
+    )
 
     if not raw_response or raw_response.startswith("Error:"):
         return {"error": raw_response or "Gemini returned an empty response for narration."}
@@ -157,14 +161,18 @@ def generate_narration(topic: str, template_id: str, research_dossier: str,
 
 
 def auto_suggest_tone(template_id: str, selected_title: str,
-                      audience: str = "General", api_key: str = None) -> dict:
+                      audience: str = "General", api_key: str = None,
+                      uid: str = None, project_id: str = None) -> dict:
     """Auto-suggest the best tone for a title + audience combination."""
     prompt = build_tone_suggestion_prompt(
         template_id=template_id,
         selected_title=selected_title,
         audience=audience,
     )
-    raw_response = generate_content(prompt, model_name="gemini-3-flash-preview", api_key=api_key)
+    raw_response = generate_content(
+        prompt, model_name="gemini-3-flash-preview", api_key=api_key,
+        uid=uid, project_id=project_id, description="auto_suggest_tone",
+    )
     if not raw_response or raw_response.startswith("Error:"):
         return {"suggested_tone": "Conversational", "reasoning": "Default (auto-suggest unavailable)"}
     try:
@@ -178,7 +186,8 @@ def regenerate_beats(topic: str, template_id: str, research_dossier: str,
                      target_beat_indices: list = None, mode: str = "restyle",
                      audience: str = "General", tone: str = "",
                      duration_minutes: int = 10, api_key: str = None,
-                     structured: dict = None) -> dict:
+                     structured: dict = None,
+                     uid: str = None, project_id: str = None) -> dict:
     """
     Regenerate specific beats or an entire act within a narration.
 
@@ -213,7 +222,10 @@ def regenerate_beats(topic: str, template_id: str, research_dossier: str,
     if prompt.startswith("Error:"):
         return {"error": prompt}
 
-    raw_response = generate_content(prompt, model_name="gemini-3-flash-preview", api_key=api_key)
+    raw_response = generate_content(
+        prompt, model_name="gemini-3-flash-preview", api_key=api_key,
+        uid=uid, project_id=project_id, description="regenerate_beats",
+    )
 
     if not raw_response or raw_response.startswith("Error:"):
         return {"error": raw_response or "Gemini returned an empty response for beat regeneration."}
@@ -237,7 +249,8 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                               quality_mode: str = "fast",
                               creative_direction: dict = None,
                               cast: dict = None,
-                              format_preset: str = "") -> dict:
+                              format_preset: str = "",
+                              uid: str = None, project_id: str = None) -> dict:
     """
     Generate production-ready prompts from narration beats using the 6-phase pipeline.
 
@@ -316,8 +329,11 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
     print(f"[Production] Phase 0: Script Doctor analyzing full narration...")
     try:
         script_doctor_prompt = build_script_doctor_prompt(narration_json, style_analysis, creative_direction)
-        raw_brief = generate_content(script_doctor_prompt, model_name="gemini-2.5-flash",
-                                      temperature=0.3, api_key=api_key)
+        raw_brief = generate_content(
+            script_doctor_prompt, model_name="gemini-2.5-flash",
+            temperature=0.3, api_key=api_key,
+            uid=uid, project_id=project_id, description="script_doctor",
+        )
         if raw_brief and not raw_brief.startswith("Error:"):
             visual_brief = _parse_json_response(raw_brief)
             brief_count = len(visual_brief.get("visual_brief", []))
@@ -344,7 +360,8 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                         creative_direction=creative_direction,
                         cast=cast,
                         format_preset=format_preset,
-                        visual_brief=visual_brief)
+                        visual_brief=visual_brief,
+                        uid=uid, project_id=project_id)
 
     # Large narrations: batch by act
     MAX_CONCURRENT_BATCHES = 3
@@ -412,7 +429,8 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                               creative_direction=creative_direction,
                               cast=cast,
                               format_preset=format_preset,
-                              visual_brief=visual_brief)
+                              visual_brief=visual_brief,
+                              uid=uid, project_id=project_id)
 
             if "error" not in result:
                 break  # success
@@ -558,7 +576,8 @@ def _generate_single_batch(narration_json: dict, duration_minutes: int = 10,
                            pacing_tier: str = "Standard",
                            creative_direction: dict = None,
                            cast: dict = None,
-                           format_preset: str = "") -> dict:
+                           format_preset: str = "",
+                           uid: str = None, project_id: str = None) -> dict:
     """Generate production table for a single batch of narration beats."""
     prompt = build_production_prompt(
         narration_json=narration_json,
@@ -573,7 +592,10 @@ def _generate_single_batch(narration_json: dict, duration_minutes: int = 10,
 
     label = f" ({batch_label})" if batch_label else ""
     print(f"[Production] Generating production table{label}...")
-    raw_response = generate_content(prompt, model_name="gemini-3.1-pro-preview", temperature=0.1, api_key=api_key)
+    raw_response = generate_content(
+        prompt, model_name="gemini-3.1-pro-preview", temperature=0.1, api_key=api_key,
+        uid=uid, project_id=project_id, description="production_single",
+    )
 
     if not raw_response or raw_response.startswith("Error:"):
         return {"error": raw_response or "Gemini returned an empty response for production table."}
@@ -603,7 +625,8 @@ def _generate_single_batch_3phase(narration_json: dict, duration_minutes: int = 
                                    pacing_tier: str = "Standard",
                                    creative_direction: dict = None,
                                    cast: dict = None,
-                                   format_preset: str = "") -> dict:
+                                   format_preset: str = "",
+                                   uid: str = None, project_id: str = None) -> dict:
     """
     Generate production table using the 3-phase pipeline (Max Quality mode).
 
@@ -627,7 +650,8 @@ def _generate_single_batch_3phase(narration_json: dict, duration_minutes: int = 
     )
     raw_director = generate_content(
         director_prompt, model_name="gemini-3.1-pro-preview",
-        temperature=0.1, api_key=api_key
+        temperature=0.1, api_key=api_key,
+        uid=uid, project_id=project_id, description="director_3phase",
     )
     if not raw_director or raw_director.startswith("Error:"):
         return {"error": f"Phase 1 (Director) failed{label}: {raw_director or 'empty response'}"}
@@ -652,7 +676,8 @@ def _generate_single_batch_3phase(narration_json: dict, duration_minutes: int = 
     )
     raw_storyboard = generate_content(
         storyboard_prompt, model_name="gemini-3.1-pro-preview",
-        temperature=0.1, api_key=api_key
+        temperature=0.1, api_key=api_key,
+        uid=uid, project_id=project_id, description="storyboard_3phase",
     )
     if not raw_storyboard or raw_storyboard.startswith("Error:"):
         return {"error": f"Phase 2 (Storyboard) failed{label}: {raw_storyboard or 'empty response'}"}
@@ -678,7 +703,8 @@ def _generate_single_batch_3phase(narration_json: dict, duration_minutes: int = 
     )
     raw_dp = generate_content(
         dp_prompt, model_name="gemini-3.1-pro-preview",
-        temperature=0.1, api_key=api_key
+        temperature=0.1, api_key=api_key,
+        uid=uid, project_id=project_id, description="dp_3phase",
     )
     if not raw_dp or raw_dp.startswith("Error:"):
         return {"error": f"Phase 3 (DP) failed{label}: {raw_dp or 'empty response'}"}
@@ -709,7 +735,8 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
                                    creative_direction: dict = None,
                                    cast: dict = None,
                                    format_preset: str = "",
-                                   visual_brief: dict = None) -> dict:
+                                   visual_brief: dict = None,
+                                   uid: str = None, project_id: str = None) -> dict:
     """
     Generate production table using the 6-phase pipeline.
 
@@ -737,7 +764,8 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
     )
     raw_director = generate_content(
         director_prompt, model_name="gemini-2.5-flash",
-        temperature=0.1, api_key=api_key
+        temperature=0.1, api_key=api_key,
+        uid=uid, project_id=project_id, description="director_6phase",
     )
     if not raw_director or raw_director.startswith("Error:"):
         return {"error": f"Phase 1 (Director) failed{label}: {raw_director or 'empty response'}"}
@@ -756,7 +784,8 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
     )
     raw_cinematographer = generate_content(
         cinematographer_prompt, model_name="gemini-2.5-flash",
-        temperature=0.2, api_key=api_key
+        temperature=0.2, api_key=api_key,
+        uid=uid, project_id=project_id, description="cinematographer_6phase",
     )
     if not raw_cinematographer or raw_cinematographer.startswith("Error:"):
         return {"error": f"Phase 2 (Cinematographer) failed{label}: {raw_cinematographer or 'empty response'}"}
@@ -779,7 +808,8 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
     )
     raw_storyboard = generate_content(
         storyboard_prompt, model_name="gemini-2.5-flash",
-        temperature=0.1, api_key=api_key
+        temperature=0.1, api_key=api_key,
+        uid=uid, project_id=project_id, description="storyboard_6phase",
     )
     if not raw_storyboard or raw_storyboard.startswith("Error:"):
         return {"error": f"Phase 3 (Storyboard) failed{label}: {raw_storyboard or 'empty response'}"}
@@ -798,7 +828,8 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
     )
     raw_continuity = generate_content(
         continuity_prompt, model_name="gemini-2.5-flash",
-        temperature=0.05, api_key=api_key
+        temperature=0.05, api_key=api_key,
+        uid=uid, project_id=project_id, description="continuity_6phase",
     )
     if not raw_continuity or raw_continuity.startswith("Error:"):
         # Continuity is non-critical — fall through with uncorrected shots
@@ -827,7 +858,8 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
     )
     raw_dp = generate_content(
         dp_prompt, model_name="gemini-2.5-flash",
-        temperature=0.1, api_key=api_key
+        temperature=0.1, api_key=api_key,
+        uid=uid, project_id=project_id, description="dp_6phase",
     )
     if not raw_dp or raw_dp.startswith("Error:"):
         return {"error": f"Phase 5 (DP) failed{label}: {raw_dp or 'empty response'}"}
@@ -1119,7 +1151,8 @@ Rules:
 - Use "high" confidence only for facts stated by official/primary sources; "med" for analysis/news; "low" for opinion."""
 
 
-def _planner_expand_subqueries(topic: str, template_id: str, api_key: str) -> list:
+def _planner_expand_subqueries(topic: str, template_id: str, api_key: str,
+                                uid: str = None, project_id: str = None) -> list:
     """Use Flash (no search) to expand template search_layers into concrete sub-queries."""
     template = get_template(template_id)
     if not template:
@@ -1158,6 +1191,7 @@ Return ONLY JSON:
         temperature=0.3,
         api_key=api_key,
         max_output_tokens=4096,
+        uid=uid, project_id=project_id, description="research_planner",
     )
     fallback = [
         {"name": l.get("name", f"Layer {i+1}"),
@@ -1178,7 +1212,8 @@ Return ONLY JSON:
         return fallback
 
 
-def _run_sub_researcher(sub_query: dict, topic: str, api_key: str, mode: str) -> dict:
+def _run_sub_researcher(sub_query: dict, topic: str, api_key: str, mode: str,
+                         uid: str = None, project_id: str = None) -> dict:
     """Run one Pro+Search call for a sub-query. Returns {section, claims[], sources[]}."""
     name = sub_query.get("name", "Section")
     query = sub_query.get("query", topic)
@@ -1204,6 +1239,8 @@ Return ONLY the JSON object."""
             api_key=api_key,
             max_output_tokens=32768,
             return_response=True,
+            uid=uid, project_id=project_id,
+            description=f"sub_researcher({name})",
         )
     except Exception as e:
         print(f"[Research-Structured] Sub-researcher '{name}' failed: {e}")
@@ -1319,7 +1356,8 @@ def _merge_subresearcher_outputs(topic: str, template_id: str, mode: str,
 
 
 def run_structured_research(topic: str, template_id: str,
-                             api_key: str, mode: str = "deep") -> dict:
+                             api_key: str, mode: str = "deep",
+                             uid: str = None, project_id: str = None) -> dict:
     """Orchestrate the 3-step structured research pipeline.
 
     1. Planner (Flash): expand template layers → 3-6 concrete sub-queries
@@ -1331,7 +1369,8 @@ def run_structured_research(topic: str, template_id: str,
     """
     try:
         print(f"[Research-Structured] Planning sub-queries for '{topic}'...")
-        sub_queries = _planner_expand_subqueries(topic, template_id, api_key)
+        sub_queries = _planner_expand_subqueries(topic, template_id, api_key,
+                                                  uid=uid, project_id=project_id)
         print(f"[Research-Structured] Planner produced {len(sub_queries)} sub-queries")
 
         sub_outputs = []
@@ -1339,7 +1378,8 @@ def run_structured_research(topic: str, template_id: str,
             worker_count = min(4, len(sub_queries))
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
                 futures = {
-                    executor.submit(_run_sub_researcher, sq, topic, api_key, mode): sq
+                    executor.submit(_run_sub_researcher, sq, topic, api_key, mode,
+                                    uid, project_id): sq
                     for sq in sub_queries
                 }
                 for fut in as_completed(futures):
@@ -1366,7 +1406,8 @@ def run_structured_research(topic: str, template_id: str,
 
 
 def structure_from_blob(text: str, topic: str, template_id: str,
-                         mode: str, model: str, api_key: str) -> dict:
+                         mode: str, model: str, api_key: str,
+                         uid: str = None, project_id: str = None) -> dict:
     """Best-effort: convert an unstructured research text blob into the canonical schema.
 
     Used for the deep_research_agent path where we receive a single text output and
@@ -1415,6 +1456,7 @@ Return ONLY JSON:
         temperature=0.1,
         api_key=api_key,
         max_output_tokens=16384,
+        uid=uid, project_id=project_id, description="structure_from_blob",
     )
     if not raw or raw.startswith("Error:"):
         return _empty_structured(topic, template_id, mode, model)

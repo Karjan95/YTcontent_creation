@@ -739,13 +739,14 @@ def generate_image_route():
             return jsonify({'error': err}), 400
         model = data.get('model')  # optional: specific model selection
 
+        project_id = data.get('project_id')
         print(f"Generating image for prompt: {prompt} (model: {model or 'auto'})")
-        image_path = generate_image_content(prompt, model_name=model, api_key=g.api_key)
+        image_path = generate_image_content(prompt, model_name=model, api_key=g.api_key,
+                                            uid=g.uid, project_id=project_id)
 
         if not image_path or (isinstance(image_path, str) and image_path.startswith("Error")):
             return jsonify({'error': image_path or 'Image generation returned no result'}), 500
 
-        project_id = data.get('project_id')
         public_url = upload_to_storage(image_path, "images", project_id=project_id)
         image_url = public_url if public_url else f'/generated/{os.path.basename(image_path)}'
 
@@ -866,13 +867,14 @@ def generate_tts_route():
         voice = data.get('voice', 'kore').lower()
         style_instructions = data.get('style_instructions', '')
 
+        project_id = data.get('project_id')
         print(f"Generating TTS for text ({len(text)} chars), voice={voice}")
-        audio_path = generate_tts(text, voice_name=voice, style_instructions=style_instructions, api_key=g.api_key)
+        audio_path = generate_tts(text, voice_name=voice, style_instructions=style_instructions,
+                                  api_key=g.api_key, uid=g.uid, project_id=project_id)
 
         if not audio_path or (isinstance(audio_path, str) and audio_path.startswith("Error")):
             return jsonify({'error': audio_path or 'TTS generation returned no result'}), 500
 
-        project_id = data.get('project_id')
         public_url = upload_to_storage(audio_path, "audio", project_id=project_id)
         audio_url = public_url if public_url else f'/audio/{os.path.basename(audio_path)}'
 
@@ -912,8 +914,11 @@ def analyze_style_images_route():
         # Resolve URLs to base64 if needed (images restored from Firebase Storage)
         images = [resolve_image_input(img) for img in images]
 
+        project_id = data.get('project_id')
         print(f"[Style Analysis] Analyzing {len(images)} images...")
-        style_analysis = analyze_style_from_images(images, api_key=g.api_key)
+        style_analysis = analyze_style_from_images(
+            images, api_key=g.api_key, uid=g.uid, project_id=project_id,
+        )
 
         if not style_analysis or (isinstance(style_analysis, str) and style_analysis.startswith("Error")):
             return jsonify({'error': style_analysis or 'Style analysis returned no result'}), 500
@@ -945,8 +950,11 @@ def analyze_style_text_route():
         if not description:
             return jsonify({'error': 'Style description is required'}), 400
 
+        project_id = data.get('project_id')
         print(f"[Style Analysis from Text] Analyzing: '{description[:80]}...'")
-        style_analysis = analyze_style_from_text(description, api_key=g.api_key)
+        style_analysis = analyze_style_from_text(
+            description, api_key=g.api_key, uid=g.uid, project_id=project_id,
+        )
 
         if not style_analysis or (isinstance(style_analysis, str) and style_analysis.startswith("Error")):
             return jsonify({'error': style_analysis or 'Style analysis returned no result'}), 500
@@ -993,7 +1001,9 @@ def structure_script_route():
 
         raw_response = generate_content(
             prompt, model_name="gemini-3-flash-preview",
-            temperature=0.2, api_key=g.api_key
+            temperature=0.2, api_key=g.api_key,
+            uid=g.uid, project_id=data.get('project_id'),
+            description="structure_script",
         )
 
         if not raw_response or (isinstance(raw_response, str) and raw_response.startswith("Error")):
@@ -1058,7 +1068,9 @@ def suggest_cast_route():
 
         raw_response = generate_content(
             prompt, model_name="gemini-3-flash-preview",
-            temperature=0.3, api_key=g.api_key
+            temperature=0.3, api_key=g.api_key,
+            uid=g.uid, project_id=data.get('project_id'),
+            description="suggest_cast",
         )
 
         if not raw_response or (isinstance(raw_response, str) and raw_response.startswith("Error")):
@@ -1144,6 +1156,7 @@ def generate_cast_portrait():
             style_mode=style_mode,
             scene_id=scene_id,
             api_key=g.api_key,
+            uid=g.uid, project_id=project_id,
         )
 
         if "error" in result:
@@ -1191,6 +1204,7 @@ def generate_cast_portraits_batch():
         style_images = [r for r in (resolve_image_input(img) for img in data.get('style_images', []) if img) if r]
         style_mode = data.get('style_mode', 'art_only')
         api_key = g.api_key
+        tracking_uid = g.uid
 
         def generate_one_portrait(char_name, prompt, portrait_type):
             safe_name = ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in char_name.lower())
@@ -1209,6 +1223,7 @@ def generate_cast_portraits_batch():
                 style_mode=style_mode,
                 scene_id=scene_id,
                 api_key=api_key,
+                uid=tracking_uid, project_id=project_id,
             )
 
             if res.get("success") and "local_path" in res:
@@ -1305,7 +1320,8 @@ def expand_creative_direction_route():
         result = expand_creative_direction(
             user_direction=direction,
             narration_context=narration_context,
-            api_key=g.api_key
+            api_key=g.api_key,
+            uid=g.uid, project_id=data.get('project_id'),
         )
 
         if isinstance(result, str) and result.startswith("Error"):
@@ -1343,7 +1359,8 @@ def refine_creative_direction_route():
             current_direction=current,
             user_feedback=feedback,
             narration_context=narration_context,
-            api_key=g.api_key
+            api_key=g.api_key,
+            uid=g.uid, project_id=data.get('project_id'),
         )
 
         if isinstance(result, str) and result.startswith("Error"):
@@ -1502,15 +1519,20 @@ Return ONLY the JSON."""
 
         print(f"[Research] Sending research prompt to Gemini...")
         research_max_tokens = 32768 if research_model == 'deep' else 16384
+        research_pid = data.get('project_id')
         raw = generate_content(research_prompt, model_name=model_name, use_search=use_search,
-                               api_key=g.api_key, max_output_tokens=research_max_tokens)
+                               api_key=g.api_key, max_output_tokens=research_max_tokens,
+                               uid=g.uid, project_id=research_pid,
+                               description=f"research({research_model})")
 
         # Fallback: if Deep (Pro) failed, retry with Flash + Search
         if raw and raw.startswith("Error:") and model_name != "gemini-3-flash-preview":
             fallback_model = "gemini-3-flash-preview"
             print(f"[Research] Primary model failed. Falling back to {fallback_model} + Search...")
             raw = generate_content(research_prompt, model_name=fallback_model, use_search=True,
-                                   api_key=g.api_key, max_output_tokens=16384)
+                                   api_key=g.api_key, max_output_tokens=16384,
+                                   uid=g.uid, project_id=research_pid,
+                                   description="research(fallback)")
 
         if not raw or raw.startswith("Error:"):
             return jsonify({'error': raw or 'Research query returned no result'}), 500
@@ -1548,6 +1570,7 @@ Return ONLY the JSON."""
                     template_id=template_id,
                     api_key=g.api_key,
                     mode='deep' if research_model == 'deep' else 'fast',
+                    uid=g.uid, project_id=research_pid,
                 )
             except Exception as e:
                 print(f"[Research] Structured pipeline failed: {e}")
@@ -1857,6 +1880,7 @@ def poll_research():
                     mode='deep_research_agent',
                     model='deep-research-pro-preview-12-2025',
                     api_key=g.api_key,
+                    uid=g.uid, project_id=data.get('project_id'),
                 )
             except Exception as e:
                 print(f"[Deep Research] Structure extraction failed: {e}")
@@ -1963,7 +1987,9 @@ def suggest_titles():
         )
 
         print(f"[Titles] Generating 5 title suggestions for '{topic}' (audience: {audience})")
-        raw = generate_content(prompt, model_name="gemini-3-flash-preview", api_key=g.api_key)
+        raw = generate_content(prompt, model_name="gemini-3-flash-preview", api_key=g.api_key,
+                               uid=g.uid, project_id=project_id,
+                               description="suggest_titles")
 
         if not raw or raw.startswith("Error:"):
             return jsonify({'error': raw or 'Title generation returned no result'}), 500
@@ -2009,6 +2035,7 @@ def auto_suggest_tone_route():
             selected_title=selected_title,
             audience=audience,
             api_key=g.api_key,
+            uid=g.uid, project_id=data.get('project_id'),
         )
 
         print(f"[Tone] Suggested: {result.get('suggested_tone', '?')}")
@@ -2083,6 +2110,7 @@ def generate_script_route():
             custom_tone=custom_tone,
             api_key=g.api_key,
             structured=_load_project_structured(project_id),
+            uid=g.uid, project_id=project_id,
         )
 
         if "error" in result:
@@ -2163,6 +2191,7 @@ def regenerate_beat_route():
             duration_minutes=duration_minutes,
             api_key=g.api_key,
             structured=_load_project_structured(project_id),
+            uid=g.uid, project_id=project_id,
         )
 
         if "error" in result:
@@ -2232,7 +2261,8 @@ def generate_production_table_route():
             quality_mode=quality_mode,
             creative_direction=creative_direction,
             cast=cast,
-            format_preset=format_preset
+            format_preset=format_preset,
+            uid=g.uid, project_id=project_id,
         )
 
         if "error" in result:
@@ -2480,6 +2510,7 @@ def visuals_generate_image():
               f"{len(style_images or [])} style refs, {char_count} characters "
               f"({char_img_count} char images), style_mode={style_mode}"
               f"{', context=' + repr(additional_context[:50]) if additional_context else ''}")
+        project_id = data.get('project_id')
         result = generate_scene_image(
             prompt=prompt,
             model_name=model,
@@ -2492,12 +2523,12 @@ def visuals_generate_image():
             style_mode=style_mode,
             scene_id=scene_id,
             api_key=g.api_key,
+            uid=g.uid, project_id=project_id,
         )
 
         if "error" in result:
             return jsonify({'error': result['error']}), 500
 
-        project_id = data.get('project_id')
         if result.get("success") and "local_path" in result:
             public_url = upload_to_storage(result["local_path"], "images", project_id=project_id)
             if public_url:
@@ -2535,6 +2566,7 @@ def visuals_edit_image():
         model = data.get('model', 'gemini-3-pro-image-preview')
         aspect_ratio = data.get('aspect_ratio', '16:9')
 
+        project_id = data.get('project_id')
         print(f"[Visuals] Editing image for scene {scene_id} with {model}: {edit_prompt[:80]}")
         result = edit_scene_image(
             source_image_data=resolved_source,
@@ -2543,12 +2575,12 @@ def visuals_edit_image():
             aspect_ratio=aspect_ratio,
             scene_id=scene_id,
             api_key=g.api_key,
+            uid=g.uid, project_id=project_id,
         )
 
         if "error" in result:
             return jsonify({'error': result['error']}), 500
 
-        project_id = data.get('project_id')
         if result.get("success") and "local_path" in result:
             public_url = upload_to_storage(result["local_path"], "images", project_id=project_id)
             if public_url:
@@ -2589,6 +2621,8 @@ def visuals_generate_batch_images():
                     char['images'] = [r for r in (resolve_image_input(img) for img in char['images'] if img) if r]
 
         api_key = g.api_key
+        tracking_uid = g.uid
+        batch_project_id = data.get('project_id')
 
         def generate_one(scene):
             sid = scene.get('scene_id')
@@ -2605,6 +2639,7 @@ def visuals_generate_batch_images():
                 style_mode=global_config.get('style_mode', 'art_only'),
                 scene_id=sid,
                 api_key=api_key,
+                uid=tracking_uid, project_id=batch_project_id,
             )
 
         print(f"[Visuals] Batch generating {len(scenes)} scene images (max 5 parallel)")
@@ -2799,6 +2834,7 @@ def visuals_start_animation():
             resolution=resolution,
             scene_id=scene_id,
             api_key=g.api_key,
+            uid=g.uid, project_id=data.get('project_id'),
         )
 
         if "error" in result:
@@ -2917,6 +2953,8 @@ def visuals_start_batch_animation():
 
         gemini_key = g.api_key
         kie_key = g.kie_api_key
+        tracking_uid = g.uid
+        batch_project_id = data.get('project_id')
 
         def start_one(scene):
             sid = scene.get('scene_id')
@@ -2972,6 +3010,7 @@ def visuals_start_batch_animation():
                     resolution=res,
                     scene_id=sid,
                     api_key=gemini_key,
+                    uid=tracking_uid, project_id=batch_project_id,
                 )
 
         print(f"[Visuals] Batch starting animation for {len(scenes)} scenes (max 5 parallel)")
@@ -3128,6 +3167,214 @@ def download_all_assets():
             download_name=zip_name,
         )
 
+    except Exception as e:
+        return safe_error_response(e)
+
+
+# ────────────────────────────────────────────────────────────────
+#  USAGE / COST DASHBOARD
+# ────────────────────────────────────────────────────────────────
+
+# Admin UIDs allowed to read (and later write) config/gemini_pricing.
+# Seeded from ADMIN_UIDS env var, comma-separated.
+_ADMIN_UIDS = set(filter(None, (os.environ.get('ADMIN_UIDS', '').split(','))))
+
+
+def _parse_date_range(args):
+    """Return (start_iso, end_iso) as YYYY-MM-DD strings.
+
+    Defaults to last 30 days. Caps range at 366 days to protect read cost.
+    """
+    end_str = args.get('end')
+    start_str = args.get('start')
+    today = datetime.now().strftime('%Y-%m-%d')
+    end = end_str or today
+    if start_str:
+        start = start_str
+    else:
+        start_dt = datetime.strptime(end, '%Y-%m-%d') - timedelta(days=30)
+        start = start_dt.strftime('%Y-%m-%d')
+
+    # Validate formats + sanity range.
+    try:
+        s_dt = datetime.strptime(start, '%Y-%m-%d')
+        e_dt = datetime.strptime(end, '%Y-%m-%d')
+    except ValueError:
+        raise ValueError('start/end must be YYYY-MM-DD')
+    if e_dt < s_dt:
+        raise ValueError('end must be >= start')
+    if (e_dt - s_dt).days > 366:
+        raise ValueError('range must be <= 366 days')
+    return start, end
+
+
+def _list_rollups(uid, start, end):
+    """Fetch all daily rollup docs for uid between start..end inclusive."""
+    docs_ref = db.collection('users').document(uid).collection('cost_rollups')
+    # Document IDs are the YYYY-MM-DD so we can range-query by id.
+    snaps = docs_ref.where('day', '>=', start).where('day', '<=', end).stream()
+    out = []
+    for snap in snaps:
+        data = snap.to_dict() or {}
+        data.setdefault('day', snap.id)
+        out.append(data)
+    out.sort(key=lambda d: d.get('day', ''))
+    return out
+
+
+@app.route('/api/usage/account', methods=['GET'])
+@require_auth
+@limiter.limit("600/hour")
+def usage_account():
+    """Account-wide cost totals + by-tool / by-project breakdown for a date range."""
+    try:
+        start, end = _parse_date_range(request.args)
+        rollups = _list_rollups(g.uid, start, end)
+
+        total_usd = 0.0
+        by_tool, by_project, by_model = {}, {}, {}
+
+        def _merge(dst, src, keys=('calls', 'cost_usd', 'in_tokens', 'out_tokens',
+                                   'cached_tokens', 'images', 'tts_chars', 'video_seconds')):
+            for name, bucket in (src or {}).items():
+                entry = dst.setdefault(name, {})
+                for k in keys:
+                    v = bucket.get(k)
+                    if isinstance(v, (int, float)):
+                        entry[k] = entry.get(k, 0) + v
+
+        for doc in rollups:
+            total_usd += float(doc.get('total_usd', 0) or 0)
+            _merge(by_tool, doc.get('by_tool') or {})
+            _merge(by_project, doc.get('by_project') or {})
+            _merge(by_model, doc.get('by_model') or {})
+
+        return jsonify({
+            'start': start,
+            'end': end,
+            'days': len(rollups),
+            'total_usd': round(total_usd, 6),
+            'by_tool': by_tool,
+            'by_project': by_project,
+            'by_model': by_model,
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/usage/trend', methods=['GET'])
+@require_auth
+@limiter.limit("600/hour")
+def usage_trend():
+    """Ordered daily series for the trend chart.
+
+    Query: ?days=30 (default) or explicit ?start=&end=. Missing days are
+    filled with zeros so the chart doesn't have gaps.
+    """
+    try:
+        if request.args.get('start') or request.args.get('end'):
+            start, end = _parse_date_range(request.args)
+        else:
+            days = min(max(int(request.args.get('days', 30)), 1), 366)
+            end_dt = datetime.now()
+            start_dt = end_dt - timedelta(days=days - 1)
+            start = start_dt.strftime('%Y-%m-%d')
+            end = end_dt.strftime('%Y-%m-%d')
+
+        rollups = {d['day']: d for d in _list_rollups(g.uid, start, end)}
+
+        series = []
+        cursor = datetime.strptime(start, '%Y-%m-%d')
+        end_dt = datetime.strptime(end, '%Y-%m-%d')
+        while cursor <= end_dt:
+            day = cursor.strftime('%Y-%m-%d')
+            doc = rollups.get(day, {})
+            by_tool = doc.get('by_tool') or {}
+            tool_costs = {t: round(float((by_tool.get(t) or {}).get('cost_usd', 0) or 0), 6)
+                          for t in ('text', 'image', 'imagen', 'tts', 'veo')}
+            series.append({
+                'day': day,
+                'total_usd': round(float(doc.get('total_usd', 0) or 0), 6),
+                'by_tool': tool_costs,
+            })
+            cursor += timedelta(days=1)
+
+        return jsonify({'start': start, 'end': end, 'series': series})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/usage/project/<project_id>', methods=['GET'])
+@require_auth
+@limiter.limit("600/hour")
+def usage_project(project_id):
+    """Per-project breakdown: totals + last 100 events."""
+    try:
+        start, end = _parse_date_range(request.args)
+        if not project_id or '/' in project_id:
+            return jsonify({'error': 'invalid project_id'}), 400
+
+        rollups = _list_rollups(g.uid, start, end)
+
+        total_usd = 0.0
+        by_tool = {}
+        for doc in rollups:
+            bp = (doc.get('by_project') or {}).get(project_id) or {}
+            total_usd += float(bp.get('cost_usd', 0) or 0)
+
+        # Recent events for this project (from the cost_events collection)
+        events_ref = (
+            db.collection('users').document(g.uid).collection('cost_events')
+              .where('project_id', '==', project_id)
+              .where('day', '>=', start).where('day', '<=', end)
+              .limit(100)
+        )
+        events = []
+        for snap in events_ref.stream():
+            data = snap.to_dict() or {}
+            # Serialize timestamp to ISO if present
+            ts = data.get('ts')
+            if hasattr(ts, 'isoformat'):
+                data['ts'] = ts.isoformat()
+            # Aggregate by_tool from events (rollups don't slice per project × tool)
+            tool = data.get('tool', 'unknown')
+            bucket = by_tool.setdefault(tool, {'calls': 0, 'cost_usd': 0.0})
+            bucket['calls'] += 1
+            bucket['cost_usd'] += float(data.get('cost_usd', 0) or 0)
+            events.append(data)
+
+        # Sort events newest first by day+ts
+        events.sort(key=lambda e: (e.get('day', ''), str(e.get('ts', ''))), reverse=True)
+
+        return jsonify({
+            'project_id': project_id,
+            'start': start,
+            'end': end,
+            'total_usd': round(total_usd, 6),
+            'by_tool': {k: {**v, 'cost_usd': round(v['cost_usd'], 6)} for k, v in by_tool.items()},
+            'events': events,
+            'event_count': len(events),
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/admin/pricing', methods=['GET'])
+@require_auth
+@limiter.limit("60/hour")
+def admin_pricing():
+    """Read-only: return current pricing doc. Gated by ADMIN_UIDS."""
+    try:
+        if g.uid not in _ADMIN_UIDS:
+            return jsonify({'error': 'forbidden'}), 403
+        import pricing as _pricing
+        return jsonify({'pricing': _pricing.load_pricing(force=True)})
     except Exception as e:
         return safe_error_response(e)
 
