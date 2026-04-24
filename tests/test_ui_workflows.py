@@ -1,6 +1,11 @@
 import pytest
 import json
 
+pytest.importorskip(
+    "pytest_playwright",
+    reason="pytest-playwright not installed; install with `pip install pytest-playwright && playwright install chromium`",
+)
+
 @pytest.fixture
 def mock_api_routes(page):
     """Mocks backend API routes so UI can be tested without hitting real endpoints."""
