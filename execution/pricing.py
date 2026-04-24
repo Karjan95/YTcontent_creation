@@ -24,48 +24,78 @@ from typing import Optional
 #   tts_models.*.per_1k_chars                               → USD per 1,000 characters
 #   video_models.*.per_second                               → USD per second of generated video
 #
-# Figures below are placeholder defaults — the operator is expected to seed
-# ``config/gemini_pricing`` with current rates from https://ai.google.dev/pricing.
+# Rates below are Google's published USD rates as of **April 2026**
+# (sourced from ai.google.dev/pricing + OpenRouter provider pages + Google blog).
+# Override anything via the Firestore doc config/gemini_pricing to reflect
+# future price changes without a redeploy. Every cost event stamps the
+# pricing_version so retroactive audits can reconstruct the rate used.
+#
+# Caveats:
+#  - Gemini 3 Pro / 3.1 Pro have context-tiered pricing ($2.00/$12.00 for
+#    ≤200K context, $4.00/$18.00 above). The tracker charges the ≤200K tier;
+#    bulk prompts over 200K context will under-bill. Re-check if you start
+#    exceeding ~200K prompt tokens regularly.
+#  - Gemini 3 Pro Image bills per-token (1120 tokens/image at 1K-2K, 2000
+#    tokens/image at 4K). We approximate as a flat $0.134/image (2K tier).
+#    For 4K generation that becomes an underbill — set to 0.24 in Firestore
+#    if you move to 4K.
+#  - Gemini 2.5 Flash TTS is priced by audio-output tokens (not input chars).
+#    Our tracker measures input characters, so the per_1k_chars rate is a
+#    rough equivalent based on typical 1 char ≈ 4 output tokens.
 _DEFAULT_PRICING = {
-    "version": "default-seed",
+    "version": "2026-04-defaults",
     "text_models": {
-        "gemini-3-flash-preview": {
-            "in_per_1m": 0.30, "out_per_1m": 2.50, "cached_in_per_1m": 0.075,
-        },
+        # Gemini 3 family
         "gemini-3-pro-preview": {
-            "in_per_1m": 1.25, "out_per_1m": 10.00, "cached_in_per_1m": 0.31,
+            "in_per_1m": 2.00, "out_per_1m": 12.00, "cached_in_per_1m": 0.50,
         },
         "gemini-3.1-pro-preview": {
+            "in_per_1m": 2.00, "out_per_1m": 12.00, "cached_in_per_1m": 0.50,
+        },
+        "gemini-3-flash-preview": {
+            "in_per_1m": 0.50, "out_per_1m": 3.00, "cached_in_per_1m": 0.05,
+        },
+        # Gemini 2.5 family
+        "gemini-2.5-pro": {
             "in_per_1m": 1.25, "out_per_1m": 10.00, "cached_in_per_1m": 0.31,
         },
         "gemini-2.5-flash": {
             "in_per_1m": 0.30, "out_per_1m": 2.50, "cached_in_per_1m": 0.075,
         },
+        # TTS model's text-token side is not separately billed by Google;
+        # audio output is metered via tts_models below.
         "gemini-2.5-flash-preview-tts": {
-            # Text side only — TTS audio is billed via tts_models below.
             "in_per_1m": 0.00, "out_per_1m": 0.00, "cached_in_per_1m": 0.00,
         },
     },
     "image_models": {
-        "gemini-3-pro-image-preview": {"per_image": 0.039},
-        "gemini-2.5-flash-image": {"per_image": 0.02},
+        # Gemini 3 Pro Image — 2K tier. Override to 0.24 for 4K.
+        "gemini-3-pro-image-preview": {"per_image": 0.134},
+        # "Nano Banana" — 1290 output tokens × $30/1M = $0.039/image
+        "gemini-2.5-flash-image": {"per_image": 0.039},
+        # Imagen 4 family
         "imagen-4.0-generate-001": {"per_image": 0.04},
         "imagen-4.0-fast-generate-001": {"per_image": 0.02},
         "imagen-4.0-ultra-generate-001": {"per_image": 0.06},
     },
     "tts_models": {
-        "gemini-2.5-flash-preview-tts": {"per_1k_chars": 0.015},
+        # Preview TTS: rough per-character conversion from output-token rate.
+        "gemini-2.5-flash-preview-tts": {"per_1k_chars": 0.010},
     },
     "video_models": {
+        # Veo 3.1 — rates effective after Google's April 7 2026 price drop.
         "veo-3.1-generate-preview": {"per_second": 0.40},
-        "veo-3.1-fast-generate-preview": {"per_second": 0.25},
-        "veo-3.1-lite-generate-preview": {"per_second": 0.15},
+        "veo-3.1-fast-generate-preview": {"per_second": 0.10},
+        "veo-3.1-lite-generate-preview": {"per_second": 0.05},
     },
     "fallback": {
-        "text": {"in_per_1m": 1.25, "out_per_1m": 10.00, "cached_in_per_1m": 0.31},
+        # Used when a call reports a model name we don't recognize. Set to
+        # the most expensive sensible default so we over- rather than
+        # under-bill — admins see the "fallback" status flag in events.
+        "text": {"in_per_1m": 2.00, "out_per_1m": 12.00, "cached_in_per_1m": 0.50},
         "image": {"per_image": 0.04},
         "imagen": {"per_image": 0.04},
-        "tts": {"per_1k_chars": 0.015},
+        "tts": {"per_1k_chars": 0.010},
         "veo": {"per_second": 0.40},
     },
 }

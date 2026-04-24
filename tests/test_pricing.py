@@ -21,9 +21,9 @@ def test_get_rate_text_model_known(pricing_module, monkeypatch):
     monkeypatch.setattr(pricing_module, "_fetch_from_firestore", lambda: None)
     rate, is_fallback = pricing_module.get_rate("text", "gemini-3-flash-preview")
     assert is_fallback is False
-    assert rate["in_per_1m"] == 0.30
-    assert rate["out_per_1m"] == 2.50
-    assert rate["cached_in_per_1m"] == 0.075
+    assert rate["in_per_1m"] == 0.50
+    assert rate["out_per_1m"] == 3.00
+    assert rate["cached_in_per_1m"] == 0.05
 
 
 def test_get_rate_fallback_on_unknown_model(pricing_module, monkeypatch):
@@ -37,7 +37,7 @@ def test_get_rate_image_known(pricing_module, monkeypatch):
     monkeypatch.setattr(pricing_module, "_fetch_from_firestore", lambda: None)
     rate, is_fallback = pricing_module.get_rate("image", "gemini-3-pro-image-preview")
     assert is_fallback is False
-    assert rate["per_image"] == 0.039
+    assert rate["per_image"] == 0.134
 
 
 def test_get_rate_imagen_known(pricing_module, monkeypatch):
@@ -51,7 +51,7 @@ def test_get_rate_tts_known(pricing_module, monkeypatch):
     monkeypatch.setattr(pricing_module, "_fetch_from_firestore", lambda: None)
     rate, is_fallback = pricing_module.get_rate("tts", "gemini-2.5-flash-preview-tts")
     assert is_fallback is False
-    assert rate["per_1k_chars"] == 0.015
+    assert rate["per_1k_chars"] == 0.010
 
 
 def test_get_rate_veo_known(pricing_module, monkeypatch):
@@ -59,6 +59,24 @@ def test_get_rate_veo_known(pricing_module, monkeypatch):
     rate, is_fallback = pricing_module.get_rate("veo", "veo-3.1-generate-preview")
     assert is_fallback is False
     assert rate["per_second"] == 0.40
+
+
+def test_get_rate_veo_fast_and_lite_post_april_drop(pricing_module, monkeypatch):
+    """Veo 3.1 Fast dropped to $0.10/s and Lite is $0.05/s after Apr 7 2026."""
+    monkeypatch.setattr(pricing_module, "_fetch_from_firestore", lambda: None)
+    fast_rate, _ = pricing_module.get_rate("veo", "veo-3.1-fast-generate-preview")
+    lite_rate, _ = pricing_module.get_rate("veo", "veo-3.1-lite-generate-preview")
+    assert fast_rate["per_second"] == 0.10
+    assert lite_rate["per_second"] == 0.05
+
+
+def test_get_rate_gemini_3_pro_uses_sub_200k_tier(pricing_module, monkeypatch):
+    """Default charges the ≤200K tier; see module docstring for caveat."""
+    monkeypatch.setattr(pricing_module, "_fetch_from_firestore", lambda: None)
+    rate, _ = pricing_module.get_rate("text", "gemini-3-pro-preview")
+    assert rate["in_per_1m"] == 2.00
+    assert rate["out_per_1m"] == 12.00
+    assert rate["cached_in_per_1m"] == 0.50
 
 
 def test_cache_ttl_only_fetches_once(pricing_module, monkeypatch):
