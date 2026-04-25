@@ -505,3 +505,71 @@ def test_director_prompt_injects_spine_and_claim_id_field():
     assert "Claims: [k2, k3]" in prompt
     assert '"claim_id"' in prompt
     assert "CLAIM PROPAGATION" in prompt
+
+
+# ── Step 7: end-to-end claim-id propagation ────────────────────────────────
+
+def test_e2e_claim_id_survives_research_to_production():
+    """A claim id (k3) must survive: spine → narration → beat regen → director phase.
+
+    This is the headline guarantee of the Narrative Spine feature: source citations
+    propagate end-to-end without being lost at any handoff. We mock generate_content
+    at each phase boundary and verify k3 is present in the final shot.
+    """
+    import research_scriptwriter as rsw
+    spine = json.loads(VALID_SPINE_JSON)
+
+    # ── Phase 1: spine → narration (script gen) ───────────────────────────
+    narration_response = json.dumps({
+        "title": "T",
+        "narration": [
+            {"act": "ACT 1", "beat": "Hook", "text": "Open with a question.", "claim_ids": ["k1"]},
+            {"act": "ACT 2", "beat": "Stakes", "text": "Raise the stakes.", "claim_ids": ["k2"]},
+            {"act": "ACT 3", "beat": "Payoff", "text": "Deliver the conclusion.", "claim_ids": ["k3"]},
+        ],
+        "claim_ids_used": ["k1", "k2", "k3"],
+    })
+    with patch.object(rsw, 'generate_content', return_value=narration_response):
+        result = rsw.generate_narration(
+            topic="T", template_id="educational_explainer",
+            research_dossier="dossier with k3 fact", spine=spine, api_key="fake",
+        )
+    assert result.get("success")
+    narration = result["narration"]
+    payoff_beat = next(b for b in narration["narration"] if b["beat"] == "Payoff")
+    assert payoff_beat["claim_ids"] == ["k3"], "k3 lost at script gen"
+
+    # ── Phase 2: narration → beat regen (restyle preserves k3) ────────────
+    regen_response = json.dumps([
+        {"act": "ACT 3", "beat": "Payoff", "text": "Deliver the conclusion (restyled).", "claim_ids": ["k3"]},
+    ])
+    with patch.object(rsw, 'generate_content', return_value=regen_response):
+        regen_result = rsw.regenerate_beats(
+            topic="T", template_id="educational_explainer",
+            research_dossier="dossier",
+            full_narration=narration,
+            target_beat_indices=[2], mode="restyle",
+            spine=spine, api_key="fake",
+        )
+    assert regen_result.get("success")
+    assert regen_result["beats"][0]["claim_ids"] == ["k3"], "k3 lost in regen"
+
+    # Apply regen back into the narration (mirrors what the route does)
+    narration["narration"][2] = {
+        **narration["narration"][2],
+        "text": regen_result["beats"][0]["text"],
+        "claim_ids": regen_result["beats"][0]["claim_ids"],
+    }
+    assert narration["narration"][2]["claim_ids"] == ["k3"]
+
+    # ── Phase 3: narration → production (Director carries k3 to a shot) ───
+    # Verify that the Director prompt contains [Claims: k3] for the Payoff beat.
+    from research_templates import build_director_prompt
+    director_prompt = build_director_prompt(
+        narration_json=narration, duration_minutes=2, spine=spine,
+    )
+    # The Payoff beat (3rd beat) line must carry the [Claims: k3] tag.
+    assert "Claims: [k3]" in director_prompt, "k3 lost when Director prompt was built"
+    # And the SPINE REFERENCE block must include the k3 claim entry.
+    assert "[k3]" in director_prompt
+    assert "Steam spins turbines." in director_prompt  # k3's text from VALID_SPINE_JSON
