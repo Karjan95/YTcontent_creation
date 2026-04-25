@@ -6,6 +6,40 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gemini Studio</title>
     <link rel="stylesheet" href="/style.css">
+    <style>
+        /* Narrative Spine — research tab editor + script tab claim chips */
+        .spine-banner { padding: 10px 14px; border-radius: 6px; margin: 12px 0; font-size: 0.95em; }
+        .spine-banner.warn { background: #3a2f00; color: #ffe28a; border: 1px solid #6b5500; }
+        .spine-banner.info { background: #1a2a3a; color: #9cd; border: 1px solid #2a4a6a; }
+        .spine-section { margin-top: 16px; padding-top: 12px; border-top: 1px dashed #333; }
+        .spine-actions { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+        .spine-claim-list { list-style: none; padding: 0; margin: 8px 0; }
+        .spine-claim-item {
+            display: grid; grid-template-columns: 24px 100px 1fr;
+            gap: 8px; align-items: start;
+            padding: 8px; margin-bottom: 6px;
+            background: #1c1c1f; border: 1px solid #2a2a30; border-radius: 4px;
+        }
+        .spine-claim-item[draggable="true"] { cursor: move; }
+        .spine-claim-item.drag-over { border-color: #6cf; background: #1c2c3c; }
+        .spine-claim-handle { color: #888; user-select: none; line-height: 1.6; }
+        .spine-claim-importance { font-size: 0.85em; padding: 4px; background: #111; color: #ccc; border: 1px solid #333; border-radius: 3px; }
+        .spine-claim-text { width: 100%; min-height: 38px; padding: 6px; background: #111; color: #ddd; border: 1px solid #2a2a30; border-radius: 3px; font: inherit; resize: vertical; }
+        .spine-claim-id { font-family: monospace; color: #6cf; font-size: 0.85em; }
+        .spine-claim-sources { font-size: 0.8em; color: #888; margin-top: 2px; }
+        .spine-claim-sources a { color: #9cd; margin-right: 6px; }
+        .claim-chip {
+            display: inline-block; font-family: monospace; font-size: 0.78em;
+            padding: 2px 7px; margin: 0 4px 2px 0; border-radius: 10px;
+            background: #1c2c3c; color: #9cd; border: 1px solid #2a4a6a;
+            cursor: help;
+        }
+        .claim-chip.primary { background: #2a4a6a; color: #fff; border-color: #4a6a8a; }
+        .claim-chip.supporting { background: transparent; color: #9cd; border-color: #2a4a6a; }
+        .claim-chip.color { background: transparent; color: #888; border-color: #444; border-style: dashed; }
+        .claim-chip.unsourced { background: #3a1a1a; color: #f88; border-color: #5a2a2a; }
+        .claim-chips-row { margin-top: 4px; }
+    </style>
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap"
         rel="stylesheet">
 
@@ -605,6 +639,21 @@
                                 <div class="key-facts" id="keyFacts"></div>
                                 <div class="sources-list" id="sourcesList"></div>
                                 <div class="sources-list" id="structuredSources"></div>
+
+                                <!-- Narrative Spine — ranked outline binding facts to sources -->
+                                <div id="spineSection" class="spine-section" style="display: none;">
+                                    <div class="section-header" style="display: flex; align-items: center; gap: 8px;">
+                                        <label class="input-label" style="margin: 0;">🦴 Narrative Spine</label>
+                                        <span style="font-size: 0.85em; color: #888;">Ranked claims with sources. Drag to reorder.</span>
+                                    </div>
+                                    <div id="spineBanner"></div>
+                                    <ul id="spineClaimList" class="spine-claim-list"></ul>
+                                    <div class="spine-actions">
+                                        <button class="btn-tiny" id="spineSaveBtn" onclick="saveSpine()">Save Spine</button>
+                                        <button class="btn-tiny" id="spineRetryBtn" onclick="extractSpine(true)" style="display:none;">Retry extraction</button>
+                                        <span id="spineStatus" style="font-size:0.85em; color:#888;"></span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -1901,6 +1950,7 @@ No formatting needed — just paste your narration!"></textarea>
         let selectedTemplate = null;
         let currentDossier = '';
         let currentResearchStructured = null; // Structured research {meta, sections, claims, sources}
+        let currentResearchSpine = null;      // Narrative Spine {key_claims, logical_flow, source_map}
         let selectedTitle = null;
         let currentScriptData = null;
         let currentNarration = null;   // Narration data (acts/beats) from Phase 2
@@ -2859,12 +2909,197 @@ No formatting needed — just paste your narration!"></textarea>
             el.innerHTML = `<h4>Verified Sources (${sources.length})</h4><ul class="structured-sources">${items}</ul>`;
         }
 
+        // ── Narrative Spine UI ─────────────────────────────────────────────
+        function _setSpineStatus(text, isError = false) {
+            const el = document.getElementById('spineStatus');
+            if (!el) return;
+            el.textContent = text || '';
+            el.style.color = isError ? '#f88' : '#888';
+        }
+
+        function _setSpineBanner(html, kind = 'info') {
+            const el = document.getElementById('spineBanner');
+            if (!el) return;
+            if (!html) { el.innerHTML = ''; return; }
+            el.innerHTML = `<div class="spine-banner ${kind}">${html}</div>`;
+        }
+
+        function renderSpine(spine) {
+            const section = document.getElementById('spineSection');
+            const list = document.getElementById('spineClaimList');
+            if (!section || !list) return;
+
+            if (!spine || !Array.isArray(spine.key_claims) || !spine.key_claims.length) {
+                list.innerHTML = '';
+                return;
+            }
+            section.style.display = 'block';
+
+            const byId = {};
+            for (const c of spine.key_claims) byId[c.id] = c;
+            const flow = Array.isArray(spine.logical_flow) ? spine.logical_flow : spine.key_claims.map(c => c.id);
+            const ordered = flow.map(id => byId[id]).filter(Boolean);
+            // Append any claims missing from flow at the end (defensive)
+            for (const c of spine.key_claims) {
+                if (!flow.includes(c.id)) ordered.push(c);
+            }
+
+            list.innerHTML = ordered.map(c => {
+                const id = escapeHtml(c.id);
+                const text = escapeHtml(c.text || '');
+                const importance = c.importance || 'supporting';
+                const sourceMap = spine.source_map || {};
+                const sourceLinks = (c.source_ids || []).map(sid => {
+                    const s = sourceMap[sid];
+                    if (s && s.url) {
+                        return `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener noreferrer">[${escapeHtml(sid)}]</a>`;
+                    }
+                    return `<span>[${escapeHtml(sid)}]</span>`;
+                }).join(' ');
+                const importanceOpts = ['primary', 'supporting', 'color'].map(opt =>
+                    `<option value="${opt}"${opt === importance ? ' selected' : ''}>${opt}</option>`
+                ).join('');
+                return `
+                <li class="spine-claim-item" draggable="true" data-claim-id="${id}">
+                  <span class="spine-claim-handle" title="Drag to reorder">⋮⋮</span>
+                  <div>
+                    <div class="spine-claim-id">${id}</div>
+                    <select class="spine-claim-importance" data-claim-id="${id}" onchange="onSpineImportanceChange(this)">${importanceOpts}</select>
+                  </div>
+                  <div>
+                    <textarea class="spine-claim-text" data-claim-id="${id}" oninput="onSpineTextChange(this)">${text}</textarea>
+                    <div class="spine-claim-sources">${sourceLinks || '<em>no sources bound</em>'}</div>
+                  </div>
+                </li>`;
+            }).join('');
+
+            // Wire drag-and-drop handlers
+            list.querySelectorAll('.spine-claim-item').forEach(item => {
+                item.addEventListener('dragstart', onSpineDragStart);
+                item.addEventListener('dragover', onSpineDragOver);
+                item.addEventListener('dragleave', onSpineDragLeave);
+                item.addEventListener('drop', onSpineDrop);
+                item.addEventListener('dragend', onSpineDragEnd);
+            });
+        }
+
+        let _draggingClaimId = null;
+        function onSpineDragStart(e) {
+            _draggingClaimId = e.currentTarget.dataset.claimId;
+            e.dataTransfer.effectAllowed = 'move';
+        }
+        function onSpineDragOver(e) {
+            e.preventDefault();
+            e.currentTarget.classList.add('drag-over');
+        }
+        function onSpineDragLeave(e) {
+            e.currentTarget.classList.remove('drag-over');
+        }
+        function onSpineDrop(e) {
+            e.preventDefault();
+            const targetId = e.currentTarget.dataset.claimId;
+            e.currentTarget.classList.remove('drag-over');
+            if (!_draggingClaimId || !currentResearchSpine || _draggingClaimId === targetId) return;
+            const flow = (currentResearchSpine.logical_flow || []).slice();
+            const fromIdx = flow.indexOf(_draggingClaimId);
+            const toIdx = flow.indexOf(targetId);
+            if (fromIdx < 0 || toIdx < 0) return;
+            flow.splice(fromIdx, 1);
+            flow.splice(toIdx, 0, _draggingClaimId);
+            currentResearchSpine.logical_flow = flow;
+            renderSpine(currentResearchSpine);
+        }
+        function onSpineDragEnd() { _draggingClaimId = null; }
+
+        function onSpineTextChange(el) {
+            if (!currentResearchSpine) return;
+            const id = el.dataset.claimId;
+            const c = (currentResearchSpine.key_claims || []).find(x => x.id === id);
+            if (c) c.text = el.value;
+        }
+        function onSpineImportanceChange(el) {
+            if (!currentResearchSpine) return;
+            const id = el.dataset.claimId;
+            const c = (currentResearchSpine.key_claims || []).find(x => x.id === id);
+            if (c) c.importance = el.value;
+        }
+
+        async function extractSpine(retry = false) {
+            if (!currentDossier) {
+                _setSpineStatus('Run research first', true);
+                return;
+            }
+            _setSpineBanner('');
+            _setSpineStatus(retry ? 'Retrying extraction…' : 'Building narrative spine…');
+            try {
+                const response = await authFetch('/api/research/spine', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        project_id: currentProjectId,
+                        topic: document.getElementById('topicInput')?.value?.trim() || '',
+                        dossier: currentDossier,
+                        structured: currentResearchStructured,
+                    }),
+                });
+                if (response.status === 403) {
+                    _setSpineBanner('Narrative Spine is disabled on this server. Script generation will use the legacy path.', 'info');
+                    _setSpineStatus('');
+                    return;
+                }
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Spine extraction failed');
+                }
+                currentResearchSpine = data.spine;
+                renderSpine(currentResearchSpine);
+                _setSpineStatus(`${(data.spine.key_claims || []).length} claims`);
+                document.getElementById('spineRetryBtn').style.display = 'none';
+            } catch (err) {
+                console.error('[Spine] extract failed:', err);
+                _setSpineBanner(`Spine unavailable — falling back to legacy script generation. (${escapeHtml(err.message)})`, 'warn');
+                _setSpineStatus('Extraction failed', true);
+                document.getElementById('spineRetryBtn').style.display = 'inline-block';
+            }
+        }
+
+        async function saveSpine() {
+            if (!currentResearchSpine || !currentProjectId) return;
+            _setSpineStatus('Saving…');
+            try {
+                const response = await authFetch('/api/research/spine', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: currentProjectId, spine: currentResearchSpine }),
+                });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Save failed');
+                }
+                currentResearchSpine = data.spine;
+                renderSpine(currentResearchSpine);
+                _setSpineStatus('Saved ✓');
+                setTimeout(() => _setSpineStatus(''), 2000);
+            } catch (err) {
+                console.error('[Spine] save failed:', err);
+                _setSpineStatus(`Save failed: ${err.message}`, true);
+            }
+        }
+
         function displayResearchResults(data, projectId) {
             // Only update the UI if this is still the active project
             if (projectId && projectId !== currentProjectId) return;
 
             currentDossier = data.dossier;
             currentResearchStructured = data.structured || null;
+            // Server may include a freshly extracted spine when NARRATIVE_SPINE is enabled.
+            if (data.spine) {
+                currentResearchSpine = data.spine;
+                renderSpine(currentResearchSpine);
+            } else if (currentDossier) {
+                // Try server-side extraction (will 403 silently if flag is off).
+                extractSpine();
+            }
 
             // Display results
             document.getElementById('researchSummary').innerHTML =
@@ -3249,6 +3484,27 @@ No formatting needed — just paste your narration!"></textarea>
             }
         }
 
+        function renderClaimChips(claim_ids) {
+            // Render claim-coverage chips for a beat using currentResearchSpine.
+            // No spine → render nothing (legacy behavior). Beat with no claim_ids → red unsourced chip.
+            if (!currentResearchSpine || !Array.isArray(currentResearchSpine.key_claims)) return '';
+            if (!Array.isArray(claim_ids) || !claim_ids.length) {
+                return `<div class="claim-chips-row"><span class="claim-chip unsourced" title="This beat has no spine claims attached. Use Restyle/Reimagine to anchor it.">unsourced</span></div>`;
+            }
+            const byId = {};
+            for (const c of currentResearchSpine.key_claims) byId[c.id] = c;
+            const sourceMap = currentResearchSpine.source_map || {};
+            const chips = claim_ids.map(kid => {
+                const claim = byId[kid];
+                if (!claim) return `<span class="claim-chip unsourced" title="Unknown claim id: ${escapeHtml(kid)}">${escapeHtml(kid)}</span>`;
+                const importance = claim.importance || 'supporting';
+                const srcUrls = (claim.source_ids || []).map(sid => sourceMap[sid]?.url).filter(Boolean);
+                const tooltip = (claim.text || '') + (srcUrls.length ? `\n\nSources:\n${srcUrls.join('\n')}` : '');
+                return `<span class="claim-chip ${escapeHtml(importance)}" title="${escapeHtml(tooltip)}">${escapeHtml(kid)}</span>`;
+            }).join('');
+            return `<div class="claim-chips-row">${chips}</div>`;
+        }
+
         function renderNarration(narrationObj) {
             updateEstimatedShots(); // Update estimated shots when narration is loaded
             const container = document.getElementById('narrationDisplay');
@@ -3306,6 +3562,7 @@ No formatting needed — just paste your narration!"></textarea>
                         <button class="btn-tiny btn-reimagine" onclick="regenerateBeat(${beat._index}, 'reimagine')" title="Reimagine">Reimagine</button>
                     </div>`;
                     html += `</div>`;
+                    html += renderClaimChips(beat.claim_ids);
                     html += `<div class="narration-beat-text" contenteditable="true" data-beat-index="${beat._index}" onblur="onBeatTextEdit(this, ${beat._index})">${escapeHtml(beatText)}</div>`;
                     html += `</div>`;
                 }
@@ -7479,6 +7736,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
             // Reset all global state
             currentDossier = '';
             currentResearchStructured = null;
+            currentResearchSpine = null;
             currentNarration = null;
             currentProductionData = null;
             currentScriptData = null;
@@ -7496,6 +7754,12 @@ RESOLUTION: ${visualsConfig.resolution}`;
             document.getElementById('sourcesList').innerHTML = '';
             const structuredEl = document.getElementById('structuredSources');
             if (structuredEl) structuredEl.innerHTML = '';
+            const spineSec = document.getElementById('spineSection');
+            if (spineSec) spineSec.style.display = 'none';
+            const spineList = document.getElementById('spineClaimList');
+            if (spineList) spineList.innerHTML = '';
+            _setSpineBanner('');
+            _setSpineStatus('');
 
             // Reset wizard steps
             const wizardSteps = ['wizardStepA', 'wizardStepB', 'wizardStepC', 'wizardStepD'];
@@ -7690,6 +7954,11 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 if (project.research_structured) {
                     currentResearchStructured = project.research_structured;
                     renderStructuredSources(project.research_structured);
+                }
+
+                if (project.research_spine) {
+                    currentResearchSpine = project.research_spine;
+                    renderSpine(project.research_spine);
                 }
 
                 document.getElementById('researchResults').style.display = 'block';
