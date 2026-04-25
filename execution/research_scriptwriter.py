@@ -483,6 +483,7 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                               creative_direction: dict = None,
                               cast: dict = None,
                               format_preset: str = "",
+                              spine: dict = None,
                               uid: str = None, project_id: str = None) -> dict:
     """
     Generate production-ready prompts from narration beats using the 6-phase pipeline.
@@ -594,6 +595,7 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                         cast=cast,
                         format_preset=format_preset,
                         visual_brief=visual_brief,
+                        spine=spine,
                         uid=uid, project_id=project_id)
 
     # Large narrations: batch by act
@@ -663,6 +665,7 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                               cast=cast,
                               format_preset=format_preset,
                               visual_brief=visual_brief,
+                              spine=spine,
                               uid=uid, project_id=project_id)
 
             if "error" not in result:
@@ -859,6 +862,8 @@ def _generate_single_batch_3phase(narration_json: dict, duration_minutes: int = 
                                    creative_direction: dict = None,
                                    cast: dict = None,
                                    format_preset: str = "",
+                                   visual_brief: dict = None,
+                                   spine: dict = None,
                                    uid: str = None, project_id: str = None) -> dict:
     """
     Generate production table using the 3-phase pipeline (Max Quality mode).
@@ -880,6 +885,7 @@ def _generate_single_batch_3phase(narration_json: dict, duration_minutes: int = 
         pacing_tier=pacing_tier,
         creative_direction=creative_direction,
         format_preset=format_preset,
+        spine=spine,
     )
     raw_director = generate_content(
         director_prompt, model_name="gemini-3.1-pro-preview",
@@ -969,6 +975,7 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
                                    cast: dict = None,
                                    format_preset: str = "",
                                    visual_brief: dict = None,
+                                   spine: dict = None,
                                    uid: str = None, project_id: str = None) -> dict:
     """
     Generate production table using the 6-phase pipeline.
@@ -994,6 +1001,7 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
         creative_direction=creative_direction,
         format_preset=format_preset,
         visual_brief=visual_brief,
+        spine=spine,
     )
     raw_director = generate_content(
         director_prompt, model_name="gemini-2.5-flash",

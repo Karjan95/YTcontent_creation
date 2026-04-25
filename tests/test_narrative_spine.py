@@ -448,3 +448,60 @@ def test_regenerate_beats_sanitizes_unknown_claim_ids():
         )
     assert result.get("success")
     assert result["beats"][0]["claim_ids"] == ["k1"]
+
+
+# ── Step 4: production + director consume spine ─────────────────────────────
+
+NARRATION_WITH_CLAIMS = {
+    "title": "T",
+    "narration": [
+        {"act": "ACT 1", "beat": "Hook", "text": "Open with a question.", "claim_ids": ["k1"]},
+        {"act": "ACT 2", "beat": "Stakes", "text": "Raise the stakes here.", "claim_ids": ["k2", "k3"]},
+    ],
+}
+
+
+def test_production_prompt_unchanged_when_spine_missing():
+    """build_production_prompt without spine must NOT emit a claim_id field or SPINE block."""
+    from research_templates import build_production_prompt
+    prompt = build_production_prompt(narration_json=NARRATION_WITH_CLAIMS, duration_minutes=2)
+    assert "NARRATIVE SPINE" not in prompt
+    assert '"claim_id"' not in prompt
+
+
+def test_production_prompt_injects_spine_and_claim_id_field():
+    """With spine, build_production_prompt must inject SPINE block, beat claim tags, and claim_id schema."""
+    from research_templates import build_production_prompt
+    spine = json.loads(VALID_SPINE_JSON)
+    prompt = build_production_prompt(
+        narration_json=NARRATION_WITH_CLAIMS, duration_minutes=2,
+        spine=spine,
+    )
+    assert "NARRATIVE SPINE" in prompt
+    assert "Claims: [k1]" in prompt
+    assert "Claims: [k2, k3]" in prompt
+    assert '"claim_id"' in prompt
+    assert "CLAIM PROPAGATION" in prompt
+
+
+def test_director_prompt_unchanged_when_spine_missing():
+    """build_director_prompt without spine must NOT emit a claim_id field."""
+    from research_templates import build_director_prompt
+    prompt = build_director_prompt(narration_json=NARRATION_WITH_CLAIMS, duration_minutes=2)
+    assert "NARRATIVE SPINE" not in prompt
+    assert '"claim_id"' not in prompt
+
+
+def test_director_prompt_injects_spine_and_claim_id_field():
+    """With spine, build_director_prompt must inject SPINE block + per-shot claim_id schema."""
+    from research_templates import build_director_prompt
+    spine = json.loads(VALID_SPINE_JSON)
+    prompt = build_director_prompt(
+        narration_json=NARRATION_WITH_CLAIMS, duration_minutes=2,
+        spine=spine,
+    )
+    assert "NARRATIVE SPINE" in prompt
+    assert "Claims: [k1]" in prompt
+    assert "Claims: [k2, k3]" in prompt
+    assert '"claim_id"' in prompt
+    assert "CLAIM PROPAGATION" in prompt

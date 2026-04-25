@@ -2500,6 +2500,7 @@ def generate_production_table_route():
             creative_direction=creative_direction,
             cast=cast,
             format_preset=format_preset,
+            spine=_load_project_spine(project_id),
             uid=g.uid, project_id=project_id,
         )
 

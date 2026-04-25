@@ -2520,7 +2520,8 @@ def build_production_prompt(narration_json: dict, duration_minutes: int = 10,
                             shot_start_number: int = 1,
                             pacing_tier: str = "Standard",
                             creative_direction: dict = None,
-                            format_preset: str = "") -> str:
+                            format_preset: str = "",
+                            spine: dict = None) -> str:
     """
     Build prompt for the unified Production Table with dynamic style support.
 
@@ -2537,19 +2538,26 @@ def build_production_prompt(narration_json: dict, duration_minutes: int = 10,
         shot_start_number: The number to start shot numbering from (important for batching)
         pacing_tier: Pacing speed (Meditative, Relaxed, Standard, High Energy, Frenetic)
         format_preset: Format preset ID (micro, quick_take, short_form, standard, deep_dive)
+        spine: Optional Narrative Spine — when present, each shot will carry a
+            `claim_id` so source citations propagate to visuals.
     """
     # Extract narration beats
     beats = narration_json.get("narration", [])
     title = narration_json.get("title", "Untitled")
     hook_type = narration_json.get("hook_type", "")
 
-    # Format narration beats for the prompt
+    # Format narration beats for the prompt — append claim_ids when spine is in play
     narration_text = ""
     for i, beat in enumerate(beats):
         act = beat.get("act", "")
         beat_name = beat.get("beat", "")
         text = beat.get("text", beat.get("narration", ""))
-        narration_text += f"\n[BEAT {i+1}] Act: {act} | Beat: {beat_name}\n{text}\n"
+        claim_tag = ""
+        if spine:
+            beat_claims = beat.get("claim_ids") or []
+            if beat_claims:
+                claim_tag = f" | Claims: [{', '.join(beat_claims)}]"
+        narration_text += f"\n[BEAT {i+1}] Act: {act} | Beat: {beat_name}{claim_tag}\n{text}\n"
 
     # Use module-level pacing constants
     total_words = sum(len(b.get("text", b.get("narration", "")).split()) for b in beats)
@@ -2669,6 +2677,21 @@ Default Mood: As appropriate for the narrative"""
     # Build creative direction section for combined/fast mode
     creative_direction_section = _build_creative_direction_section(creative_direction, 'combined')
 
+    # Spine block + per-shot claim_id schema additions (legacy single-call path)
+    spine_block = _format_spine_block(spine) if spine else ""
+    if spine_block:
+        prod_claim_field = ',\n      "claim_id": "k1"'
+        prod_claim_rule = (
+            "\n15. CLAIM PROPAGATION: Every shot MUST carry a `claim_id` chosen from "
+            "its parent beat's claim_ids (the [Claims: ...] tag on each [BEAT n] line). "
+            "Pick the SINGLE best-fit claim id per shot. If the parent beat has no "
+            "claim_ids, omit the field. The claim_id binds each visual to a specific "
+            "research source via the spine."
+        )
+    else:
+        prod_claim_field = ""
+        prod_claim_rule = ""
+
     prompt = f"""You are a professional production team creating a VIDEO that tells a STORY:
 1. THE DIRECTOR — story, emotion, performance, pacing, editorial decisions
 2. THE STORYBOARD ARTIST — visual sequence, composition, shot flow
@@ -2687,7 +2710,7 @@ Estimated Shots: ~{estimated_shots}
 Aspect Ratio: {aspect_ratio}
 
 {visual_style_section}
-
+{spine_block}
 ═══════ NARRATION TO SPLIT ═══════
 ⚠️ USE THESE EXACT WORDS — DO NOT REWRITE, PARAPHRASE, OR DROP ANY TEXT ⚠️
 {narration_text}
@@ -2812,7 +2835,7 @@ Return a JSON object with this EXACT structure:
       "cutting_rationale": "Why the cut happens here (narrative shift, emotion change, visual logic, etc.)",
       "first_frame_prompt": "Full structured first frame prompt using the approved schema fields",
       "last_frame_prompt": "Full structured last frame prompt using the approved schema fields",
-      "veo_prompt": "Full Veo 3.1 video prompt"
+      "veo_prompt": "Full Veo 3.1 video prompt"{prod_claim_field}
     }}}}
   ],
   "continuity_notes": [
@@ -2847,7 +2870,7 @@ CRITICAL RULES (MUST FOLLOW EXACTLY):
 11. Include a cutting_rationale for every shot explaining the editorial decision.
 12. EVERY SHOT MUST DEPICT A STORY MOMENT — characters doing things in story environments. NEVER use "studio backdrop" or "seamless background."
 13. Backgrounds MUST match what the narration describes (forest, cottage, path, etc.), rendered in the visual style.
-14. Characters must be ACTING (walking, talking, reacting, holding objects) — NOT posing for display.
+14. Characters must be ACTING (walking, talking, reacting, holding objects) — NOT posing for display.{prod_claim_rule}
 
 ⚠️⚠️⚠️ JSON SYNTAX VALIDATION ⚠️⚠️⚠️
 CRITICAL: You MUST generate VALID JSON with correct syntax:
@@ -3335,25 +3358,35 @@ def build_director_prompt(narration_json: dict, duration_minutes: int = 10,
                           pacing_tier: str = "Standard",
                           creative_direction: dict = None,
                           format_preset: str = "",
-                          visual_brief: dict = None) -> str:
+                          visual_brief: dict = None,
+                          spine: dict = None) -> str:
     """
     Phase 1 of 6: THE DIRECTOR — Editorial + Camera Intent.
 
     Makes cutting decisions AND expresses camera intent per shot.
     Upgraded from pure editorial to include emotional arc mapping
     and storytelling goals for the Cinematographer.
+
+    When `spine` is provided, each shot must inherit a `claim_id` from
+    its parent beat's claim_ids so source citations propagate to visuals.
     """
     beats = narration_json.get("narration", [])
     title = narration_json.get("title", "Untitled")
     hook_type = narration_json.get("hook_type", "")
 
-    # Format narration beats
+    # Format narration beats — append claim_ids when spine present so the
+    # Director can pick the best-fit id per shot.
     narration_text = ""
     for i, beat in enumerate(beats):
         act = beat.get("act", "")
         beat_name = beat.get("beat", "")
         text = beat.get("text", beat.get("narration", ""))
-        narration_text += f"\n[BEAT {i+1}] Act: {act} | Beat: {beat_name}\n{text}\n"
+        claim_tag = ""
+        if spine:
+            beat_claims = beat.get("claim_ids") or []
+            if beat_claims:
+                claim_tag = f" | Claims: [{', '.join(beat_claims)}]"
+        narration_text += f"\n[BEAT {i+1}] Act: {act} | Beat: {beat_name}{claim_tag}\n{text}\n"
 
     total_words = sum(len(b.get("text", b.get("narration", "")).split()) for b in beats)
     pacing_instruction = PACING_INSTRUCTIONS.get(pacing_tier, PACING_INSTRUCTIONS["Standard"])
@@ -3400,6 +3433,21 @@ When the brief suggests a mood shift, consider matching it with a pacing change.
                 f"pov={entry.get('suggested_pov', 'N/A')}\n"
             )
 
+    # Spine block + per-shot claim_id schema additions
+    spine_block = _format_spine_block(spine) if spine else ""
+    if spine_block:
+        director_claim_field = ',\n      "claim_id": "k1"'
+        director_claim_rule = (
+            "\n10. CLAIM PROPAGATION: Every shot MUST carry a `claim_id` chosen from "
+            "its parent beat's claim_ids (the [Claims: ...] tag on each [BEAT n] line). "
+            "Pick the SINGLE best-fit claim id per shot. If the parent beat has no "
+            "claim_ids, omit the field. The claim_id flows through Cinematographer, "
+            "Storyboard, Continuity, and DP unchanged so visuals carry source citations."
+        )
+    else:
+        director_claim_field = ""
+        director_claim_rule = ""
+
     prompt = f"""You are THE DIRECTOR for a video production. Your job is editorial decision-making:
 - WHERE to cut the narration into shots
 - HOW LONG each shot lasts
@@ -3412,8 +3460,7 @@ You express INTENT: "this needs a slow reveal," "this needs claustrophobic intim
 
 The Cinematographer will translate your intent into specific camera technique.
 {creative_direction_section}
-{visual_brief_section}
-═══════ PROJECT INFO ═══════
+{visual_brief_section}{spine_block}═══════ PROJECT INFO ═══════
 Title: {title}
 Hook Type: {hook_type}
 Duration: {duration_minutes} minutes
@@ -3512,7 +3559,7 @@ Return a JSON object:
       "directors_intent": "What the audience should FEEL at this moment",
       "camera_intent": "The storytelling GOAL for how this shot should feel visually",
       "cutting_rationale": "Why the cut happens here",
-      "emotional_arc_position": "Where this shot sits in the overall arc (e.g., 'Rising tension', 'Peak', 'Release')"
+      "emotional_arc_position": "Where this shot sits in the overall arc (e.g., 'Rising tension', 'Peak', 'Release')"{director_claim_field}
     }}}}
   ]
 }}}}
@@ -3526,7 +3573,7 @@ Return a JSON object:
 6. Include a camera_intent for every shot — a storytelling goal, not a technique.
 7. Include emotional_arc_position for every shot.
 8. Fill in emotional_arc_analysis BEFORE the shots array.
-9. Do NOT include visual descriptions, image prompts, or camera techniques.
+9. Do NOT include visual descriptions, image prompts, or camera techniques.{director_claim_rule}
 
 ⚠️ Return ONLY valid JSON. No commentary. Begin."""
 
