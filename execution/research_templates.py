@@ -1942,7 +1942,8 @@ def build_beat_regeneration_prompt(template_id: str, topic: str,
                                     audience: str = "General",
                                     tone: str = "",
                                     duration_minutes: int = 10,
-                                    structured: dict = None) -> str:
+                                    structured: dict = None,
+                                    spine: dict = None) -> str:
     """
     Build prompt for regenerating specific beats or an entire act.
 
@@ -1975,17 +1976,39 @@ def build_beat_regeneration_prompt(template_id: str, topic: str,
     context_beats = beats[min_idx:max_idx]
 
     target_text = ""
+    target_claim_ids_per_beat = []
     context_text = ""
     for i, beat in enumerate(context_beats):
         real_idx = min_idx + i
-        marker = " <<<TARGET>>>" if real_idx in target_beat_indices else ""
-        entry = f"[Beat {real_idx}] Act: {beat.get('act', '')} | Beat: {beat.get('beat', '')}{marker}\n{beat.get('text', beat.get('narration', ''))}\n"
+        is_target = real_idx in target_beat_indices
+        marker = " <<<TARGET>>>" if is_target else ""
+        claim_tag = ""
+        beat_claims = beat.get("claim_ids") or []
+        if spine and beat_claims:
+            claim_tag = f" | Claims: [{', '.join(beat_claims)}]"
+        entry = (
+            f"[Beat {real_idx}] Act: {beat.get('act', '')} | "
+            f"Beat: {beat.get('beat', '')}{claim_tag}{marker}\n"
+            f"{beat.get('text', beat.get('narration', ''))}\n"
+        )
         context_text += entry + "\n"
-        if real_idx in target_beat_indices:
+        if is_target:
             target_text += entry + "\n"
+            target_claim_ids_per_beat.append(beat_claims)
 
-    # Truncate dossier to keep prompt reasonable
-    dossier_excerpt = research_dossier[:4000]
+    # When a spine is available, feed the spine block instead of a truncated
+    # dossier excerpt — this anchors regenerated beats to the same ranked claims
+    # as the originals and prevents fact drift across regenerations.
+    spine_block = _format_spine_block(spine) if spine else ""
+    if spine_block:
+        dossier_section = ""  # spine replaces dossier as the source-of-truth in regen
+    else:
+        # Legacy path: truncate dossier to keep prompt reasonable.
+        dossier_excerpt = research_dossier[:4000]
+        dossier_section = (
+            "═══════ RESEARCH DOSSIER (for reference) ═══════\n"
+            f"{dossier_excerpt}\n"
+        )
 
     # Append structured claims/sources block when available so the regenerated
     # beat can cite the same source ids as the original script.
@@ -2004,6 +2027,23 @@ def build_beat_regeneration_prompt(template_id: str, topic: str,
 - Maintain the same act/beat role in the story structure
 - Flow naturally from the preceding beat and into the following beat"""
 
+    if spine_block:
+        if mode == "restyle":
+            spine_rule = (
+                "- CLAIM ANCHOR: Each regenerated beat MUST carry the SAME claim_ids "
+                "as its original (set equality). The facts come from those exact spine claims; "
+                "only phrasing and structure may change."
+            )
+        else:
+            spine_rule = (
+                "- CLAIM ANCHOR: Each regenerated beat MUST cite spine claim_ids only. "
+                "Pick claims of equal or higher importance than the originals. Do NOT cite ids that don't exist in the spine."
+            )
+        beat_schema_extra = ', "claim_ids": ["k1", "k4"]'
+    else:
+        spine_rule = ""
+        beat_schema_extra = ""
+
     prompt = f"""You are a scriptwriter editing a narration for a YouTube video.
 
 TOPIC: {topic}
@@ -2014,10 +2054,7 @@ VIDEO LENGTH: {duration_minutes} minutes
 
 {mode_instruction}
 
-═══════ RESEARCH DOSSIER (for reference) ═══════
-{dossier_excerpt}
-{structured_block}
-═══════ SURROUNDING CONTEXT (for flow) ═══════
+{dossier_section}{structured_block}{spine_block}═══════ SURROUNDING CONTEXT (for flow) ═══════
 {context_text}
 
 ═══════ BEATS TO REGENERATE ═══════
@@ -2027,14 +2064,15 @@ VIDEO LENGTH: {duration_minutes} minutes
 - Return ONLY the regenerated beats (not the surrounding context)
 - Each beat must flow naturally from the beat before it and into the beat after it
 - Maintain approximately the same word count per beat (±20%)
-- Every fact must come from the research dossier
+- Every fact must come from the research above
 - Write as spoken narration — compelling, vivid, conversational
 - Return {len(target_beat_indices)} beat(s)
+{spine_rule}
 
 ═══════ OUTPUT FORMAT ═══════
 Return a JSON array:
 [
-  {{"act": "ACT NAME", "beat": "Beat Name", "text": "The regenerated narration text..."}},
+  {{"act": "ACT NAME", "beat": "Beat Name", "text": "The regenerated narration text..."{beat_schema_extra}}},
   ...
 ]
 

@@ -349,6 +349,7 @@ def regenerate_beats(topic: str, template_id: str, research_dossier: str,
                      audience: str = "General", tone: str = "",
                      duration_minutes: int = 10, api_key: str = None,
                      structured: dict = None,
+                     spine: dict = None,
                      uid: str = None, project_id: str = None) -> dict:
     """
     Regenerate specific beats or an entire act within a narration.
@@ -356,39 +357,62 @@ def regenerate_beats(topic: str, template_id: str, research_dossier: str,
     Args:
         topic: Video topic
         template_id: Template being used
-        research_dossier: Full research dossier text
+        research_dossier: Full research dossier text (ignored when spine is supplied)
         full_narration: Complete narration JSON {title, narration: [...]}
         target_act: If set, regenerate all beats in this act
         target_beat_indices: List of 0-based beat indices to regenerate
         mode: 'restyle' or 'reimagine'
         audience, tone, duration_minutes: Context for the prompt
         api_key: Gemini API key
+        spine: Optional Narrative Spine — when present, regenerated beats are
+            anchored to the originals' claim_ids (restyle) or to spine claims
+            of equal/higher importance (reimagine).
 
     Returns:
         Dict with 'success' and 'beats' (list of regenerated beats), or 'error'
     """
-    prompt = build_beat_regeneration_prompt(
-        template_id=template_id,
-        topic=topic,
-        research_dossier=research_dossier,
-        full_narration=full_narration,
-        target_beat_indices=target_beat_indices or [],
-        target_act=target_act,
-        mode=mode,
-        audience=audience,
-        tone=tone,
-        duration_minutes=duration_minutes,
-        structured=structured,
-    )
+    # Resolve target indices for claim-id anchoring
+    beats_all = full_narration.get("narration", []) if isinstance(full_narration, dict) else []
+    if target_act and not target_beat_indices:
+        target_beat_indices = [i for i, b in enumerate(beats_all) if b.get("act") == target_act]
+    target_beat_indices = target_beat_indices or []
 
+    original_claim_ids_per_idx = {}
+    if spine:
+        for i in target_beat_indices:
+            if 0 <= i < len(beats_all):
+                original_claim_ids_per_idx[i] = list(beats_all[i].get("claim_ids") or [])
+
+    def _build_prompt(extra_system=""):
+        p = build_beat_regeneration_prompt(
+            template_id=template_id,
+            topic=topic,
+            research_dossier=research_dossier,
+            full_narration=full_narration,
+            target_beat_indices=target_beat_indices,
+            target_act=target_act,
+            mode=mode,
+            audience=audience,
+            tone=tone,
+            duration_minutes=duration_minutes,
+            structured=structured,
+            spine=spine,
+        )
+        if extra_system and not p.startswith("Error:"):
+            p = extra_system + "\n\n" + p
+        return p
+
+    prompt = _build_prompt()
     if prompt.startswith("Error:"):
         return {"error": prompt}
 
-    raw_response = generate_content(
-        prompt, model_name="gemini-3-flash-preview", api_key=api_key,
-        uid=uid, project_id=project_id, description="regenerate_beats",
-    )
+    def _call(p):
+        return generate_content(
+            p, model_name="gemini-3-flash-preview", api_key=api_key,
+            uid=uid, project_id=project_id, description="regenerate_beats",
+        )
 
+    raw_response = _call(prompt)
     if not raw_response or raw_response.startswith("Error:"):
         return {"error": raw_response or "Gemini returned an empty response for beat regeneration."}
 
@@ -398,9 +422,56 @@ def regenerate_beats(topic: str, template_id: str, research_dossier: str,
             regenerated = regenerated.get("beats", [regenerated])
         if not isinstance(regenerated, list):
             regenerated = [regenerated]
-        return {"success": True, "beats": regenerated}
     except json.JSONDecodeError:
         return {"error": f"Could not parse regenerated beats as JSON: {raw_response[:200]}"}
+
+    # Spine-aware claim-id verification (restyle mode requires set-equality)
+    if spine and mode == "restyle" and original_claim_ids_per_idx:
+        if not _claim_ids_match(regenerated, original_claim_ids_per_idx, target_beat_indices):
+            print("[Regen] claim_ids drifted on restyle — retrying with tighter prompt")
+            tighter = (
+                "STRICT: This is a CLAIM-ANCHORED RESTYLE. Each regenerated beat MUST "
+                "return the EXACT claim_ids of its original (same set, same elements, "
+                "no additions, no removals). If you cannot satisfy this, return an "
+                "error string instead of JSON."
+            )
+            raw_retry = _call(_build_prompt(extra_system=tighter))
+            if raw_retry and not raw_retry.startswith("Error:"):
+                try:
+                    retry_parsed = _parse_json_response(raw_retry)
+                    if isinstance(retry_parsed, dict):
+                        retry_parsed = retry_parsed.get("beats", [retry_parsed])
+                    if isinstance(retry_parsed, list) and _claim_ids_match(
+                        retry_parsed, original_claim_ids_per_idx, target_beat_indices
+                    ):
+                        regenerated = retry_parsed
+                    else:
+                        print("[Regen] retry still drifted — accepting with warning")
+                except json.JSONDecodeError:
+                    print("[Regen] retry parse failed — accepting first response with warning")
+
+    # Always sanitize: drop any claim_ids not in spine
+    if spine:
+        valid_ids = {c.get("id") for c in (spine.get("key_claims") or []) if c.get("id")}
+        for b in regenerated:
+            if isinstance(b, dict):
+                b["claim_ids"] = [k for k in (b.get("claim_ids") or []) if k in valid_ids]
+
+    return {"success": True, "beats": regenerated}
+
+
+def _claim_ids_match(regenerated_beats, original_claim_ids_per_idx, target_beat_indices) -> bool:
+    """Return True iff every regenerated beat's claim_ids set equals the original's at the same position."""
+    if len(regenerated_beats) != len(target_beat_indices):
+        return False
+    for new_beat, orig_idx in zip(regenerated_beats, target_beat_indices):
+        if not isinstance(new_beat, dict):
+            return False
+        new_set = set(new_beat.get("claim_ids") or [])
+        orig_set = set(original_claim_ids_per_idx.get(orig_idx) or [])
+        if new_set != orig_set:
+            return False
+    return True
 
 
 def generate_production_table(narration_json: dict, duration_minutes: int = 10,

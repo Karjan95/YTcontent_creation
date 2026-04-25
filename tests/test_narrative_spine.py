@@ -330,3 +330,121 @@ def test_generate_narration_passes_spine_into_prompt():
     assert result.get("success")
     assert "NARRATIVE SPINE" in captured["prompt"]
     assert result["narration"]["narration"][0]["claim_ids"] == ["k1"]
+
+
+# ── Step 3: beat regeneration is spine-aware ────────────────────────────────
+
+def test_regen_prompt_drops_dossier_excerpt_when_spine_present():
+    """With a spine, the regen prompt must NOT include the legacy 4000-char dossier excerpt."""
+    from research_templates import build_beat_regeneration_prompt
+    spine = json.loads(VALID_SPINE_JSON)
+    long_dossier = "DOSSIER_MARKER " * 500  # > 4000 chars
+    full_narration = {
+        "narration": [
+            {"act": "ACT 1", "beat": "Hook", "text": "...", "claim_ids": ["k1"]},
+            {"act": "ACT 1", "beat": "Stakes", "text": "...", "claim_ids": ["k2"]},
+        ]
+    }
+    prompt = build_beat_regeneration_prompt(
+        template_id="educational_explainer",
+        topic="T", research_dossier=long_dossier,
+        full_narration=full_narration,
+        target_beat_indices=[0],
+        spine=spine,
+    )
+    assert "DOSSIER_MARKER" not in prompt
+    assert "RESEARCH DOSSIER" not in prompt
+    assert "NARRATIVE SPINE" in prompt
+    assert "CLAIM ANCHOR" in prompt
+    assert "Claims: [k1]" in prompt
+
+
+def test_regen_prompt_keeps_dossier_excerpt_when_spine_missing():
+    """Legacy path: without spine, the 4000-char dossier truncation must still apply."""
+    from research_templates import build_beat_regeneration_prompt
+    long_dossier = "DOSSIER_MARKER " * 500
+    full_narration = {"narration": [{"act": "A", "beat": "B", "text": "..."}]}
+    prompt = build_beat_regeneration_prompt(
+        template_id="educational_explainer",
+        topic="T", research_dossier=long_dossier,
+        full_narration=full_narration,
+        target_beat_indices=[0],
+    )
+    assert "RESEARCH DOSSIER" in prompt
+    assert "DOSSIER_MARKER" in prompt
+    assert "NARRATIVE SPINE" not in prompt
+
+
+def test_regenerate_beats_restyle_preserves_claim_ids():
+    """Restyle mode: regenerated beat returning the same claim_ids passes through unchanged."""
+    import research_scriptwriter as rsw
+    spine = json.loads(VALID_SPINE_JSON)
+    full_narration = {
+        "narration": [
+            {"act": "ACT 1", "beat": "Hook", "text": "old", "claim_ids": ["k1", "k2"]},
+        ]
+    }
+    fake = json.dumps([
+        {"act": "ACT 1", "beat": "Hook", "text": "new phrasing", "claim_ids": ["k1", "k2"]},
+    ])
+    with patch.object(rsw, 'generate_content', return_value=fake) as mock_gc:
+        result = rsw.regenerate_beats(
+            topic="T", template_id="educational_explainer",
+            research_dossier="dossier", full_narration=full_narration,
+            target_beat_indices=[0], mode="restyle",
+            spine=spine, api_key="fake",
+        )
+    assert result.get("success")
+    assert result["beats"][0]["claim_ids"] == ["k1", "k2"]
+    assert mock_gc.call_count == 1  # no retry needed
+
+
+def test_regenerate_beats_restyle_drift_triggers_retry():
+    """Restyle drift (different claim_ids) triggers one tighter retry."""
+    import research_scriptwriter as rsw
+    spine = json.loads(VALID_SPINE_JSON)
+    full_narration = {
+        "narration": [
+            {"act": "ACT 1", "beat": "Hook", "text": "old", "claim_ids": ["k1"]},
+        ]
+    }
+    drifted = json.dumps([
+        {"act": "ACT 1", "beat": "Hook", "text": "new", "claim_ids": ["k3"]},
+    ])
+    corrected = json.dumps([
+        {"act": "ACT 1", "beat": "Hook", "text": "newer", "claim_ids": ["k1"]},
+    ])
+    with patch.object(rsw, 'generate_content', side_effect=[drifted, corrected]) as mock_gc:
+        result = rsw.regenerate_beats(
+            topic="T", template_id="educational_explainer",
+            research_dossier="dossier", full_narration=full_narration,
+            target_beat_indices=[0], mode="restyle",
+            spine=spine, api_key="fake",
+        )
+    assert result.get("success")
+    assert result["beats"][0]["claim_ids"] == ["k1"]
+    assert mock_gc.call_count == 2  # original + retry
+
+
+def test_regenerate_beats_sanitizes_unknown_claim_ids():
+    """Unknown ids (k_ghost) must be stripped from regenerated beats."""
+    import research_scriptwriter as rsw
+    spine = json.loads(VALID_SPINE_JSON)
+    full_narration = {
+        "narration": [
+            {"act": "ACT 1", "beat": "Hook", "text": "old", "claim_ids": ["k1"]},
+        ]
+    }
+    # Reimagine path: no equality check, but sanitization still runs
+    drifted = json.dumps([
+        {"act": "ACT 1", "beat": "Hook", "text": "new", "claim_ids": ["k1", "k_ghost"]},
+    ])
+    with patch.object(rsw, 'generate_content', return_value=drifted):
+        result = rsw.regenerate_beats(
+            topic="T", template_id="educational_explainer",
+            research_dossier="dossier", full_narration=full_narration,
+            target_beat_indices=[0], mode="reimagine",
+            spine=spine, api_key="fake",
+        )
+    assert result.get("success")
+    assert result["beats"][0]["claim_ids"] == ["k1"]
