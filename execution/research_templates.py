@@ -1658,7 +1658,7 @@ def build_script_prompt(template_id: str, topic: str, research_dossier: str,
                         selected_title: str = None, format_preset: str = "",
                         viewer_outcome: str = "", style_blend_mode: str = "clone",
                         custom_audience: str = "", custom_tone: str = "",
-                        structured: dict = None) -> str:
+                        structured: dict = None, spine: dict = None) -> str:
     """
     PHASE 1: Build prompt for the creative narration.
     
@@ -1858,6 +1858,25 @@ def build_script_prompt(template_id: str, topic: str, research_dossier: str,
             "\n\nWhen a claim comes from the research, reference the source id inline like [s3]."
         )
 
+    # When a Narrative Spine is available, inject it after the structured block.
+    # The spine pre-ranks claims and defines the narrative order, so the model can
+    # bind each beat to specific [kN] ids instead of inventing structure from scratch.
+    spine_block = _format_spine_block(spine) if spine else ""
+    if spine_block:
+        system_prompt = (
+            system_prompt.rstrip() +
+            "\n\nA Narrative Spine has been provided below. Each beat MUST cite the spine "
+            "claim ids it covers via a `claim_ids` field. Every PRIMARY claim must appear "
+            "in at least one beat. Follow the logical_flow order unless a stronger creative "
+            "case justifies reordering."
+        )
+        # Spine-aware beats include claim_ids; legacy path omits it.
+        beat_schema_extra = ',\n      "claim_ids": ["k1", "k4"]'
+        sources_field = '"claim_ids_used": ["k1", "k2", "k3"]'
+    else:
+        beat_schema_extra = ""
+        sources_field = '"sources_used": ["source1", "source2"]'
+
     prompt = f"""{system_prompt}
 
 ═══════ ASSIGNMENT ═══════
@@ -1869,7 +1888,7 @@ LENGTH: {duration_minutes} minutes (~{total_words} words of narration){pacing_bl
 
 ═══════ RESEARCH DOSSIER ═══════
 {research_dossier}
-{structured_block}{style_section}{focus_block}{outcome_block}
+{structured_block}{spine_block}{style_section}{focus_block}{outcome_block}
 ═══════ STORY STRUCTURE (SCAFFOLDING) ═══════
 {acts_text}
 
@@ -1894,15 +1913,15 @@ Return a JSON object with this structure:
     {{
       "act": "ACT 1",
       "beat": "Dramatic Hook",
-      "text": "The full narration text for this beat. Write it as flowing prose — as many sentences as needed to fill the beat's share of the total duration. Be compelling, specific, and vivid. Use facts from the research dossier."
+      "text": "The full narration text for this beat. Write it as flowing prose — as many sentences as needed to fill the beat's share of the total duration. Be compelling, specific, and vivid. Use facts from the research dossier."{beat_schema_extra}
     }},
     {{
       "act": "ACT 1",
       "beat": "Context / Stakes",
-      "text": "The narration for this beat..."
+      "text": "The narration for this beat..."{beat_schema_extra}
     }}
   ],
-  "sources_used": ["source1", "source2"]
+  {sources_field}
 }}
 
 CRITICAL: Write the narration as if you are speaking to the viewer. Make it compelling, vivid, conversational.

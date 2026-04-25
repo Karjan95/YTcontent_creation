@@ -241,6 +241,7 @@ def generate_narration(topic: str, template_id: str, research_dossier: str,
                        viewer_outcome: str = "", style_blend_mode: str = "clone",
                        custom_audience: str = "", custom_tone: str = "",
                        api_key: str = None, structured: dict = None,
+                       spine: dict = None,
                        uid: str = None, project_id: str = None) -> dict:
     """
     PHASE 1: Generate a flowing narration script using Gemini.
@@ -267,6 +268,7 @@ def generate_narration(topic: str, template_id: str, research_dossier: str,
         custom_audience=custom_audience,
         custom_tone=custom_tone,
         structured=structured,
+        spine=spine,
     )
 
     raw_response = generate_content(
@@ -279,6 +281,8 @@ def generate_narration(topic: str, template_id: str, research_dossier: str,
 
     try:
         narration_data = _parse_json_response(raw_response)
+        if spine:
+            _sanitize_narration_claim_ids(narration_data, spine)
         return {"success": True, "narration": narration_data}
     except json.JSONDecodeError:
         return {
@@ -289,6 +293,33 @@ def generate_narration(topic: str, template_id: str, research_dossier: str,
                 "parse_error": "Could not parse Phase 1 narration as JSON."
             }
         }
+
+
+def _sanitize_narration_claim_ids(narration_data: dict, spine: dict) -> None:
+    """Drop beat claim_ids that don't exist in the spine; recompute claim_ids_used.
+
+    Mutates `narration_data` in place. Beats with zero remaining claim_ids
+    are kept (rendered as `unsourced` in the UI) so the user can target a regen.
+    """
+    if not isinstance(narration_data, dict) or not isinstance(spine, dict):
+        return
+    valid_ids = {c.get("id") for c in (spine.get("key_claims") or []) if c.get("id")}
+    if not valid_ids:
+        return
+    used = set()
+    unsourced = 0
+    for beat in narration_data.get("narration") or []:
+        if not isinstance(beat, dict):
+            continue
+        raw_ids = beat.get("claim_ids") or []
+        cleaned = [k for k in raw_ids if isinstance(k, str) and k in valid_ids]
+        beat["claim_ids"] = cleaned
+        used.update(cleaned)
+        if not cleaned:
+            unsourced += 1
+    narration_data["claim_ids_used"] = sorted(used)
+    if unsourced:
+        print(f"[Narration] {unsourced} beat(s) returned with no valid claim_ids — rendered as unsourced")
 
 
 def auto_suggest_tone(template_id: str, selected_title: str,

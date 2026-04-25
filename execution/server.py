@@ -2346,6 +2346,7 @@ def generate_script_route():
             custom_tone=custom_tone,
             api_key=g.api_key,
             structured=_load_project_structured(project_id),
+            spine=_load_project_spine(project_id),
             uid=g.uid, project_id=project_id,
         )
 

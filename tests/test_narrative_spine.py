@@ -252,3 +252,81 @@ def test_validate_spine_edit_rejects_dangling_source():
     cleaned, err = _validate_spine_edit(spine)
     assert cleaned is None
     assert "unknown source" in err
+
+
+# ── Step 2: build_script_prompt consumes spine ──────────────────────────────
+
+def test_script_prompt_unchanged_when_spine_missing():
+    """Without a spine, the script prompt must produce its legacy shape."""
+    from research_templates import build_script_prompt
+    prompt = build_script_prompt(
+        template_id="educational_explainer",
+        topic="Test topic",
+        research_dossier="Some dossier",
+    )
+    assert "NARRATIVE SPINE" not in prompt
+    assert '"sources_used"' in prompt
+    assert '"claim_ids"' not in prompt
+
+
+def test_script_prompt_injects_spine_block_when_spine_present():
+    """With a spine, the prompt must inject the spine block and bind beats to claim_ids."""
+    from research_templates import build_script_prompt
+    spine = json.loads(VALID_SPINE_JSON)
+    prompt = build_script_prompt(
+        template_id="educational_explainer",
+        topic="Test topic",
+        research_dossier="Some dossier",
+        spine=spine,
+    )
+    assert "NARRATIVE SPINE" in prompt
+    assert "Logical flow: k1 → k2 → k3" in prompt
+    assert '"claim_ids"' in prompt
+    assert '"claim_ids_used"' in prompt
+    assert '"sources_used"' not in prompt
+
+
+# ── Step 2: claim_ids sanitization on returned narration ────────────────────
+
+def test_sanitize_narration_drops_unknown_claim_ids():
+    import research_scriptwriter as rsw
+    spine = json.loads(VALID_SPINE_JSON)
+    narration = {
+        "narration": [
+            {"act": "ACT 1", "beat": "Hook", "text": "...", "claim_ids": ["k1", "k_ghost"]},
+            {"act": "ACT 1", "beat": "Stakes", "text": "...", "claim_ids": ["k2"]},
+            {"act": "ACT 2", "beat": "Twist", "text": "...", "claim_ids": []},
+        ]
+    }
+    rsw._sanitize_narration_claim_ids(narration, spine)
+    assert narration["narration"][0]["claim_ids"] == ["k1"]
+    assert narration["narration"][1]["claim_ids"] == ["k2"]
+    assert narration["narration"][2]["claim_ids"] == []
+    assert narration["claim_ids_used"] == ["k1", "k2"]
+
+
+def test_generate_narration_passes_spine_into_prompt():
+    """End-to-end: spine flows from generate_narration through build_script_prompt to Gemini."""
+    import research_scriptwriter as rsw
+    spine = json.loads(VALID_SPINE_JSON)
+    fake_response = json.dumps({
+        "title": "T",
+        "narration": [
+            {"act": "ACT 1", "beat": "Hook", "text": "x", "claim_ids": ["k1"]},
+        ],
+        "claim_ids_used": ["k1"],
+    })
+    captured = {}
+
+    def fake_gen(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return fake_response
+
+    with patch.object(rsw, 'generate_content', side_effect=fake_gen):
+        result = rsw.generate_narration(
+            topic="T", template_id="educational_explainer",
+            research_dossier="dossier", spine=spine, api_key="fake",
+        )
+    assert result.get("success")
+    assert "NARRATIVE SPINE" in captured["prompt"]
+    assert result["narration"]["narration"][0]["claim_ids"] == ["k1"]
