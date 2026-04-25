@@ -34,6 +34,7 @@ from research_scriptwriter import (
     build_research_dossier, generate_narration, generate_production_table,
     auto_suggest_tone, regenerate_beats, start_deep_research, poll_deep_research,
     run_structured_research, structure_from_blob, _markdown_from_structured,
+    extract_narrative_spine,
 )
 from youtube_utils import analyze_style
 from kie_client import (check_credits as kie_check_credits,
@@ -60,6 +61,11 @@ DEBUG_SAVE_TMP = os.environ.get('DEBUG_SAVE_TMP', 'true').lower() == 'true'
 # object alongside the legacy markdown dossier. Kept off by default during rollout.
 RESEARCH_STRUCTURED_ENABLED = os.environ.get('RESEARCH_STRUCTURED', '0').lower() in ('1', 'true', 'yes')
 RESEARCH_SCHEMA_VERSION = 1
+
+# Feature flag: when true, /api/research auto-extracts a Narrative Spine
+# (ranked claims + logical flow + source map) and downstream prompts consume it
+# to keep facts and citations stable across script gen, beat regen, and production.
+NARRATIVE_SPINE_ENABLED = os.environ.get('NARRATIVE_SPINE', '0').lower() in ('1', 'true', 'yes')
 
 # ── Firebase Initialization ──
 SERVICE_ACCOUNT_PATH = os.path.join(PROJECT_DIR, "firebase-service-account.json")
@@ -237,6 +243,26 @@ def _load_project_structured(project_id):
         return data.get('research_structured')
     except Exception as e:
         print(f"[Project] Failed to load research_structured for {project_id}: {e}")
+        return None
+
+
+def _load_project_spine(project_id):
+    """Return the research_spine object for a project, or None.
+
+    Spine is the ranked-claim narrative outline derived from the dossier;
+    downstream prompts cite claims by stable [kN] ids. Returns None when the
+    project has no spine (legacy projects, flag disabled, or extraction failed).
+    """
+    if not project_id:
+        return None
+    try:
+        doc = db.collection('users').document(g.uid).collection('projects').document(project_id).get()
+        if not doc.exists:
+            return None
+        data = doc.to_dict() or {}
+        return data.get('research_spine')
+    except Exception as e:
+        print(f"[Project] Failed to load research_spine for {project_id}: {e}")
         return None
 
 
@@ -1576,6 +1602,27 @@ Return ONLY the JSON."""
                 print(f"[Research] Structured pipeline failed: {e}")
                 structured = None
 
+        # Narrative Spine extraction — additive ranked outline consumed by downstream prompts.
+        spine = None
+        if NARRATIVE_SPINE_ENABLED:
+            try:
+                print(f"[Research] NARRATIVE_SPINE enabled — extracting spine")
+                spine_result = extract_narrative_spine(
+                    topic=topic,
+                    research_dossier=dossier,
+                    structured=structured,
+                    api_key=g.api_key,
+                    uid=g.uid, project_id=research_pid,
+                )
+                if spine_result.get("success"):
+                    spine = spine_result["spine"]
+                    print(f"[Research] Spine: {len(spine.get('key_claims', []))} claims")
+                else:
+                    print(f"[Research] Spine extraction failed: {spine_result.get('error', 'unknown')}")
+            except Exception as e:
+                print(f"[Research] Spine extraction error: {e}")
+                spine = None
+
         # Save to .tmp for reference
         if DEBUG_SAVE_TMP:
             save_dir = TMP_DIR
@@ -1602,6 +1649,8 @@ Return ONLY the JSON."""
                 if structured is not None:
                     project_payload['research_structured'] = structured
                     project_payload['research_schema_version'] = RESEARCH_SCHEMA_VERSION
+                if spine is not None:
+                    project_payload['research_spine'] = spine
                 project_ref.set(project_payload, merge=True)
                 print(f"[Research] Saved to project document {project_id}")
             except Exception as e:
@@ -1639,6 +1688,8 @@ Return ONLY the JSON."""
         }
         if structured is not None:
             response['structured'] = structured
+        if spine is not None:
+            response['spine'] = spine
         return jsonify(response)
 
     except Exception as e:
@@ -1886,6 +1937,27 @@ def poll_research():
                 print(f"[Deep Research] Structure extraction failed: {e}")
                 structured = None
 
+        # Narrative Spine extraction (same as /api/research path).
+        spine = None
+        if NARRATIVE_SPINE_ENABLED:
+            try:
+                print(f"[Deep Research] NARRATIVE_SPINE enabled — extracting spine")
+                spine_result = extract_narrative_spine(
+                    topic=topic,
+                    research_dossier=dossier,
+                    structured=structured,
+                    api_key=g.api_key,
+                    uid=g.uid, project_id=data.get('project_id'),
+                )
+                if spine_result.get("success"):
+                    spine = spine_result["spine"]
+                    print(f"[Deep Research] Spine: {len(spine.get('key_claims', []))} claims")
+                else:
+                    print(f"[Deep Research] Spine extraction failed: {spine_result.get('error', 'unknown')}")
+            except Exception as e:
+                print(f"[Deep Research] Spine extraction error: {e}")
+                spine = None
+
         # Save to Firestore
         try:
             dossier_ref = db.collection('users').document(g.uid).collection('dossiers').document()
@@ -1934,6 +2006,8 @@ def poll_research():
                 if structured is not None:
                     project_payload['research_structured'] = structured
                     project_payload['research_schema_version'] = RESEARCH_SCHEMA_VERSION
+                if spine is not None:
+                    project_payload['research_spine'] = spine
                 project_ref.set(project_payload, merge=True)
                 print(f"[Deep Research] Saved to project document {project_id}")
             except Exception as e:
@@ -1949,7 +2023,169 @@ def poll_research():
         }
         if structured is not None:
             response['structured'] = structured
+        if spine is not None:
+            response['spine'] = spine
         return jsonify(response)
+
+    except Exception as e:
+        return safe_error_response(e)
+
+
+# ────────────────────────────────────────────────────────────────
+#  NARRATIVE SPINE — extract / save user edits
+# ────────────────────────────────────────────────────────────────
+
+def _validate_spine_edit(spine):
+    """Validate a user-edited spine before persisting. Returns (cleaned, error_msg)."""
+    if not isinstance(spine, dict):
+        return None, "spine must be an object"
+    claims = spine.get("key_claims")
+    if not isinstance(claims, list) or not claims:
+        return None, "key_claims must be a non-empty list"
+
+    seen_ids = set()
+    cleaned_claims = []
+    valid_importance = {"primary", "supporting", "color"}
+    for c in claims:
+        if not isinstance(c, dict):
+            continue
+        kid = (c.get("id") or "").strip()
+        text = (c.get("text") or "").strip()
+        if not kid or not text:
+            return None, "every claim needs an id and text"
+        if kid in seen_ids:
+            return None, f"duplicate claim id: {kid}"
+        seen_ids.add(kid)
+        importance = c.get("importance") if c.get("importance") in valid_importance else "supporting"
+        cleaned = {
+            "id": kid,
+            "text": text,
+            "importance": importance,
+            "source_ids": [s for s in (c.get("source_ids") or []) if isinstance(s, str)],
+        }
+        if c.get("act_hint"):
+            cleaned["act_hint"] = c["act_hint"]
+        cleaned_claims.append(cleaned)
+
+    flow = spine.get("logical_flow") or []
+    if not isinstance(flow, list):
+        return None, "logical_flow must be a list"
+    for k in flow:
+        if k not in seen_ids:
+            return None, f"logical_flow references unknown id: {k}"
+
+    source_map = spine.get("source_map") or {}
+    if not isinstance(source_map, dict):
+        return None, "source_map must be an object"
+    for c in cleaned_claims:
+        for sid in c["source_ids"]:
+            if sid not in source_map:
+                return None, f"claim {c['id']} references unknown source: {sid}"
+
+    return {
+        "version": spine.get("version", 1),
+        "topic": spine.get("topic", ""),
+        "key_claims": cleaned_claims,
+        "logical_flow": list(flow),
+        "source_map": source_map,
+        "extracted_at": spine.get("extracted_at"),
+        "edited_by_user": True,
+    }, None
+
+
+@app.route('/api/research/spine', methods=['POST'])
+@require_auth
+@limiter.limit("30/hour")
+def research_spine_extract():
+    """Extract a Narrative Spine from a dossier and persist it on the project doc.
+
+    Body: { project_id?, topic, dossier?, structured? }
+    If project_id is supplied and dossier is omitted, loads the dossier from Firestore.
+    Returns: { success, spine } or { error }.
+    """
+    if not NARRATIVE_SPINE_ENABLED:
+        return jsonify({'error': 'Narrative Spine is not enabled on this server'}), 403
+    try:
+        data = request.json or {}
+        project_id = data.get('project_id')
+        topic = (data.get('topic') or '').strip()
+        dossier = data.get('dossier') or ''
+        structured = data.get('structured')
+
+        if project_id and (not dossier or not topic or structured is None):
+            try:
+                doc = db.collection('users').document(g.uid).collection('projects').document(project_id).get()
+                if doc.exists:
+                    pdata = doc.to_dict() or {}
+                    dossier = dossier or pdata.get('research_dossier', '')
+                    topic = topic or pdata.get('topic') or pdata.get('name', '')
+                    if structured is None:
+                        structured = pdata.get('research_structured')
+            except Exception as e:
+                print(f"[Spine] Failed to load project {project_id}: {e}")
+
+        if not dossier or not dossier.strip():
+            return jsonify({'error': 'Dossier is required'}), 400
+
+        result = extract_narrative_spine(
+            topic=topic,
+            research_dossier=dossier,
+            structured=structured,
+            api_key=g.api_key,
+            uid=g.uid, project_id=project_id,
+        )
+        if not result.get('success'):
+            return jsonify({'error': result.get('error', 'Spine extraction failed')}), 502
+
+        spine = result['spine']
+
+        if project_id:
+            try:
+                project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
+                project_ref.set({
+                    'research_spine': spine,
+                    'last_updated_at': firestore.SERVER_TIMESTAMP,
+                }, merge=True)
+            except Exception as e:
+                print(f"[Spine] Failed to persist for {project_id}: {e}")
+
+        return jsonify({'success': True, 'spine': spine})
+
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/research/spine', methods=['PUT'])
+@require_auth
+@limiter.limit("120/hour")
+def research_spine_save():
+    """Save a user-edited Narrative Spine to the project doc.
+
+    Body: { project_id, spine }
+    Returns: { success, spine } or { error }.
+    """
+    try:
+        data = request.json or {}
+        project_id = data.get('project_id')
+        spine = data.get('spine')
+        if not project_id:
+            return jsonify({'error': 'project_id is required'}), 400
+
+        cleaned, err = _validate_spine_edit(spine)
+        if err:
+            return jsonify({'error': f'Invalid spine: {err}'}), 400
+
+        try:
+            project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
+            project_ref.set({
+                'research_spine': cleaned,
+                'last_updated_at': firestore.SERVER_TIMESTAMP,
+            }, merge=True)
+        except Exception as e:
+            print(f"[Spine] Save failed for {project_id}: {e}")
+            return jsonify({'error': 'Failed to save spine'}), 500
+
+        return jsonify({'success': True, 'spine': cleaned})
 
     except Exception as e:
         return safe_error_response(e)

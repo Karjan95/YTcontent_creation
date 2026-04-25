@@ -1426,6 +1426,132 @@ def _format_structured_claims_block(structured: dict, max_claims: int = 40,
     return "\n".join(lines) + "\n"
 
 
+def _format_spine_block(spine: dict, max_claims: int = 40) -> str:
+    """Render a Narrative Spine object as a SPINE block for prompts.
+
+    Returns empty string if `spine` is missing or has no key_claims.
+    Output shape:
+
+        ═══════ NARRATIVE SPINE (cite via [k1], [k2]…) ═══════
+        Logical flow: k1 → k4 → k2 → ...
+        [k1] (primary) Claim text [s1][s4]
+        [k2] (supporting) Claim text [s3]
+        ...
+    """
+    if not spine or not isinstance(spine, dict):
+        return ""
+    claims = spine.get("key_claims") or []
+    if not claims:
+        return ""
+
+    flow = spine.get("logical_flow") or [c.get("id", "") for c in claims]
+    by_id = {c.get("id"): c for c in claims if c.get("id")}
+    ordered = [by_id[k] for k in flow if k in by_id][:max_claims]
+    # Append any claims not in flow (defensive)
+    seen = {c.get("id") for c in ordered}
+    for c in claims:
+        if c.get("id") not in seen:
+            ordered.append(c)
+            if len(ordered) >= max_claims:
+                break
+
+    lines = ["", "═══════ NARRATIVE SPINE (cite via [k1], [k2]…) ═══════"]
+    if flow:
+        lines.append("Logical flow: " + " → ".join(flow[:max_claims]))
+    for c in ordered:
+        kid = c.get("id", "")
+        text = (c.get("text") or "").strip()
+        importance = c.get("importance") or "supporting"
+        src_ids = c.get("source_ids") or []
+        cite_tags = "".join(f"[{sid}]" for sid in src_ids)
+        lines.append(f"[{kid}] ({importance}) {text} {cite_tags}".rstrip())
+
+    source_map = spine.get("source_map") or {}
+    if source_map:
+        lines.append("")
+        lines.append("═══════ SOURCES ═══════")
+        for sid, s in list(source_map.items())[:30]:
+            title = s.get("title") or "(untitled)"
+            publisher = s.get("publisher", "")
+            url = s.get("url", "")
+            quote = s.get("quote", "")
+            line = f"[{sid}] {title}"
+            if publisher:
+                line += f" — {publisher}"
+            if url:
+                line += f" ({url})"
+            if quote:
+                line += f' | "{quote[:180]}"'
+            lines.append(line)
+
+    return "\n".join(lines) + "\n"
+
+
+def build_spine_extraction_prompt(topic: str, research_dossier: str,
+                                   structured: dict = None) -> str:
+    """Build the prompt that extracts a Narrative Spine from a research dossier.
+
+    The spine is a ranked, source-bound outline that downstream consumers
+    (script gen, beat regen, production prompts) consume to keep facts and
+    citations stable across the pipeline.
+    """
+    structured_block = _format_structured_claims_block(structured) if structured else ""
+
+    return f"""You are a narrative architect for documentary video.
+
+Your job: read the research dossier below and extract a NARRATIVE SPINE — a ranked,
+source-bound outline of the most important claims and the order they should unfold
+in a video narration.
+
+═══════ TOPIC ═══════
+{topic}
+
+═══════ RESEARCH DOSSIER ═══════
+{research_dossier}
+{structured_block}
+═══════ TASK ═══════
+1. Identify 8 to 18 KEY CLAIMS — atomic, verifiable statements drawn ONLY from the dossier.
+   - Do NOT invent facts. Every claim must trace to text in the dossier (or to a source
+     listed in the CLAIMS/SOURCES block above when present).
+2. Rank each claim by importance:
+   - "primary"     — load-bearing facts the narrative cannot be told without (~3-5 of these)
+   - "supporting"  — context, evidence, examples that strengthen primaries
+   - "color"       — anecdotes, quotes, figures of speech that add texture
+3. Define the LOGICAL FLOW — the order these claims should appear in the narration
+   (a list of claim ids). Build a story arc: hook → context → escalation → payoff.
+4. Bind every claim to its sources. If a CLAIMS/SOURCES block was provided above,
+   reuse those `s1`, `s2`, … ids. Otherwise mint sources from URLs found in the dossier
+   text (use ids `s1`, `s2`, …).
+
+═══════ OUTPUT FORMAT ═══════
+Return ONLY a JSON object with this exact shape:
+{{
+  "version": 1,
+  "topic": {json.dumps(topic)},
+  "key_claims": [
+    {{
+      "id": "k1",
+      "text": "Atomic claim text (one sentence).",
+      "importance": "primary",
+      "source_ids": ["s1", "s4"]
+    }},
+    ...
+  ],
+  "logical_flow": ["k1", "k4", "k2", ...],
+  "source_map": {{
+    "s1": {{"url": "https://...", "title": "Page title", "publisher": "", "quote": ""}},
+    ...
+  }}
+}}
+
+CRITICAL RULES:
+- Use the prefix "k" for claim ids (k1, k2, …) and "s" for source ids (s1, s2, …).
+- Every id in `logical_flow` MUST appear in `key_claims`.
+- Every id in `source_ids` MUST appear in `source_map`.
+- Aim for 3-5 primary claims; the rest split between supporting and color.
+- Do not include any prose outside the JSON. Begin."""
+
+
 def _top_claim_texts(structured: dict, limit: int = 20) -> str:
     """Render the top claim texts as a bulleted list, for cases where we want
     a compact claims-only summary (e.g. title suggestions). Returns "" when empty."""

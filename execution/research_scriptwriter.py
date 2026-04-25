@@ -30,6 +30,7 @@ from research_templates import (
     build_storyboard_prompt,
     build_continuity_supervisor_prompt,
     build_dp_prompt,
+    build_spine_extraction_prompt,
 )
 from gemini_client import generate_content
 
@@ -66,6 +67,136 @@ def build_research_dossier(topic: str, template_id: str,
         dossier_parts.append("")
 
     return "\n".join(dossier_parts)
+
+
+def _validate_spine(spine: dict) -> dict:
+    """Validate and clean a parsed spine object.
+
+    Drops dangling source ids, drops flow ids that don't exist in key_claims,
+    and rebuilds source_map keys from the union of source_ids actually used.
+    Returns the cleaned spine. Raises ValueError on structural failures
+    (missing key_claims, wrong types) so the caller can fall back to legacy.
+    """
+    if not isinstance(spine, dict):
+        raise ValueError("spine is not a dict")
+    claims = spine.get("key_claims")
+    if not isinstance(claims, list) or not claims:
+        raise ValueError("spine has no key_claims")
+
+    valid_importance = {"primary", "supporting", "color"}
+    source_map = spine.get("source_map") or {}
+    if not isinstance(source_map, dict):
+        source_map = {}
+
+    cleaned_claims = []
+    seen_ids = set()
+    for c in claims:
+        if not isinstance(c, dict):
+            continue
+        kid = c.get("id")
+        text = (c.get("text") or "").strip()
+        if not kid or not text or kid in seen_ids:
+            continue
+        seen_ids.add(kid)
+        importance = c.get("importance") if c.get("importance") in valid_importance else "supporting"
+        src_ids = [s for s in (c.get("source_ids") or []) if s in source_map]
+        cleaned = {
+            "id": kid,
+            "text": text,
+            "importance": importance,
+            "source_ids": src_ids,
+        }
+        if c.get("act_hint"):
+            cleaned["act_hint"] = c["act_hint"]
+        cleaned_claims.append(cleaned)
+
+    if not cleaned_claims:
+        raise ValueError("no valid key_claims after cleaning")
+
+    flow = spine.get("logical_flow") or []
+    cleaned_flow = [k for k in flow if k in seen_ids]
+    # Append any claims missing from flow at the end
+    for kid in seen_ids:
+        if kid not in cleaned_flow:
+            cleaned_flow.append(kid)
+
+    used_source_ids = {s for c in cleaned_claims for s in c["source_ids"]}
+    cleaned_source_map = {sid: source_map[sid] for sid in used_source_ids if sid in source_map}
+
+    return {
+        "version": spine.get("version", 1),
+        "topic": spine.get("topic", ""),
+        "key_claims": cleaned_claims,
+        "logical_flow": cleaned_flow,
+        "source_map": cleaned_source_map,
+        "extracted_at": spine.get("extracted_at"),
+        "edited_by_user": bool(spine.get("edited_by_user", False)),
+    }
+
+
+def extract_narrative_spine(topic: str, research_dossier: str,
+                             structured: dict = None,
+                             api_key: str = None,
+                             uid: str = None,
+                             project_id: str = None) -> dict:
+    """Extract a Narrative Spine (ranked claims + logical flow + source map) from a dossier.
+
+    Returns:
+        On success: {"success": True, "spine": {...validated spine...}}
+        On failure: {"error": "...", "spine": None} — caller should fall back to legacy path.
+    """
+    if not research_dossier or not research_dossier.strip():
+        return {"error": "Empty research dossier", "spine": None}
+
+    prompt = build_spine_extraction_prompt(
+        topic=topic,
+        research_dossier=research_dossier,
+        structured=structured,
+    )
+
+    raw_response = generate_content(
+        prompt, model_name="gemini-2.5-flash",
+        temperature=0.2, api_key=api_key,
+        uid=uid, project_id=project_id, description="extract_narrative_spine",
+    )
+
+    if not raw_response or raw_response.startswith("Error:"):
+        return {"error": raw_response or "Empty response from Gemini", "spine": None}
+
+    try:
+        parsed = _parse_json_response(raw_response)
+    except (json.JSONDecodeError, ValueError) as e:
+        return {"error": f"Could not parse spine JSON: {e}", "spine": None}
+
+    # Bootstrap source_map from structured research when the model didn't repopulate it
+    if structured and isinstance(structured, dict):
+        existing = parsed.get("source_map") or {}
+        for s in (structured.get("sources") or []):
+            sid = s.get("id")
+            if sid and sid not in existing:
+                existing[sid] = {
+                    "url": s.get("url", ""),
+                    "title": s.get("title", ""),
+                    "publisher": s.get("publisher", ""),
+                    "quote": s.get("quote", ""),
+                }
+        parsed["source_map"] = existing
+
+    parsed["topic"] = topic
+    parsed["extracted_at"] = parsed.get("extracted_at") or _now_iso()
+
+    try:
+        cleaned = _validate_spine(parsed)
+    except ValueError as e:
+        return {"error": f"Spine validation failed: {e}", "spine": None}
+
+    return {"success": True, "spine": cleaned}
+
+
+def _now_iso() -> str:
+    """ISO 8601 UTC timestamp helper."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _parse_json_response(raw_response: str) -> dict:
