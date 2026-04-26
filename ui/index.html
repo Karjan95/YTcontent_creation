@@ -39,6 +39,66 @@
         .claim-chip.color { background: transparent; color: #888; border-color: #444; border-style: dashed; }
         .claim-chip.unsourced { background: #3a1a1a; color: #f88; border-color: #5a2a2a; }
         .claim-chips-row { margin-top: 4px; }
+        .claim-chip-text { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+
+        /* Spine summary row (collapsed default) */
+        .spine-summary-row {
+            display: flex; align-items: center; gap: 10px;
+            padding: 10px 12px; cursor: pointer; user-select: none;
+            background: #1c1c1f; border: 1px solid #2a2a30; border-radius: 6px;
+            transition: background 0.15s;
+        }
+        .spine-summary-row:hover { background: #22232a; }
+        .spine-summary-icon { font-size: 1.2em; }
+        .spine-summary-text { flex: 1; color: #ddd; font-size: 0.95em; }
+        .spine-summary-toggle { color: #6cf; font-size: 0.85em; }
+        .spine-summary-row.expanded .spine-summary-toggle::after { content: ""; }
+        .spine-editor { margin-top: 12px; }
+        .spine-editor-help { color: #888; font-size: 0.88em; margin: 6px 0 10px; line-height: 1.5; }
+
+        /* AI suggestions panel */
+        .spine-suggestions-panel {
+            margin: 10px 0; padding: 12px;
+            background: #1a2030; border: 1px solid #2a3a5a; border-radius: 6px;
+        }
+        .spine-suggestions-header { display: flex; gap: 10px; align-items: baseline; margin-bottom: 8px; }
+        .spine-suggestions-header strong { color: #9cd; }
+        .spine-suggestions-note { color: #888; font-size: 0.88em; }
+        .spine-suggestions-list { list-style: none; padding: 0; margin: 0; }
+        .spine-suggestion-item {
+            padding: 8px; margin-bottom: 6px;
+            background: #14182a; border: 1px solid #2a3a5a; border-radius: 4px;
+        }
+        .spine-suggestion-kind {
+            display: inline-block; font-size: 0.75em; font-family: monospace;
+            padding: 1px 6px; border-radius: 3px; margin-right: 6px;
+            background: #2a3a5a; color: #cfe;
+        }
+        .spine-suggestion-rationale { color: #aaa; font-size: 0.88em; margin: 4px 0; }
+        .spine-suggestion-preview { color: #cde; font-size: 0.9em; font-family: ui-monospace, monospace; margin: 4px 0; }
+        .spine-suggestion-actions { display: flex; gap: 8px; margin-top: 6px; }
+        .spine-suggestions-actions { margin-top: 8px; }
+
+        /* Toast notifications */
+        .app-toast-container {
+            position: fixed; bottom: 20px; right: 20px;
+            display: flex; flex-direction: column; gap: 8px;
+            z-index: 9999; pointer-events: none;
+        }
+        .app-toast {
+            min-width: 240px; max-width: 360px;
+            padding: 10px 14px;
+            background: #1c2c3c; color: #cfe;
+            border: 1px solid #2a4a6a; border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            font-size: 0.92em;
+            opacity: 0; transform: translateY(8px);
+            transition: opacity 0.2s, transform 0.2s;
+            pointer-events: auto;
+        }
+        .app-toast.show { opacity: 1; transform: translateY(0); }
+        .app-toast.warn { background: #3a2f00; color: #ffe28a; border-color: #6b5500; }
+        .app-toast.error { background: #3a1a1a; color: #f88; border-color: #5a2a2a; }
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap"
         rel="stylesheet">
@@ -53,6 +113,7 @@
 </head>
 
 <body>
+    <div id="appToastContainer" class="app-toast-container" aria-live="polite"></div>
     <!-- ═══ LOGIN SCREEN ═══ -->
     <div id="loginScreen" class="login-screen">
         <div class="login-card">
@@ -642,16 +703,35 @@
 
                                 <!-- Narrative Spine — ranked outline binding facts to sources -->
                                 <div id="spineSection" class="spine-section" style="display: none;">
-                                    <div class="section-header" style="display: flex; align-items: center; gap: 8px;">
-                                        <label class="input-label" style="margin: 0;">🦴 Narrative Spine</label>
-                                        <span style="font-size: 0.85em; color: #888;">Ranked claims with sources. Drag to reorder.</span>
+                                    <div id="spineSummaryRow" class="spine-summary-row" onclick="toggleSpineEditor()">
+                                        <span class="spine-summary-icon">🦴</span>
+                                        <span class="spine-summary-text" id="spineSummaryText">AI organized your research into a story arc.</span>
+                                        <span class="spine-summary-toggle" id="spineSummaryToggle">Open to review ▾</span>
                                     </div>
-                                    <div id="spineBanner"></div>
-                                    <ul id="spineClaimList" class="spine-claim-list"></ul>
-                                    <div class="spine-actions">
-                                        <button class="btn-tiny" id="spineSaveBtn" onclick="saveSpine()">Save Spine</button>
-                                        <button class="btn-tiny" id="spineRetryBtn" onclick="extractSpine(true)" style="display:none;">Retry extraction</button>
-                                        <span id="spineStatus" style="font-size:0.85em; color:#888;"></span>
+                                    <div id="spineEditor" class="spine-editor" style="display: none;">
+                                        <div id="spineBanner"></div>
+                                        <p class="spine-editor-help">
+                                            The AI ranked these facts and decided their order automatically.
+                                            You can leave it as-is — generating the script will just work.
+                                            Tweak only if you want a different angle.
+                                        </p>
+                                        <ul id="spineClaimList" class="spine-claim-list"></ul>
+                                        <div id="spineSuggestionsPanel" class="spine-suggestions-panel" style="display: none;">
+                                            <div class="spine-suggestions-header">
+                                                <strong>AI suggestions</strong>
+                                                <span id="spineSuggestionsNote" class="spine-suggestions-note"></span>
+                                            </div>
+                                            <ul id="spineSuggestionsList" class="spine-suggestions-list"></ul>
+                                            <div class="spine-suggestions-actions">
+                                                <button class="btn-tiny" onclick="dismissSpineSuggestions()">Done</button>
+                                            </div>
+                                        </div>
+                                        <div class="spine-actions">
+                                            <button class="btn-tiny" id="spineAskAiBtn" onclick="requestSpineSuggestions()">✨ Ask AI to suggest changes</button>
+                                            <button class="btn-tiny" id="spineSaveBtn" onclick="saveSpine()">Save Spine</button>
+                                            <button class="btn-tiny" id="spineRetryBtn" onclick="extractSpine(true)" style="display:none;">Retry extraction</button>
+                                            <span id="spineStatus" style="font-size:0.85em; color:#888;"></span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -2909,12 +2989,57 @@ No formatting needed — just paste your narration!"></textarea>
             el.innerHTML = `<h4>Verified Sources (${sources.length})</h4><ul class="structured-sources">${items}</ul>`;
         }
 
+        // ── Toast notifications ─────────────────────────────────────────────
+        function showToast(message, kind = 'info', durationMs = 3500) {
+            const container = document.getElementById('appToastContainer');
+            if (!container) return;
+            const toast = document.createElement('div');
+            toast.className = `app-toast ${kind}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+            // Animate in on next frame
+            requestAnimationFrame(() => toast.classList.add('show'));
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 250);
+            }, durationMs);
+        }
+
         // ── Narrative Spine UI ─────────────────────────────────────────────
         function _setSpineStatus(text, isError = false) {
             const el = document.getElementById('spineStatus');
             if (!el) return;
             el.textContent = text || '';
             el.style.color = isError ? '#f88' : '#888';
+        }
+
+        function toggleSpineEditor() {
+            const editor = document.getElementById('spineEditor');
+            const row = document.getElementById('spineSummaryRow');
+            const toggle = document.getElementById('spineSummaryToggle');
+            if (!editor || !row || !toggle) return;
+            const willOpen = editor.style.display === 'none';
+            editor.style.display = willOpen ? 'block' : 'none';
+            row.classList.toggle('expanded', willOpen);
+            toggle.textContent = willOpen ? 'Close ▴' : 'Open to review ▾';
+        }
+
+        function _updateSpineSummary(spine) {
+            const el = document.getElementById('spineSummaryText');
+            if (!el || !spine || !Array.isArray(spine.key_claims)) return;
+            const total = spine.key_claims.length;
+            const primary = spine.key_claims.filter(c => c.importance === 'primary').length;
+            const reranked = spine.reranked_for && spine.reranked_for.title;
+            const tail = reranked ? ` Story arc tuned for "${spine.reranked_for.title}".` : '';
+            el.textContent = `AI organized ${total} facts into a story arc with ${primary} lead claims.${tail}`;
+        }
+
+        function _claimSnippet(text, words = 5) {
+            const t = (text || '').trim();
+            if (!t) return '(empty)';
+            const parts = t.split(/\s+/);
+            if (parts.length <= words) return t;
+            return parts.slice(0, words).join(' ') + '…';
         }
 
         function _setSpineBanner(html, kind = 'info') {
@@ -2934,6 +3059,7 @@ No formatting needed — just paste your narration!"></textarea>
                 return;
             }
             section.style.display = 'block';
+            _updateSpineSummary(spine);
 
             const byId = {};
             for (const c of spine.key_claims) byId[c.id] = c;
@@ -3079,11 +3205,167 @@ No formatting needed — just paste your narration!"></textarea>
                 currentResearchSpine = data.spine;
                 renderSpine(currentResearchSpine);
                 _setSpineStatus('Saved ✓');
+                showToast('Spine saved');
                 setTimeout(() => _setSpineStatus(''), 2000);
             } catch (err) {
                 console.error('[Spine] save failed:', err);
                 _setSpineStatus(`Save failed: ${err.message}`, true);
             }
+        }
+
+        // ── Auto-rerank on title selection ─────────────────────────────────
+        let _spineRerankPending = false;
+        async function rerankSpineForAngle({ silent = false } = {}) {
+            if (!currentProjectId || !currentResearchSpine) return;
+            if (_spineRerankPending) return;
+            // Respect manual edits — don't auto-rerank if the user touched the spine.
+            if (currentResearchSpine.edited_by_user) {
+                if (!silent) showToast("Story arc kept — your edits won't be overwritten", 'info');
+                return;
+            }
+            _spineRerankPending = true;
+            const audience = document.getElementById('audienceSelect')?.value || '';
+            const tone = document.getElementById('toneSelect')?.value || '';
+            const formatPreset = document.getElementById('formatPresetSelect')?.value || '';
+            if (!silent) showToast('Re-ranking story arc for this title…');
+            try {
+                const response = await authFetch('/api/research/spine/rerank', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        project_id: currentProjectId,
+                        title: selectedTitle || '',
+                        audience, tone, format_preset: formatPreset,
+                    }),
+                });
+                if (response.status === 403) return;  // flag off — silent
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Re-rank failed');
+                }
+                currentResearchSpine = data.spine;
+                renderSpine(currentResearchSpine);
+                if (!silent) showToast('Story arc tuned for this title ✓');
+            } catch (err) {
+                console.error('[Spine] rerank failed:', err);
+                if (!silent) showToast(`Couldn't re-rank story arc: ${err.message}`, 'warn');
+            } finally {
+                _spineRerankPending = false;
+            }
+        }
+
+        // ── AI-suggested spine edits ───────────────────────────────────────
+        let _currentSpineSuggestions = [];
+        async function requestSpineSuggestions() {
+            if (!currentProjectId || !currentResearchSpine) return;
+            const btn = document.getElementById('spineAskAiBtn');
+            if (btn) btn.disabled = true;
+            _setSpineStatus('Asking the AI…');
+            try {
+                const audience = document.getElementById('audienceSelect')?.value || '';
+                const response = await authFetch('/api/research/spine/suggest-edits', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        project_id: currentProjectId,
+                        title: selectedTitle || '',
+                        audience,
+                    }),
+                });
+                if (response.status === 403) {
+                    showToast('AI suggestions are disabled on this server', 'warn');
+                    return;
+                }
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Suggestion request failed');
+                }
+                _currentSpineSuggestions = data.suggestions || [];
+                _renderSpineSuggestions(data.overall_note || '');
+                _setSpineStatus('');
+                if (!_currentSpineSuggestions.length) {
+                    showToast('AI says: ' + (data.overall_note || 'no changes needed'));
+                }
+            } catch (err) {
+                console.error('[Spine] suggestions failed:', err);
+                _setSpineStatus(`Suggestion failed: ${err.message}`, true);
+                showToast(`Couldn't get suggestions: ${err.message}`, 'warn');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        function _renderSpineSuggestions(note) {
+            const panel = document.getElementById('spineSuggestionsPanel');
+            const list = document.getElementById('spineSuggestionsList');
+            const noteEl = document.getElementById('spineSuggestionsNote');
+            if (!panel || !list || !noteEl) return;
+            noteEl.textContent = note || '';
+            if (!_currentSpineSuggestions.length) {
+                list.innerHTML = '<li class="spine-suggestion-item" style="color:#888;">No suggestions — your story arc looks strong.</li>';
+                panel.style.display = 'block';
+                return;
+            }
+            const byId = {};
+            for (const c of currentResearchSpine.key_claims) byId[c.id] = c;
+            list.innerHTML = _currentSpineSuggestions.map((s, idx) => {
+                const claim = byId[s.claim_id];
+                const claimSnippet = claim ? _claimSnippet(claim.text, 7) : s.claim_id;
+                let preview = '';
+                if (s.kind === 'reorder') {
+                    preview = `Move "<em>${escapeHtml(claimSnippet)}</em>" to position ${s.new_position + 1}`;
+                } else if (s.kind === 'importance') {
+                    const old = claim ? (claim.importance || 'supporting') : '?';
+                    preview = `Change "<em>${escapeHtml(claimSnippet)}</em>" from <strong>${escapeHtml(old)}</strong> → <strong>${escapeHtml(s.new_importance)}</strong>`;
+                } else if (s.kind === 'edit_text') {
+                    preview = `Rewrite "<em>${escapeHtml(claimSnippet)}</em>" → "<em>${escapeHtml(_claimSnippet(s.new_text, 12))}</em>"`;
+                }
+                return `
+                <li class="spine-suggestion-item">
+                  <div><span class="spine-suggestion-kind">${escapeHtml(s.kind)}</span><span class="spine-suggestion-preview">${preview}</span></div>
+                  <div class="spine-suggestion-rationale">${escapeHtml(s.rationale || '')}</div>
+                  <div class="spine-suggestion-actions">
+                    <button class="btn-tiny" onclick="applySpineSuggestion(${idx})">Apply</button>
+                    <button class="btn-tiny btn-secondary" onclick="rejectSpineSuggestion(${idx})">Reject</button>
+                  </div>
+                </li>`;
+            }).join('');
+            panel.style.display = 'block';
+        }
+
+        function applySpineSuggestion(idx) {
+            const s = _currentSpineSuggestions[idx];
+            if (!s || !currentResearchSpine) return;
+            const claim = (currentResearchSpine.key_claims || []).find(c => c.id === s.claim_id);
+            if (!claim) { showToast(`Claim ${s.claim_id} not found`, 'warn'); return; }
+            if (s.kind === 'importance') {
+                claim.importance = s.new_importance;
+            } else if (s.kind === 'edit_text') {
+                claim.text = s.new_text;
+            } else if (s.kind === 'reorder') {
+                const flow = (currentResearchSpine.logical_flow || []).slice();
+                const cur = flow.indexOf(s.claim_id);
+                if (cur >= 0) flow.splice(cur, 1);
+                const target = Math.max(0, Math.min(s.new_position, flow.length));
+                flow.splice(target, 0, s.claim_id);
+                currentResearchSpine.logical_flow = flow;
+            }
+            currentResearchSpine.edited_by_user = true;
+            _currentSpineSuggestions.splice(idx, 1);
+            renderSpine(currentResearchSpine);
+            _renderSpineSuggestions(document.getElementById('spineSuggestionsNote').textContent);
+            showToast('Suggestion applied — remember to Save Spine');
+        }
+
+        function rejectSpineSuggestion(idx) {
+            _currentSpineSuggestions.splice(idx, 1);
+            _renderSpineSuggestions(document.getElementById('spineSuggestionsNote').textContent);
+        }
+
+        function dismissSpineSuggestions() {
+            _currentSpineSuggestions = [];
+            const panel = document.getElementById('spineSuggestionsPanel');
+            if (panel) panel.style.display = 'none';
         }
 
         function displayResearchResults(data, projectId) {
@@ -3225,6 +3507,8 @@ No formatting needed — just paste your narration!"></textarea>
             document.getElementById('titleEditInput').value = title;
             selectedTitle = title;
             updateTitleConfirmBadge();
+            // Re-rank the spine for this angle (cheap second pass, visible feedback)
+            if (currentResearchSpine) rerankSpineForAngle();
         }
 
         function updateTitleConfirmBadge() {
@@ -3489,18 +3773,20 @@ No formatting needed — just paste your narration!"></textarea>
             // No spine → render nothing (legacy behavior). Beat with no claim_ids → red unsourced chip.
             if (!currentResearchSpine || !Array.isArray(currentResearchSpine.key_claims)) return '';
             if (!Array.isArray(claim_ids) || !claim_ids.length) {
-                return `<div class="claim-chips-row"><span class="claim-chip unsourced" title="This beat has no spine claims attached. Use Restyle/Reimagine to anchor it.">unsourced</span></div>`;
+                return `<div class="claim-chips-row"><span class="claim-chip unsourced" title="This beat isn't anchored to any spine fact. Use Restyle/Reimagine to anchor it.">no source</span></div>`;
             }
             const byId = {};
             for (const c of currentResearchSpine.key_claims) byId[c.id] = c;
             const sourceMap = currentResearchSpine.source_map || {};
             const chips = claim_ids.map(kid => {
                 const claim = byId[kid];
-                if (!claim) return `<span class="claim-chip unsourced" title="Unknown claim id: ${escapeHtml(kid)}">${escapeHtml(kid)}</span>`;
+                if (!claim) return `<span class="claim-chip unsourced" title="Unknown fact: ${escapeHtml(kid)}">${escapeHtml(kid)}</span>`;
                 const importance = claim.importance || 'supporting';
                 const srcUrls = (claim.source_ids || []).map(sid => sourceMap[sid]?.url).filter(Boolean);
-                const tooltip = (claim.text || '') + (srcUrls.length ? `\n\nSources:\n${srcUrls.join('\n')}` : '');
-                return `<span class="claim-chip ${escapeHtml(importance)}" title="${escapeHtml(tooltip)}">${escapeHtml(kid)}</span>`;
+                const fullText = claim.text || '';
+                const snippet = _claimSnippet(fullText, 5);
+                const tooltip = fullText + (srcUrls.length ? `\n\nSources:\n${srcUrls.join('\n')}` : '');
+                return `<span class="claim-chip ${escapeHtml(importance)}" title="${escapeHtml(tooltip)}"><span class="claim-chip-text">${escapeHtml(snippet)}</span></span>`;
             }).join('');
             return `<div class="claim-chips-row">${chips}</div>`;
         }
