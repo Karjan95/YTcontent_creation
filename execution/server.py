@@ -34,7 +34,7 @@ from research_scriptwriter import (
     build_research_dossier, generate_narration, generate_production_table,
     auto_suggest_tone, regenerate_beats, start_deep_research, poll_deep_research,
     run_structured_research, structure_from_blob, _markdown_from_structured,
-    extract_narrative_spine,
+    extract_narrative_spine, rerank_narrative_spine, suggest_spine_edits,
 )
 from youtube_utils import analyze_style
 from kie_client import (check_credits as kie_check_credits,
@@ -2186,6 +2186,100 @@ def research_spine_save():
             return jsonify({'error': 'Failed to save spine'}), 500
 
         return jsonify({'success': True, 'spine': cleaned})
+
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/research/spine/rerank', methods=['POST'])
+@require_auth
+@limiter.limit("60/hour")
+def research_spine_rerank():
+    """Re-rank an existing spine for a chosen title / audience / tone.
+
+    Body: { project_id, title?, audience?, tone?, format_preset? }
+    Loads the spine from Firestore, re-ranks via Gemini, persists the result.
+    Returns: { success, spine } or { error }.
+
+    On any failure (parse error, empty model response), the original spine is
+    preserved in Firestore and returned in the error response so the caller
+    can surface the error without losing data.
+    """
+    if not NARRATIVE_SPINE_ENABLED:
+        return jsonify({'error': 'Narrative Spine is not enabled on this server'}), 403
+    try:
+        data = request.json or {}
+        project_id = data.get('project_id')
+        if not project_id:
+            return jsonify({'error': 'project_id is required'}), 400
+
+        spine = _load_project_spine(project_id)
+        if not spine:
+            return jsonify({'error': 'No spine found for this project. Run extraction first.'}), 404
+
+        result = rerank_narrative_spine(
+            spine=spine,
+            title=(data.get('title') or '').strip(),
+            audience=(data.get('audience') or '').strip(),
+            tone=(data.get('tone') or '').strip(),
+            format_preset=(data.get('format_preset') or '').strip(),
+            api_key=g.api_key,
+            uid=g.uid, project_id=project_id,
+        )
+        if not result.get('success'):
+            return jsonify({'error': result.get('error', 'Rerank failed'), 'spine': spine}), 502
+
+        new_spine = result['spine']
+        try:
+            project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
+            project_ref.set({
+                'research_spine': new_spine,
+                'last_updated_at': firestore.SERVER_TIMESTAMP,
+            }, merge=True)
+        except Exception as e:
+            print(f"[Spine rerank] Persist failed for {project_id}: {e}")
+
+        return jsonify({'success': True, 'spine': new_spine})
+
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/research/spine/suggest-edits', methods=['POST'])
+@require_auth
+@limiter.limit("60/hour")
+def research_spine_suggest_edits():
+    """Ask the AI to propose 0-5 targeted improvements to the current spine.
+
+    Body: { project_id, title?, audience? }
+    Returns: { success, suggestions: [...], overall_note: "..." } or { error }.
+
+    Suggestions are NOT applied. The UI shows them with apply/reject controls
+    and PUTs the final spine back via /api/research/spine when the user accepts.
+    """
+    if not NARRATIVE_SPINE_ENABLED:
+        return jsonify({'error': 'Narrative Spine is not enabled on this server'}), 403
+    try:
+        data = request.json or {}
+        project_id = data.get('project_id')
+        if not project_id:
+            return jsonify({'error': 'project_id is required'}), 400
+
+        spine = _load_project_spine(project_id)
+        if not spine:
+            return jsonify({'error': 'No spine found for this project. Run extraction first.'}), 404
+
+        result = suggest_spine_edits(
+            spine=spine,
+            title=(data.get('title') or '').strip(),
+            audience=(data.get('audience') or '').strip(),
+            api_key=g.api_key,
+            uid=g.uid, project_id=project_id,
+        )
+        if not result.get('success'):
+            return jsonify({'error': result.get('error', 'Suggestion generation failed')}), 502
+
+        return jsonify(result)
 
     except Exception as e:
         return safe_error_response(e)

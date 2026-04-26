@@ -31,6 +31,8 @@ from research_templates import (
     build_continuity_supervisor_prompt,
     build_dp_prompt,
     build_spine_extraction_prompt,
+    build_spine_rerank_prompt,
+    build_spine_suggest_edits_prompt,
 )
 from gemini_client import generate_content
 
@@ -197,6 +199,165 @@ def _now_iso() -> str:
     """ISO 8601 UTC timestamp helper."""
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
+
+
+def rerank_narrative_spine(spine: dict, title: str = "", audience: str = "",
+                            tone: str = "", format_preset: str = "",
+                            api_key: str = None,
+                            uid: str = None, project_id: str = None) -> dict:
+    """Re-rank an existing spine for a chosen title / audience / tone.
+
+    Preserves every claim's id and text. Only `importance` and `logical_flow`
+    change. On any failure, returns the original spine unchanged so the caller
+    can keep going with what they had.
+
+    Returns:
+        {"success": True, "spine": {...}}  on success
+        {"error": "...", "spine": <original>} on failure (caller can fall back)
+    """
+    if not spine or not isinstance(spine, dict):
+        return {"error": "No spine provided", "spine": spine}
+    claims = spine.get("key_claims") or []
+    if not claims:
+        return {"error": "Spine has no claims", "spine": spine}
+
+    prompt = build_spine_rerank_prompt(
+        spine=spine, title=title, audience=audience,
+        tone=tone, format_preset=format_preset,
+    )
+    raw = generate_content(
+        prompt, model_name="gemini-2.5-flash",
+        temperature=0.2, api_key=api_key,
+        uid=uid, project_id=project_id, description="rerank_narrative_spine",
+    )
+    if not raw or raw.startswith("Error:"):
+        return {"error": raw or "Empty response from Gemini", "spine": spine}
+
+    try:
+        parsed = _parse_json_response(raw)
+    except (json.JSONDecodeError, ValueError) as e:
+        return {"error": f"Could not parse rerank JSON: {e}", "spine": spine}
+
+    valid_ids = {c.get("id") for c in claims if c.get("id")}
+    valid_importance = {"primary", "supporting", "color"}
+
+    new_importance = {}
+    for entry in (parsed.get("key_claims") or []):
+        if not isinstance(entry, dict):
+            continue
+        kid = entry.get("id")
+        imp = entry.get("importance")
+        if kid in valid_ids and imp in valid_importance:
+            new_importance[kid] = imp
+
+    new_flow_raw = parsed.get("logical_flow") or []
+    new_flow = [k for k in new_flow_raw if k in valid_ids]
+    # Append any claims missing from the returned flow at the end (defensive)
+    for kid in valid_ids:
+        if kid not in new_flow:
+            new_flow.append(kid)
+
+    if not new_importance:
+        return {"error": "Rerank returned no usable importance updates", "spine": spine}
+
+    # Build the new spine: same claim text + sources, updated importance + flow
+    updated_claims = []
+    for c in claims:
+        kid = c.get("id")
+        cleaned = dict(c)
+        if kid in new_importance:
+            cleaned["importance"] = new_importance[kid]
+        updated_claims.append(cleaned)
+
+    return {
+        "success": True,
+        "spine": {
+            **spine,
+            "key_claims": updated_claims,
+            "logical_flow": new_flow,
+            "edited_by_user": False,
+            "reranked_for": {
+                "title": title or None,
+                "audience": audience or None,
+                "tone": tone or None,
+                "format_preset": format_preset or None,
+            },
+        },
+    }
+
+
+def suggest_spine_edits(spine: dict, title: str = "", audience: str = "",
+                         api_key: str = None,
+                         uid: str = None, project_id: str = None) -> dict:
+    """Ask the AI to propose 0-5 targeted improvements to a spine.
+
+    Each suggestion has a kind (reorder | importance | edit_text), the affected
+    claim id, the proposed change, and a one-sentence rationale. The caller's
+    UI lets the user apply or reject each suggestion individually.
+
+    Returns:
+        {"success": True, "suggestions": [...], "overall_note": "..."}
+        {"error": "..."} on failure
+    """
+    if not spine or not isinstance(spine, dict):
+        return {"error": "No spine provided"}
+    claims = spine.get("key_claims") or []
+    if not claims:
+        return {"error": "Spine has no claims"}
+
+    prompt = build_spine_suggest_edits_prompt(
+        spine=spine, title=title, audience=audience,
+    )
+    raw = generate_content(
+        prompt, model_name="gemini-2.5-flash",
+        temperature=0.4, api_key=api_key,
+        uid=uid, project_id=project_id, description="suggest_spine_edits",
+    )
+    if not raw or raw.startswith("Error:"):
+        return {"error": raw or "Empty response from Gemini"}
+
+    try:
+        parsed = _parse_json_response(raw)
+    except (json.JSONDecodeError, ValueError) as e:
+        return {"error": f"Could not parse suggestions JSON: {e}"}
+
+    valid_ids = {c.get("id") for c in claims if c.get("id")}
+    valid_kinds = {"reorder", "importance", "edit_text"}
+    valid_importance = {"primary", "supporting", "color"}
+
+    cleaned = []
+    for s in (parsed.get("suggestions") or [])[:5]:
+        if not isinstance(s, dict):
+            continue
+        kind = s.get("kind")
+        kid = s.get("claim_id")
+        rationale = (s.get("rationale") or "").strip()
+        if kind not in valid_kinds or kid not in valid_ids or not rationale:
+            continue
+        if kind == "reorder":
+            try:
+                pos = int(s.get("new_position"))
+            except (TypeError, ValueError):
+                continue
+            if pos < 0 or pos >= len(valid_ids):
+                continue
+            cleaned.append({"kind": "reorder", "claim_id": kid, "new_position": pos, "rationale": rationale})
+        elif kind == "importance":
+            new_imp = s.get("new_importance")
+            if new_imp not in valid_importance:
+                continue
+            cleaned.append({"kind": "importance", "claim_id": kid, "new_importance": new_imp, "rationale": rationale})
+        elif kind == "edit_text":
+            new_text = (s.get("new_text") or "").strip()
+            if not new_text:
+                continue
+            cleaned.append({"kind": "edit_text", "claim_id": kid, "new_text": new_text, "rationale": rationale})
+
+    return {
+        "success": True,
+        "suggestions": cleaned,
+        "overall_note": (parsed.get("overall_note") or "").strip(),
+    }
 
 
 def _parse_json_response(raw_response: str) -> dict:

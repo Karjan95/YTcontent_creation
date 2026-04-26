@@ -573,3 +573,133 @@ def test_e2e_claim_id_survives_research_to_production():
     # And the SPINE REFERENCE block must include the k3 claim entry.
     assert "[k3]" in director_prompt
     assert "Steam spins turbines." in director_prompt  # k3's text from VALID_SPINE_JSON
+
+
+# ── rerank_narrative_spine ──────────────────────────────────────────────────
+
+def test_rerank_preserves_claim_text_and_ids_only_changes_importance_and_flow():
+    import research_scriptwriter as rsw
+    spine = json.loads(VALID_SPINE_JSON)
+    rerank_response = json.dumps({
+        "key_claims": [
+            {"id": "k1", "importance": "supporting"},
+            {"id": "k2", "importance": "primary"},
+            {"id": "k3", "importance": "primary"},
+        ],
+        "logical_flow": ["k3", "k2", "k1"],
+    })
+    with patch.object(rsw, 'generate_content', return_value=rerank_response):
+        result = rsw.rerank_narrative_spine(
+            spine=spine, title="Why turbines matter", api_key="fake",
+        )
+    assert result.get("success")
+    new = result["spine"]
+    # Same claim text + ids
+    by_id = {c["id"]: c for c in new["key_claims"]}
+    assert by_id["k1"]["text"] == "Fission splits heavy nuclei."
+    assert by_id["k3"]["text"] == "Steam spins turbines."
+    # Updated importance
+    assert by_id["k1"]["importance"] == "supporting"
+    assert by_id["k3"]["importance"] == "primary"
+    # Updated flow
+    assert new["logical_flow"] == ["k3", "k2", "k1"]
+    # Audit trail
+    assert new["reranked_for"]["title"] == "Why turbines matter"
+
+
+def test_rerank_returns_original_spine_on_parse_error():
+    import research_scriptwriter as rsw
+    spine = json.loads(VALID_SPINE_JSON)
+    with patch.object(rsw, 'generate_content', return_value="not json"):
+        result = rsw.rerank_narrative_spine(spine=spine, title="X", api_key="fake")
+    assert "error" in result
+    # Original spine returned so caller can keep going
+    assert result["spine"]["logical_flow"] == ["k1", "k2", "k3"]
+
+
+def test_rerank_drops_unknown_claim_ids():
+    import research_scriptwriter as rsw
+    spine = json.loads(VALID_SPINE_JSON)
+    bad_response = json.dumps({
+        "key_claims": [
+            {"id": "k1", "importance": "primary"},
+            {"id": "k_ghost", "importance": "primary"},  # not in spine
+            {"id": "k2", "importance": "color"},
+        ],
+        "logical_flow": ["k_ghost", "k2", "k1"],
+    })
+    with patch.object(rsw, 'generate_content', return_value=bad_response):
+        result = rsw.rerank_narrative_spine(spine=spine, title="X", api_key="fake")
+    assert result.get("success")
+    new = result["spine"]
+    assert {c["id"] for c in new["key_claims"]} == {"k1", "k2", "k3"}
+    assert "k_ghost" not in new["logical_flow"]
+
+
+def test_rerank_with_no_spine_returns_error():
+    import research_scriptwriter as rsw
+    result = rsw.rerank_narrative_spine(spine=None, title="X", api_key="fake")
+    assert "error" in result
+
+
+# ── suggest_spine_edits ─────────────────────────────────────────────────────
+
+def test_suggest_edits_happy_path():
+    import research_scriptwriter as rsw
+    spine = json.loads(VALID_SPINE_JSON)
+    response = json.dumps({
+        "suggestions": [
+            {"kind": "reorder", "claim_id": "k3", "new_position": 0,
+             "rationale": "Stronger hook for this title."},
+            {"kind": "importance", "claim_id": "k2", "new_importance": "primary",
+             "rationale": "This carries the story."},
+            {"kind": "edit_text", "claim_id": "k1",
+             "new_text": "Nuclear fission splits heavy uranium nuclei.",
+             "rationale": "More specific = more credible."},
+        ],
+        "overall_note": "Lead with the turbine result.",
+    })
+    with patch.object(rsw, 'generate_content', return_value=response):
+        result = rsw.suggest_spine_edits(spine=spine, title="X", api_key="fake")
+    assert result.get("success")
+    kinds = [s["kind"] for s in result["suggestions"]]
+    assert kinds == ["reorder", "importance", "edit_text"]
+    assert result["overall_note"] == "Lead with the turbine result."
+
+
+def test_suggest_edits_strips_invalid_suggestions():
+    import research_scriptwriter as rsw
+    spine = json.loads(VALID_SPINE_JSON)
+    response = json.dumps({
+        "suggestions": [
+            {"kind": "reorder", "claim_id": "k_ghost", "new_position": 0,
+             "rationale": "valid kind, invalid id"},
+            {"kind": "bogus_kind", "claim_id": "k1", "rationale": "invalid kind"},
+            {"kind": "importance", "claim_id": "k2", "new_importance": "purple",
+             "rationale": "invalid importance value"},
+            {"kind": "edit_text", "claim_id": "k3", "new_text": "",
+             "rationale": "empty new_text"},
+            {"kind": "reorder", "claim_id": "k1", "new_position": 0,
+             "rationale": "this one is valid"},
+        ],
+        "overall_note": "",
+    })
+    with patch.object(rsw, 'generate_content', return_value=response):
+        result = rsw.suggest_spine_edits(spine=spine, api_key="fake")
+    assert result.get("success")
+    assert len(result["suggestions"]) == 1
+    assert result["suggestions"][0]["claim_id"] == "k1"
+
+
+def test_suggest_edits_caps_at_five():
+    import research_scriptwriter as rsw
+    spine = json.loads(VALID_SPINE_JSON)
+    many = [
+        {"kind": "importance", "claim_id": "k1", "new_importance": "primary", "rationale": f"r{i}"}
+        for i in range(10)
+    ]
+    response = json.dumps({"suggestions": many, "overall_note": ""})
+    with patch.object(rsw, 'generate_content', return_value=response):
+        result = rsw.suggest_spine_edits(spine=spine, api_key="fake")
+    assert result.get("success")
+    assert len(result["suggestions"]) <= 5

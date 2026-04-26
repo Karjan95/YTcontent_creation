@@ -1552,6 +1552,137 @@ CRITICAL RULES:
 - Do not include any prose outside the JSON. Begin."""
 
 
+def build_spine_rerank_prompt(spine: dict, title: str = "",
+                               audience: str = "", tone: str = "",
+                               format_preset: str = "") -> str:
+    """Build the prompt that re-ranks an existing spine for a chosen story angle.
+
+    Same set of claims (ids and text preserved), but `importance` and
+    `logical_flow` are recomputed to serve the chosen title / audience / tone.
+    Cheap second pass: no new facts, just a different lens on the same dossier.
+    """
+    spine_block = _format_spine_block(spine) if spine else ""
+    angle_lines = []
+    if title:
+        angle_lines.append(f"TITLE: {title}")
+    if audience:
+        angle_lines.append(f"AUDIENCE: {audience}")
+    if tone:
+        angle_lines.append(f"TONE: {tone}")
+    if format_preset:
+        angle_lines.append(f"FORMAT: {format_preset}")
+    angle_block = "\n".join(angle_lines) or "(no angle specified — use the topic implied by the spine)"
+
+    claim_ids = [c.get("id") for c in (spine.get("key_claims") or []) if c.get("id")]
+
+    return f"""You are re-ranking a Narrative Spine for a specific story angle.
+
+The spine's claims are FIXED — you may not add, remove, or rewrite any claim text.
+Your only job is to:
+  1. Reassign each claim's `importance` (primary | supporting | color) for the chosen angle
+  2. Reorder `logical_flow` so the narration leads with what matters MOST for this angle
+
+═══════ ANGLE ═══════
+{angle_block}
+
+═══════ CURRENT SPINE ═══════
+{spine_block}
+═══════ TASK ═══════
+For the angle above, decide:
+  - PRIMARY (3-5 of them): the load-bearing claims this specific story cannot be told without
+  - SUPPORTING: context and evidence that strengthens the primaries for THIS angle
+  - COLOR: anecdotes that add texture but aren't essential
+
+Reorder `logical_flow` so the story unfolds well: hook → context → escalation → payoff
+relative to the chosen TITLE.
+
+═══════ OUTPUT FORMAT ═══════
+Return ONLY a JSON object with this exact shape (no other fields):
+{{
+  "key_claims": [
+    {{"id": "k1", "importance": "primary"}},
+    {{"id": "k4", "importance": "supporting"}}
+  ],
+  "logical_flow": ["k4", "k1"]
+}}
+
+CRITICAL RULES:
+- Use exactly these claim ids and no others: {claim_ids}
+- Every id must appear in `key_claims` exactly once
+- `logical_flow` must contain the same set of ids as `key_claims`
+- 3-5 claims must be marked "primary"
+- Begin."""
+
+
+def build_spine_suggest_edits_prompt(spine: dict, title: str = "",
+                                      audience: str = "") -> str:
+    """Build the prompt that asks the AI to propose targeted spine improvements.
+
+    The AI returns a small list of suggested changes (re-rank, importance, or
+    text polish) with a one-sentence rationale each. The UI lets the user apply
+    or reject each suggestion individually.
+    """
+    spine_block = _format_spine_block(spine) if spine else ""
+    angle_lines = []
+    if title:
+        angle_lines.append(f"TITLE: {title}")
+    if audience:
+        angle_lines.append(f"AUDIENCE: {audience}")
+    angle_block = "\n".join(angle_lines) or "(no angle specified — improve the spine for general clarity and arc)"
+
+    claim_ids = [c.get("id") for c in (spine.get("key_claims") or []) if c.get("id")]
+
+    return f"""You are a narrative coach reviewing a Narrative Spine and proposing IMPROVEMENTS.
+
+═══════ ANGLE ═══════
+{angle_block}
+
+═══════ CURRENT SPINE ═══════
+{spine_block}
+═══════ TASK ═══════
+Propose between 0 and 5 targeted suggestions that would make this spine tell a stronger story.
+Each suggestion is ONE of these kinds:
+  - "reorder"     : move a claim to a new position in logical_flow
+  - "importance"  : change a claim's importance (primary | supporting | color)
+  - "edit_text"   : rewrite a claim's text to be clearer (no new facts)
+
+Be conservative: only propose changes that genuinely improve the story. If the spine is
+already strong, return an empty list with a one-line note.
+
+═══════ OUTPUT FORMAT ═══════
+Return ONLY a JSON object:
+{{
+  "suggestions": [
+    {{
+      "kind": "reorder",
+      "claim_id": "k4",
+      "new_position": 0,
+      "rationale": "Lead with the surprising fact — strongest hook for this title."
+    }},
+    {{
+      "kind": "importance",
+      "claim_id": "k7",
+      "new_importance": "primary",
+      "rationale": "This claim directly answers the title's question."
+    }},
+    {{
+      "kind": "edit_text",
+      "claim_id": "k2",
+      "new_text": "Reactor cores reach 300°C under normal operation.",
+      "rationale": "More specific number = more credible."
+    }}
+  ],
+  "overall_note": "1-2 sentence summary, or 'spine looks strong' if no changes."
+}}
+
+CRITICAL RULES:
+- Use ONLY claim ids that exist above: {claim_ids}
+- For "reorder", `new_position` is 0-based
+- For "edit_text", keep the same factual content; only improve clarity/precision
+- Maximum 5 suggestions. Quality over quantity.
+- Return ONLY the JSON. Begin."""
+
+
 def _top_claim_texts(structured: dict, limit: int = 20) -> str:
     """Render the top claim texts as a bulleted list, for cases where we want
     a compact claims-only summary (e.g. title suggestions). Returns "" when empty."""
