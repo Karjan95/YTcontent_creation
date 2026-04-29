@@ -72,7 +72,15 @@ def get_cost(tool: str, model: str, usage: dict) -> tuple[float, str, bool]:
     elif tool == "tts":
         cost = int(usage.get("tts_chars", 0) or 0) / 1000.0 * float(rate.get("per_1k_chars", 0))
     elif tool == "veo":
-        cost = float(usage.get("video_seconds", 0) or 0) * float(rate.get("per_second", 0))
+        seconds = float(usage.get("video_seconds", 0) or 0)
+        resolution = (usage.get("resolution") or "").lower() or None
+        per_second = None
+        by_resolution = rate.get("by_resolution") or {}
+        if resolution and resolution in by_resolution:
+            per_second = float(by_resolution[resolution])
+        if per_second is None:
+            per_second = float(rate.get("per_second", 0))
+        cost = seconds * per_second
     else:
         cost = 0.0
 
@@ -294,25 +302,33 @@ def track_tts(uid, project_id, model, char_count, retries=0,
 
 
 def track_veo(uid, project_id, model, duration_seconds, retries=0,
-              description="", status="provisional", op_name=None) -> None:
+              description="", status="provisional", op_name=None,
+              resolution=None) -> None:
     """Bill a Veo video at submit time. Status defaults to 'provisional' so we
     can later emit a refund if the operation fails."""
+    usage = {"video_seconds": float(duration_seconds or 0)}
+    if resolution:
+        usage["resolution"] = resolution
     record_usage(
         uid=uid, project_id=project_id, tool="veo", model=model,
-        usage={"video_seconds": float(duration_seconds or 0)},
-        retries=retries, status=status, description=description,
+        usage=usage, retries=retries, status=status, description=description,
         op_name=op_name,
     )
 
 
 def track_veo_refund(uid, project_id, model, duration_seconds,
-                     description="", op_name=None) -> None:
+                     description="", op_name=None, resolution=None) -> None:
     """Emit a negative-cost event when a Veo operation fails after being billed."""
-    cost, _version, _is_fallback = get_cost("veo", model,
-                                            {"video_seconds": duration_seconds})
+    usage = {"video_seconds": duration_seconds}
+    if resolution:
+        usage["resolution"] = resolution
+    cost, _version, _is_fallback = get_cost("veo", model, usage)
+    refund_usage = {"video_seconds": -float(duration_seconds or 0)}
+    if resolution:
+        refund_usage["resolution"] = resolution
     record_usage(
         uid=uid, project_id=project_id, tool="veo", model=model,
-        usage={"video_seconds": -float(duration_seconds or 0)},
+        usage=refund_usage,
         retries=0, status="refund", description=description,
         op_name=op_name,
         cost_override=-abs(cost),

@@ -36,7 +36,14 @@ def tracker(monkeypatch):
                 "gemini-2.5-flash-preview-tts": {"per_1k_chars": 0.015},
             },
             "video_models": {
-                "veo-3.1-generate-preview": {"per_second": 0.40},
+                "veo-3.1-generate-preview": {
+                    "per_second": 0.40,
+                    "by_resolution": {"720p": 0.40, "1080p": 0.40, "4k": 0.60},
+                },
+                "veo-3.1-lite-generate-preview": {
+                    "per_second": 0.05,
+                    "by_resolution": {"720p": 0.05, "1080p": 0.08},  # no 4k
+                },
             },
             "fallback": {
                 "text": {"in_per_1m": 1.25, "out_per_1m": 10.00, "cached_in_per_1m": 0.31},
@@ -69,6 +76,43 @@ def test_get_cost_text_exact_math(tracker):
 def test_get_cost_veo(tracker):
     cost, _v, _f = tracker.get_cost("veo", "veo-3.1-generate-preview", {"video_seconds": 6})
     assert cost == pytest.approx(2.40)
+
+
+def test_get_cost_veo_resolution_aware(tracker):
+    # 4k bills at the higher per-second rate
+    cost_4k, _, _ = tracker.get_cost(
+        "veo", "veo-3.1-generate-preview",
+        {"video_seconds": 6, "resolution": "4k"},
+    )
+    assert cost_4k == pytest.approx(0.60 * 6)
+
+    # case-insensitive
+    cost_4k_upper, _, _ = tracker.get_cost(
+        "veo", "veo-3.1-generate-preview",
+        {"video_seconds": 6, "resolution": "4K"},
+    )
+    assert cost_4k_upper == pytest.approx(0.60 * 6)
+
+    # 1080p on Lite (different rate from 720p baseline)
+    cost_lite_1080, _, _ = tracker.get_cost(
+        "veo", "veo-3.1-lite-generate-preview",
+        {"video_seconds": 6, "resolution": "1080p"},
+    )
+    assert cost_lite_1080 == pytest.approx(0.08 * 6)
+
+    # Unknown resolution falls back to per_second baseline
+    cost_unknown, _, _ = tracker.get_cost(
+        "veo", "veo-3.1-generate-preview",
+        {"video_seconds": 6, "resolution": "8k"},
+    )
+    assert cost_unknown == pytest.approx(0.40 * 6)
+
+    # 4k on Lite (not in by_resolution) falls back to per_second baseline
+    cost_lite_4k, _, _ = tracker.get_cost(
+        "veo", "veo-3.1-lite-generate-preview",
+        {"video_seconds": 6, "resolution": "4k"},
+    )
+    assert cost_lite_4k == pytest.approx(0.05 * 6)
 
 
 def test_get_cost_image(tracker):
@@ -233,3 +277,25 @@ def test_veo_refund_writes_negative_cost(tracker, monkeypatch):
     assert event["status"] == "refund"
     assert event["cost_usd"] == pytest.approx(-2.40)  # 6s * 0.40 negated
     assert event["op_name"] == "op-abc"
+
+
+def test_veo_refund_resolution_aware(tracker, monkeypatch):
+    submitted = []
+
+    def fake_submit(fn, uid, event):
+        submitted.append((uid, event))
+
+    monkeypatch.setattr(tracker._executor, "submit",
+                        lambda fn, *args, **kwargs: fake_submit(fn, *args) or MagicMock())
+
+    tracker.track_veo_refund(
+        uid="u1", project_id="p1", model="veo-3.1-generate-preview",
+        duration_seconds=6, description="veo-failed-4k", op_name="op-xyz",
+        resolution="4k",
+    )
+
+    assert len(submitted) == 1
+    _uid, event = submitted[0]
+    assert event["cost_usd"] == pytest.approx(-3.60)  # 6s * 0.60 (4k rate) negated
+    assert event["usage"]["resolution"] == "4k"
+    assert event["usage"]["video_seconds"] == pytest.approx(-6.0)

@@ -520,6 +520,14 @@
                                 <option value="8">8s</option>
                             </select>
                         </div>
+                        <div class="param-field" id="visVideoResolutionField">
+                            <label class="input-label" for="visVideoResolution">Video Resolution</label>
+                            <select id="visVideoResolution" onchange="updateVisualsConfig()">
+                                <option value="720p" selected>720p</option>
+                                <option value="1080p">1080p</option>
+                                <option value="4k">4K</option>
+                            </select>
+                        </div>
                     </div>
 
                     <!-- Style Reference Images -->
@@ -2364,9 +2372,11 @@ No formatting needed — just paste your narration!"></textarea>
                 'imagen-4.0-ultra-generate-001': { '1K': 0.06, '2K': 0.06, '4K': 0.06 },
             },
             video: {
-                'veo-3.1-generate-preview': { '720p': 0.40, '1080p': 0.40, '4K': 0.60 },
-                'veo-3.1-fast-generate-preview': { '720p': 0.15, '1080p': 0.15, '4K': 0.35 },
-                'veo-3.1-lite-generate-preview': { '720p': 0.05, '1080p': 0.08, '4K': 0.08 },
+                // Official Google pricing (per second)
+                // https://ai.google.dev/gemini-api/docs/pricing
+                'veo-3.1-generate-preview': { '720p': 0.40, '1080p': 0.40, '4k': 0.60 },
+                'veo-3.1-fast-generate-preview': { '720p': 0.10, '1080p': 0.12, '4k': 0.30 },
+                'veo-3.1-lite-generate-preview': { '720p': 0.05, '1080p': 0.08 },
                 // KIE video models (per-clip flat pricing, resolution-agnostic for simplicity)
                 'kling-3.0': { '720p': 0.60, '1080p': 1.00 },
                 'kling-2.6': { '720p': 0.28, '1080p': 0.55 },
@@ -2446,8 +2456,8 @@ No formatting needed — just paste your narration!"></textarea>
 
             // Video batch cost (resolution-aware)
             const veoModel = document.getElementById('visVeoModel')?.value || 'veo-3.1-generate-preview';
-            const duration = parseInt(document.getElementById('visDuration')?.value || '6');
-            const veoRes = '720p'; // default video resolution
+            const duration = parseInt(document.getElementById('visVideoDuration')?.value || '6');
+            const veoRes = document.getElementById('visVideoResolution')?.value || '720p';
             const costPerSec = getVideoCostPerSec(veoModel, veoRes);
             const animateBtn = document.getElementById('animateAllBtn');
             const vidBadge = document.getElementById('batchVideoCostBadge');
@@ -5679,6 +5689,7 @@ No formatting needed — just paste your narration!"></textarea>
             imageModel: 'gemini-3-pro-image-preview',
             veoModel: 'veo-3.1-generate-preview',
             videoDuration: 6,
+            videoResolution: '720p',
             styleImages: [],
             additionalContext: '',
             styleMode: 'art_only',
@@ -5919,15 +5930,52 @@ No formatting needed — just paste your narration!"></textarea>
             'imagen-4.0-ultra-generate-001': 'Imagen 4 Ultra',
         };
 
+        const VEO_MODEL_LABELS = {
+            'veo-3.1-generate-preview': 'Veo 3.1 (Quality + Audio)',
+            'veo-3.1-fast-generate-preview': 'Veo 3.1 Fast',
+            'veo-3.1-lite-generate-preview': 'Veo 3.1 Lite',
+        };
+
         function updateModelPriceLabels() {
             const res = document.getElementById('visResolution')?.value || '2K';
             const select = document.getElementById('visImageModel');
-            if (!select) return;
-            for (const opt of select.options) {
-                const label = IMAGE_MODEL_LABELS[opt.value];
-                if (label) {
-                    const cost = getImageCost(opt.value, res);
-                    opt.textContent = `${label} ~$${cost.toFixed(2)}/img`;
+            if (select) {
+                for (const opt of select.options) {
+                    const label = IMAGE_MODEL_LABELS[opt.value];
+                    if (label) {
+                        const cost = getImageCost(opt.value, res);
+                        opt.textContent = `${label} ~$${cost.toFixed(2)}/img`;
+                    }
+                }
+            }
+
+            // Veo model labels — resolution-aware pricing
+            const vidRes = document.getElementById('visVideoResolution')?.value || '720p';
+            const dur = parseInt(document.getElementById('visVideoDuration')?.value) || 6;
+            const veoSelect = document.getElementById('visVeoModel');
+            if (veoSelect) {
+                for (const opt of veoSelect.options) {
+                    const label = VEO_MODEL_LABELS[opt.value];
+                    if (!label) continue;
+                    const tiers = PRICING.video[opt.value] || {};
+                    const supports4k = '4k' in tiers;
+                    const perSec = tiers[vidRes];
+                    if (perSec === undefined) {
+                        // Resolution unsupported by this model — show note
+                        opt.textContent = `${label} (no ${vidRes})`;
+                        opt.disabled = true;
+                    } else {
+                        opt.disabled = false;
+                        const perClip = (perSec * dur).toFixed(2);
+                        const note = (!supports4k && opt.value === 'veo-3.1-lite-generate-preview') ? ' • no 4K' : '';
+                        opt.textContent = `${label} ~$${perClip}/${dur}s @ ${vidRes}${note}`;
+                    }
+                }
+                // If currently-selected model doesn't support this resolution, fall back
+                const currentOpt = veoSelect.options[veoSelect.selectedIndex];
+                if (currentOpt && currentOpt.disabled) {
+                    veoSelect.value = 'veo-3.1-generate-preview';
+                    visualsConfig.veoModel = veoSelect.value;
                 }
             }
         }
@@ -5982,14 +6030,17 @@ No formatting needed — just paste your narration!"></textarea>
                 durationSelect.value = durations[0];
             }
 
-            // Veo 3.1 Lite does not support 4K — disable that option and downgrade if selected
-            const resSelect = document.getElementById('visResolution');
-            if (resSelect) {
+            // Veo 3.1 Lite does not support 4K — disable that option on the video resolution select
+            const vidResSelect = document.getElementById('visVideoResolution');
+            if (vidResSelect) {
                 const is4KLocked = model === 'veo-3.1-lite-generate-preview';
-                Array.from(resSelect.options).forEach(opt => {
-                    if (opt.value === '4K') opt.disabled = is4KLocked;
+                Array.from(vidResSelect.options).forEach(opt => {
+                    if (opt.value === '4k') opt.disabled = is4KLocked;
                 });
-                if (is4KLocked && resSelect.value === '4K') resSelect.value = '2K';
+                if (is4KLocked && vidResSelect.value === '4k') {
+                    vidResSelect.value = '1080p';
+                    visualsConfig.videoResolution = '1080p';
+                }
             }
         }
 
@@ -5999,6 +6050,7 @@ No formatting needed — just paste your narration!"></textarea>
             visualsConfig.imageModel = document.getElementById('visImageModel').value;
             visualsConfig.veoModel = document.getElementById('visVeoModel').value;
             visualsConfig.videoDuration = parseInt(document.getElementById('visVideoDuration').value) || 6;
+            visualsConfig.videoResolution = document.getElementById('visVideoResolution')?.value || '720p';
             visualsConfig.additionalContext = document.getElementById('visAdditionalContext').value;
             visualsConfig.styleMode = document.getElementById('visStyleMode').value;
             updateVideoDurationOptions();
@@ -6366,6 +6418,19 @@ No formatting needed — just paste your narration!"></textarea>
                                 <select class="scene-model-select" onchange="visualsScenes[${idx}].veoModel = this.value || null; updateSceneCard(${idx})">
                                     ${veoModelOptions}
                                 </select>
+                                ${(() => {
+                                    const effModel = s.veoModel || visualsConfig.veoModel;
+                                    if (!effModel || !effModel.startsWith('veo-')) return '';
+                                    const tiers = PRICING.video[effModel] || {};
+                                    const supportedRes = ['720p', '1080p', '4k'].filter(r => r in tiers);
+                                    if (supportedRes.length <= 1) return '';
+                                    const cur = s.videoResolution || '';
+                                    return `
+                                        <select class="scene-model-select" style="margin-left:6px" title="Per-scene resolution (overrides global)" onchange="visualsScenes[${idx}].videoResolution = this.value || null; updateSceneCard(${idx})">
+                                            <option value="" ${!cur ? 'selected' : ''}>Global (${visualsConfig.videoResolution || '720p'})</option>
+                                            ${supportedRes.map(r => `<option value="${r}" ${cur === r ? 'selected' : ''}>${r}</option>`).join('')}
+                                        </select>`;
+                                })()}
                             </div>
                             <textarea class="scene-prompt-textarea" id="scene-veo-prompt-${idx}"
                                 onchange="visualsScenes[${idx}].veoPrompt = this.value">${escapeHtml(s.veoPrompt)}</textarea>
@@ -7449,7 +7514,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
                             model: effModel,
                             aspect_ratio: visualsConfig.aspectRatio,
                             duration: visualsConfig.videoDuration || parseInt(s.duration) || 6,
-                            resolution: visualsConfig.resolution || '720p',
+                            resolution: s.videoResolution || visualsConfig.videoResolution || '720p',
                             project_id: currentProjectId,
                         };
                         if (caps.isUpscaler) {
@@ -7571,6 +7636,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
                     prompt: item.scene.veoPrompt,
                     model: item.scene.veoModel || null,
                     duration: parseInt(item.scene.duration) || 6,
+                    resolution: item.scene.videoResolution || null,
                 }));
 
                 const res = await authFetch('/api/visuals/start-batch-animation', {
@@ -7581,6 +7647,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
                         global_config: {
                             model: visualsConfig.veoModel,
                             aspect_ratio: visualsConfig.aspectRatio,
+                            resolution: visualsConfig.videoResolution || '720p',
                         },
                         project_id: currentProjectId,
                     }),
@@ -8081,6 +8148,8 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 resolution: '2K',
                 imageModel: 'gemini-3-pro-image-preview',
                 veoModel: 'veo-3.1-generate-preview',
+                videoDuration: 6,
+                videoResolution: '720p',
                 styleImages: [],
                 additionalContext: '',
                 styleMode: 'art_only',
@@ -8502,6 +8571,11 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 if (imgModelSelect) imgModelSelect.value = visualsConfig.imageModel || 'gemini-3-pro-image-preview';
                 const veoModelSelect = document.getElementById('visVeoModel');
                 if (veoModelSelect) veoModelSelect.value = visualsConfig.veoModel || 'veo-3.1-generate-preview';
+                const videoDurSelect = document.getElementById('visVideoDuration');
+                if (videoDurSelect) videoDurSelect.value = visualsConfig.videoDuration || 6;
+                const videoResSelect = document.getElementById('visVideoResolution');
+                if (videoResSelect) videoResSelect.value = visualsConfig.videoResolution || '720p';
+                updateVideoDurationOptions();
                 const contextTextarea = document.getElementById('visAdditionalContext');
                 if (contextTextarea) contextTextarea.value = visualsConfig.additionalContext || '';
                 const styleModeSelect = document.getElementById('visStyleMode');

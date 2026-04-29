@@ -1329,6 +1329,7 @@ def start_video_generation(image_path, prompt, model_name="veo-3.1-generate-prev
             "project_id": project_id,
             "duration": int(duration),
             "model": model_name,
+            "resolution": resolution,
             "scene_id": scene_id,
         }
 
@@ -1340,6 +1341,7 @@ def start_video_generation(image_path, prompt, model_name="veo-3.1-generate-prev
                 duration_seconds=int(duration),
                 retries=retries, description=f"veo_start({scene_id})",
                 status="provisional", op_name=op_name,
+                resolution=resolution,
             )
 
         print(f"[Veo] Operation started: {op_name}")
@@ -1382,9 +1384,10 @@ def poll_video_generation(operation_name, scene_id=None, api_key=None):
             bill_pid = op_entry.get("project_id")
             bill_duration = op_entry.get("duration", 0)
             bill_model = op_entry.get("model")
+            bill_resolution = op_entry.get("resolution")
         else:
             operation = op_entry
-            bill_uid = bill_pid = bill_model = None
+            bill_uid = bill_pid = bill_model = bill_resolution = None
             bill_duration = 0
 
         # Refresh operation status
@@ -1435,6 +1438,7 @@ def poll_video_generation(operation_name, scene_id=None, api_key=None):
                 uid=bill_uid, project_id=bill_pid, model=bill_model,
                 duration_seconds=bill_duration,
                 description=f"veo_failed({scene_id})", op_name=operation_name,
+                resolution=bill_resolution,
             )
         del _video_operations[operation_name]
         return {
@@ -1455,6 +1459,7 @@ def poll_video_generation(operation_name, scene_id=None, api_key=None):
                         uid=op_entry["uid"], project_id=op_entry.get("project_id"),
                         model=op_entry["model"], duration_seconds=op_entry.get("duration", 0),
                         description=f"veo_error({scene_id})", op_name=operation_name,
+                        resolution=op_entry.get("resolution"),
                     )
                 except Exception:
                     pass

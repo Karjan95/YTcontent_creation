@@ -83,10 +83,22 @@ _DEFAULT_PRICING = {
         "gemini-2.5-flash-preview-tts": {"per_1k_chars": 0.010},
     },
     "video_models": {
-        # Veo 3.1 — rates effective after Google's April 7 2026 price drop.
-        "veo-3.1-generate-preview": {"per_second": 0.40},
-        "veo-3.1-fast-generate-preview": {"per_second": 0.10},
-        "veo-3.1-lite-generate-preview": {"per_second": 0.05},
+        # Veo 3.1 — official Google pricing (USD per second of generated video).
+        # Source: https://ai.google.dev/gemini-api/docs/pricing
+        # `per_second` is the 720p baseline retained for backwards-compatible
+        # callers that do not pass a resolution.
+        "veo-3.1-generate-preview": {
+            "per_second": 0.40,
+            "by_resolution": {"720p": 0.40, "1080p": 0.40, "4k": 0.60},
+        },
+        "veo-3.1-fast-generate-preview": {
+            "per_second": 0.10,
+            "by_resolution": {"720p": 0.10, "1080p": 0.12, "4k": 0.30},
+        },
+        "veo-3.1-lite-generate-preview": {
+            "per_second": 0.05,
+            "by_resolution": {"720p": 0.05, "1080p": 0.08},  # no 4K
+        },
     },
     "fallback": {
         # Used when a call reports a model name we don't recognize. Set to
