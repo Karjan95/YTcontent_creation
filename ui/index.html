@@ -5061,6 +5061,7 @@ No formatting needed — just paste your narration!"></textarea>
                         character_description: charDesc,
                         rendering_split: renderSplit,
                         creative_direction: currentCreativeDirection || null,
+                        style_analysis: approvedStyle || null,
                     })
                 });
 
@@ -5099,7 +5100,7 @@ No formatting needed — just paste your narration!"></textarea>
 
             noCharsMsg.style.display = 'none';
             container.innerHTML = castData.cast.map((char, idx) => {
-                const hasPortraits = char.portraits && (char.portraits.face_closeup?.url || char.portraits.full_body?.url);
+                const hasPortraits = char.portraits && (char.portraits.reference_sheet?.url || char.portraits.face_closeup?.url || char.portraits.full_body?.url);
                 const isOutdated = hasPortraits && char._identityHash && char._identityHash !== hashString(char.visual_identity);
                 return `
                 <div class="cast-card" data-index="${idx}">
@@ -5130,27 +5131,14 @@ No formatting needed — just paste your narration!"></textarea>
                                placeholder="Optional: special instructions" data-field="notes" data-index="${idx}">
                     </div>
                     <div class="cast-portrait-section">
-                        <div class="cast-portrait-header">
-                            <label>Portrait Prompts</label>
-                            <button class="btn-tiny" onclick="togglePortraitPrompts(${idx})">Edit</button>
-                        </div>
-                        <div class="portrait-prompts-body" id="portrait-prompts-${idx}" style="display: none;">
-                            <label>Face Closeup</label>
-                            <textarea class="cast-field-textarea" rows="2"
-                                      placeholder="AI-generated prompt for face closeup reference"
-                                      data-field="portrait_face" data-index="${idx}">${escapeHtml(char.portrait_prompts?.face_closeup || '')}</textarea>
-                            <label>Full Body</label>
-                            <textarea class="cast-field-textarea" rows="2"
-                                      placeholder="AI-generated prompt for full body reference"
-                                      data-field="portrait_body" data-index="${idx}">${escapeHtml(char.portrait_prompts?.full_body || '')}</textarea>
-                        </div>
+                        <label>Character Reference Sheet</label>
+                        ${!approvedStyle ? '<span class="cast-style-warning">&#9888; No style set — character may not match your visuals</span>' : ''}
                         <div class="cast-portrait-images" id="cast-portraits-${idx}">
-                            ${char.portraits?.face_closeup?.url ? `<img src="${char.portraits.face_closeup.url}" class="cast-portrait-thumb" title="Face closeup">` : ''}
-                            ${char.portraits?.full_body?.url ? `<img src="${char.portraits.full_body.url}" class="cast-portrait-thumb" title="Full body">` : ''}
+                            ${char.portraits?.reference_sheet?.url ? `<img src="${char.portraits.reference_sheet.url}" class="cast-portrait-thumb cast-portrait-wide" title="Character Reference Sheet">` : ''}
                             ${isOutdated ? '<span class="outdated-badge">Outdated</span>' : ''}
                         </div>
                         <button class="btn-secondary btn-small" onclick="generatePortraitForCharacter(${idx})" id="portrait-btn-${idx}">
-                            ${hasPortraits ? (isOutdated ? 'Regenerate Portrait' : 'Regenerate') : 'Generate Portrait'}
+                            ${hasPortraits ? (isOutdated ? 'Regenerate Sheet' : 'Regenerate Sheet') : 'Generate Reference Sheet'}
                         </button>
                         <div class="spinner" id="portrait-spinner-${idx}" style="display:none;"></div>
                     </div>
@@ -5203,10 +5191,6 @@ No formatting needed — just paste your narration!"></textarea>
 
                 const beats = getBeatsStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
 
-                // Read portrait prompts from UI if visible
-                const facePrompt = card.querySelector('[data-field="portrait_face"]')?.value || '';
-                const bodyPrompt = card.querySelector('[data-field="portrait_body"]')?.value || '';
-
                 // Preserve existing portrait data and hash from currentCast
                 const existingChar = currentCast.cast[idx] || {};
 
@@ -5217,8 +5201,7 @@ No formatting needed — just paste your narration!"></textarea>
                     appears_in_beats: beats,
                     notes: getNotes,
                     portrait_prompts: {
-                        face_closeup: facePrompt || existingChar.portrait_prompts?.face_closeup || '',
-                        full_body: bodyPrompt || existingChar.portrait_prompts?.full_body || '',
+                        reference_sheet: existingChar.portrait_prompts?.reference_sheet || '',
                     },
                     portraits: existingChar.portraits || null,
                     _identityHash: existingChar._identityHash || null,
@@ -5250,11 +5233,6 @@ No formatting needed — just paste your narration!"></textarea>
             return String(Math.abs(hash));
         }
 
-        function togglePortraitPrompts(idx) {
-            const el = document.getElementById(`portrait-prompts-${idx}`);
-            if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
-        }
-
         function getPortraitStyleContext() {
             // Collect style images — prefer Style Review panel refs, fallback to Visuals config
             const styleImages = [];
@@ -5283,8 +5261,10 @@ No formatting needed — just paste your narration!"></textarea>
             if (!char) return;
 
             const prompts = char.portrait_prompts;
-            if (!prompts?.face_closeup && !prompts?.full_body) {
-                alert('No portrait prompts available. Edit the prompts first or re-suggest cast.');
+            // Support reference_sheet (new) with fallback to face_closeup (old data)
+            const refPrompt = prompts?.reference_sheet || prompts?.face_closeup;
+            if (!refPrompt) {
+                alert('No portrait prompt available. Re-suggest cast to generate prompts.');
                 return;
             }
 
@@ -5297,64 +5277,31 @@ No formatting needed — just paste your narration!"></textarea>
             const portraits = char.portraits || {};
 
             try {
-                // Generate face closeup
-                if (prompts.face_closeup) {
-                    try {
-                        const faceResp = await authFetch('/api/generate-cast-portrait', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                prompt: prompts.face_closeup,
-                                portrait_type: 'face_closeup',
-                                character_name: char.name,
-                                model: ctx.model,
-                                project_id: currentProjectId,
-                                style_images: ctx.styleImages,
-                                style_mode: ctx.styleMode,
-                            })
-                        });
-                        if (!faceResp.ok) {
-                            const errText = await faceResp.text();
-                            console.error('[Portrait] Face closeup HTTP error:', faceResp.status, errText);
-                        } else {
-                            const faceData = await faceResp.json();
-                            if (faceData.success) {
-                                portraits.face_closeup = { url: faceData.image_url, blob_path: faceData.blob_path };
-                            } else {
-                                console.error('[Portrait] Face closeup failed:', faceData.error);
-                            }
-                        }
-                    } catch (e) { console.error('[Portrait] Face closeup error:', e); }
+                const resp = await authFetch('/api/generate-cast-portrait', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt: refPrompt,
+                        portrait_type: 'reference_sheet',
+                        character_name: char.name,
+                        model: ctx.model,
+                        project_id: currentProjectId,
+                        style_images: ctx.styleImages,
+                        style_mode: ctx.styleMode,
+                        style_summary: approvedStyle?.style_summary || '',
+                    })
+                });
+
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    throw new Error(`Server error (${resp.status}): ${errText.substring(0, 200)}`);
                 }
 
-                // Generate full body
-                if (prompts.full_body) {
-                    try {
-                        const bodyResp = await authFetch('/api/generate-cast-portrait', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                prompt: prompts.full_body,
-                                portrait_type: 'full_body',
-                                character_name: char.name,
-                                model: ctx.model,
-                                project_id: currentProjectId,
-                                style_images: ctx.styleImages,
-                                style_mode: ctx.styleMode,
-                            })
-                        });
-                        if (!bodyResp.ok) {
-                            const errText = await bodyResp.text();
-                            console.error('[Portrait] Full body HTTP error:', bodyResp.status, errText);
-                        } else {
-                            const bodyData = await bodyResp.json();
-                            if (bodyData.success) {
-                                portraits.full_body = { url: bodyData.image_url, blob_path: bodyData.blob_path };
-                            } else {
-                                console.error('[Portrait] Full body failed:', bodyData.error);
-                            }
-                        }
-                    } catch (e) { console.error('[Portrait] Full body error:', e); }
+                const result = await resp.json();
+                if (result.success) {
+                    portraits.reference_sheet = { url: result.image_url, blob_path: result.blob_path };
+                } else {
+                    throw new Error(result.error || 'Reference sheet generation failed');
                 }
 
                 currentCast.cast[idx].portraits = portraits;
@@ -5379,7 +5326,7 @@ No formatting needed — just paste your narration!"></textarea>
                 return;
             }
 
-            const hasPrompts = currentCast.cast.some(c => c.portrait_prompts?.face_closeup || c.portrait_prompts?.full_body);
+            const hasPrompts = currentCast.cast.some(c => c.portrait_prompts?.reference_sheet || c.portrait_prompts?.face_closeup);
             if (!hasPrompts) {
                 alert('No portrait prompts found. Re-suggest cast to generate prompts.');
                 return;
@@ -5404,6 +5351,7 @@ No formatting needed — just paste your narration!"></textarea>
                         project_id: currentProjectId,
                         style_images: ctx.styleImages,
                         style_mode: ctx.styleMode,
+                        style_summary: approvedStyle?.style_summary || '',
                     })
                 });
 
@@ -5420,11 +5368,11 @@ No formatting needed — just paste your narration!"></textarea>
                     if (castIdx < 0) continue;
 
                     const portraits = currentCast.cast[castIdx].portraits || {};
-                    if (res.face_closeup?.success) {
-                        portraits.face_closeup = { url: res.face_closeup.image_url, blob_path: res.face_closeup.blob_path };
-                    }
-                    if (res.full_body?.success) {
-                        portraits.full_body = { url: res.full_body.image_url, blob_path: res.full_body.blob_path };
+                    if (res.reference_sheet?.success) {
+                        portraits.reference_sheet = { url: res.reference_sheet.image_url, blob_path: res.reference_sheet.blob_path };
+                    } else if (res.face_closeup?.success) {
+                        // fallback for old data
+                        portraits.reference_sheet = { url: res.face_closeup.image_url, blob_path: res.face_closeup.blob_path };
                     }
                     currentCast.cast[castIdx].portraits = portraits;
                     currentCast.cast[castIdx]._identityHash = hashString(currentCast.cast[castIdx].visual_identity);
@@ -5434,7 +5382,7 @@ No formatting needed — just paste your narration!"></textarea>
                 syncCastToVisualsCharacters();
                 triggerAutosave();
 
-                const successCount = results.filter(r => r.face_closeup?.success || r.full_body?.success).length;
+                const successCount = results.filter(r => r.reference_sheet?.success || r.face_closeup?.success).length;
                 console.log(`[Cast Portrait] Batch complete: ${successCount}/${currentCast.cast.length} characters`);
 
             } catch (error) {
@@ -5454,11 +5402,11 @@ No formatting needed — just paste your narration!"></textarea>
             for (const char of currentCast.cast) {
                 if (!char.portraits) continue;
                 const images = [];
-                if (char.portraits.face_closeup?.url) {
+                if (char.portraits.reference_sheet?.url) {
+                    images.push({ data: char.portraits.reference_sheet.url, url: char.portraits.reference_sheet.url, path: char.portraits.reference_sheet.blob_path });
+                } else if (char.portraits.face_closeup?.url) {
+                    // fallback for old saved data
                     images.push({ data: char.portraits.face_closeup.url, url: char.portraits.face_closeup.url, path: char.portraits.face_closeup.blob_path });
-                }
-                if (char.portraits.full_body?.url) {
-                    images.push({ data: char.portraits.full_body.url, url: char.portraits.full_body.url, path: char.portraits.full_body.blob_path });
                 }
                 if (images.length === 0) continue;
 

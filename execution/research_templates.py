@@ -4120,7 +4120,8 @@ CRITICAL:
 
 def build_cast_suggestion_prompt(narration_json: dict, character_description: str = "",
                                  rendering_split: str = "unified",
-                                 creative_direction: dict = None) -> str:
+                                 creative_direction: dict = None,
+                                 style_summary: str = "") -> str:
     """
     Casting Director — analyzes the finalized script and suggests a cast of characters/subjects.
 
@@ -4161,6 +4162,14 @@ what the script implies. You can use realistic descriptions, stylized descriptio
 or whatever best fits the story's tone.
 """
 
+    # Build approved style context for portrait prompts
+    approved_style_context = ""
+    if style_summary:
+        approved_style_context = f"""═══════ APPROVED VISUAL STYLE ═══════
+{style_summary}
+Incorporate this style at the START of every reference_sheet prompt.
+"""
+
     # Build creative direction context for portrait prompts
     creative_direction_context = ""
     if creative_direction:
@@ -4183,6 +4192,7 @@ For each one, you will suggest a visual identity that makes them immediately rec
 and visually distinct from other characters.
 
 {rendering_context}
+{approved_style_context}
 {creative_direction_context}
 ═══════ PROJECT ═══════
 Title: {title}
@@ -4209,16 +4219,25 @@ Analyze the script and output a cast list. For EACH distinct character or recurr
 4. "appears_in_beats": Array of beat numbers where this character appears or is referenced.
 5. "notes": Any casting notes (e.g., "Always carries a briefcase", "Gets progressively disheveled",
    "Same character as Hero but in flashback — younger version")
-6. "portrait_prompts": An object with two keys for generating character reference images:
-   - "face_closeup": A detailed image generation prompt for a HEAD AND SHOULDERS PORTRAIT of this character.
-     Must describe: face shape, skin tone, hair color/style, eye color/shape, age range, neutral expression,
-     and any defining accessories visible from chest up. Background should be plain/neutral.
-     Format: "[RENDERING STYLE]. Head and shoulders portrait of [character description]. [specific facial features]. Neutral expression. Plain background."
-   - "full_body": A detailed image generation prompt for a FULL BODY STANDING PORTRAIT of this character.
-     Must describe: everything in the face closeup PLUS body build, height impression, full outfit, shoes, posture, and any props.
-     Format: "[RENDERING STYLE]. Full body standing portrait of [character description]. [outfit details]. [pose/posture]. Plain background."
-   IMPORTANT: Both prompts must produce CHARACTER REFERENCE images — neutral pose, plain background, no dramatic lighting.
-   The goal is IDENTITY REFERENCE, not a cinematic shot. Incorporate the rendering style into both prompts.
+6. "portrait_prompts": An object with ONE key:
+   - "reference_sheet": A detailed image generation prompt that produces a professional multi-angle
+     character reference sheet showing 7 panels in one image.
+
+     START the prompt with the approved visual style (if provided above), then describe the character
+     using their visual_identity, then include this exact layout:
+
+     "[STYLE IF PROVIDED]. Create a professional character reference sheet for [NAME]: [visual_identity description].
+     Use a clean, neutral plain background. Arrange in two horizontal rows:
+     Top row: four full-body standing views side-by-side — front view, left profile (facing left),
+     right profile (facing right), back view.
+     Bottom row: three highly detailed close-up portraits — front portrait, left profile (facing left),
+     right profile (facing right).
+     Maintain perfect identity consistency across every panel. Relaxed A-pose, consistent scale and
+     alignment, accurate anatomy, clear silhouette. Even spacing, clean panel separation, uniform framing.
+     Consistent lighting across all panels with natural controlled shadows. Crisp, print-ready."
+
+     IMPORTANT: This is an IDENTITY REFERENCE sheet — neutral pose, plain background, no dramatic lighting.
+     Incorporate the rendering style and character's visual_identity fully into the prompt.
 
 IMPORTANT GUIDELINES:
 - If the script has NO characters (e.g., geography explainer, nature documentary, abstract concepts):
@@ -4247,8 +4266,7 @@ Return a JSON object:
       "appears_in_beats": [1, 2, 3, 4, 5, 7, 8, 9, 10],
       "notes": "Central character — appears in most shots. Outfit may change in beach flashback (beats 6-8).",
       "portrait_prompts": {{
-        "face_closeup": "Stick figure style. Head and shoulders portrait of The Scientist — large white circular head, dot eyes behind round glasses perched on the head, thin smile line. Neutral expression. Plain light gray background.",
-        "full_body": "Stick figure style. Full body standing portrait of The Scientist — tall stick figure with large circular head, dot eyes, round glasses. Wearing a long blue lab coat, clipboard tucked under one arm. Relaxed standing pose. Plain light gray background."
+        "reference_sheet": "Stick figure style. Create a professional character reference sheet for The Scientist: tall stick figure, large white circular head, dot eyes behind round glasses perched on head, long blue lab coat, clipboard tucked under one arm. Use a clean, neutral plain background. Arrange in two horizontal rows: Top row: four full-body standing views side-by-side — front view, left profile (facing left), right profile (facing right), back view. Bottom row: three highly detailed close-up portraits — front portrait, left profile (facing left), right profile (facing right). Maintain perfect identity consistency. Relaxed A-pose, consistent scale. Even spacing, clean panel separation. Consistent lighting. Crisp, print-ready."
       }}
     }},
     {{
@@ -4258,8 +4276,7 @@ Return a JSON object:
       "appears_in_beats": [5, 6, 7, 8, 9, 10],
       "notes": "Non-human character. No clothing needed — the metallic body IS the visual identity.",
       "portrait_prompts": {{
-        "face_closeup": "Stick figure style. Head and shoulders portrait of The Robot — circular metallic head with antenna on top, glowing blue dot eyes, boxy metallic neck/shoulders. Neutral expression. Plain light gray background.",
-        "full_body": "Stick figure style. Full body standing portrait of The Robot — short and wide boxy metallic torso, circular head with antenna, glowing blue dot eyes. No clothing — metallic body. Standing upright. Plain light gray background."
+        "reference_sheet": "Stick figure style. Create a professional character reference sheet for The Robot: short and wide boxy metallic torso, circular head with antenna on top, glowing blue dot eyes, no clothing — metallic body is the visual identity. Use a clean, neutral plain background. Arrange in two horizontal rows: Top row: four full-body standing views side-by-side — front, left profile, right profile, back. Bottom row: three close-up portraits — front, left profile, right profile. Perfect identity consistency, A-pose, even spacing. Crisp, print-ready."
       }}
     }}
   ],

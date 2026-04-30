@@ -1078,18 +1078,21 @@ def suggest_cast_route():
         character_description = data.get('character_description', '')
         rendering_split = data.get('rendering_split', 'unified')
         creative_direction = data.get('creative_direction')
+        style_analysis = data.get('style_analysis') or {}
+        style_summary = style_analysis.get('style_summary', '') if isinstance(style_analysis, dict) else ''
 
         if not narration_json or not narration_json.get('narration'):
             return jsonify({'error': 'Narration data with beats is required'}), 400
 
         from research_templates import build_cast_suggestion_prompt
 
-        print(f"[Cast Suggestion] Analyzing script for characters...")
+        print(f"[Cast Suggestion] Analyzing script for characters (style={'yes' if style_summary else 'none'})...")
         prompt = build_cast_suggestion_prompt(
             narration_json=narration_json,
             character_description=character_description,
             rendering_split=rendering_split,
             creative_direction=creative_direction,
+            style_summary=style_summary,
         )
 
         raw_response = generate_content(
@@ -1146,12 +1149,12 @@ def generate_cast_portrait():
         if err:
             return jsonify({'error': err}), 400
 
-        portrait_type = data.get('portrait_type', 'face_closeup')
+        portrait_type = data.get('portrait_type', 'reference_sheet')
         character_name = data.get('character_name', 'Unknown')
         project_id = data.get('project_id')
 
-        if portrait_type not in ('face_closeup', 'full_body'):
-            return jsonify({'error': 'portrait_type must be face_closeup or full_body'}), 400
+        if portrait_type not in ('reference_sheet', 'face_closeup', 'full_body'):
+            return jsonify({'error': 'portrait_type must be reference_sheet, face_closeup, or full_body'}), 400
         if not project_id:
             return jsonify({'error': 'project_id is required'}), 400
 
@@ -1160,9 +1163,16 @@ def generate_cast_portrait():
         if model.startswith('imagen-'):
             model = 'gemini-3-pro-image-preview'
 
-        aspect_ratio = '1:1' if portrait_type == 'face_closeup' else '9:16'
+        if portrait_type == 'reference_sheet':
+            aspect_ratio = '16:9'
+        elif portrait_type == 'face_closeup':
+            aspect_ratio = '1:1'
+        else:
+            aspect_ratio = '9:16'
+
         style_images = [r for r in (resolve_image_input(img) for img in data.get('style_images', []) if img) if r]
         style_mode = data.get('style_mode', 'art_only')
+        style_summary = data.get('style_summary', '')
 
         safe_name = ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in character_name.lower())
         scene_id = f"portrait_{safe_name}_{portrait_type}"
@@ -1178,7 +1188,7 @@ def generate_cast_portrait():
             style_images=style_images or None,
             characters=None,
             character_images=None,
-            additional_context='',
+            additional_context=style_summary,
             style_mode=style_mode,
             scene_id=scene_id,
             api_key=g.api_key,
@@ -1229,13 +1239,19 @@ def generate_cast_portraits_batch():
 
         style_images = [r for r in (resolve_image_input(img) for img in data.get('style_images', []) if img) if r]
         style_mode = data.get('style_mode', 'art_only')
+        style_summary = data.get('style_summary', '')
         api_key = g.api_key
         tracking_uid = g.uid
 
         def generate_one_portrait(char_name, prompt, portrait_type):
             safe_name = ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in char_name.lower())
             scene_id = f"portrait_{safe_name}_{portrait_type}"
-            aspect_ratio = '1:1' if portrait_type == 'face_closeup' else '9:16'
+            if portrait_type == 'reference_sheet':
+                aspect_ratio = '16:9'
+            elif portrait_type == 'face_closeup':
+                aspect_ratio = '1:1'
+            else:
+                aspect_ratio = '9:16'
 
             res = generate_scene_image(
                 prompt=prompt,
@@ -1245,7 +1261,7 @@ def generate_cast_portraits_batch():
                 style_images=style_images or None,
                 characters=None,
                 character_images=None,
-                additional_context='',
+                additional_context=style_summary,
                 style_mode=style_mode,
                 scene_id=scene_id,
                 api_key=api_key,
@@ -1268,20 +1284,22 @@ def generate_cast_portraits_batch():
             res["character_name"] = char_name
             return res
 
-        # Build list of all portrait jobs
+        # Build list of portrait jobs — one per character (reference_sheet, fallback to face_closeup)
         jobs = []
         for char in cast:
             name = char.get('name', 'Unknown')
             prompts = char.get('portrait_prompts', {})
-            if prompts.get('face_closeup'):
+            if prompts.get('reference_sheet'):
+                jobs.append((name, prompts['reference_sheet'], 'reference_sheet'))
+            elif prompts.get('face_closeup'):
                 jobs.append((name, prompts['face_closeup'], 'face_closeup'))
-            if prompts.get('full_body'):
+            elif prompts.get('full_body'):
                 jobs.append((name, prompts['full_body'], 'full_body'))
 
         if not jobs:
             return jsonify({'error': 'No portrait prompts found in cast data'}), 400
 
-        print(f"[Cast Portrait] Batch generating {len(jobs)} portraits for {len(cast)} characters")
+        print(f"[Cast Portrait] Batch generating {len(jobs)} reference sheets for {len(cast)} characters")
 
         results = []
         with ThreadPoolExecutor(max_workers=5) as executor:
