@@ -7045,24 +7045,65 @@ RESOLUTION: ${visualsConfig.resolution}`;
         }
 
         // ── Refresh every signed URL on project load (URLs expire after 4h) ──
+        // Pulls a fresh signed URL for every asset persisted on the project:
+        //   • visualsScenes[*].imageUrl / videoUrl  (matched by scene_id, prefix-scan)
+        //   • visualsScenes[*].lastFrameUrl         (path extracted from URL)
+        //   • visualsScenes[*].refImages[*].url     (path extracted from URL)
+        //   • currentCast.cast[*].portraits.{reference_sheet|face_closeup|full_body}
+        //   • visualsConfig.styleImages[*]
+        //   • styleReferenceImages[*]               (Style Review panel)
+        //   • visualsCharacters[*].images[*]
+        function pathFromFirebaseUrl(url) {
+            // Returns the bucket-relative path from a Firebase Storage signed URL,
+            // e.g. ".../storage/v1/b/<bucket>/.../references/proj/last_frame/x.png?..."
+            // or  "https://storage.googleapis.com/<bucket>/images/proj/scene_1_..."
+            if (!url || typeof url !== 'string' || !url.startsWith('http')) return null;
+            try {
+                const parsed = new URL(url);
+                const parts = parsed.pathname.split('/').filter(Boolean);
+                for (const prefix of ['references', 'images', 'videos', 'audio']) {
+                    const i = parts.indexOf(prefix);
+                    if (i !== -1) return parts.slice(i).join('/');
+                }
+                return null;
+            } catch (e) { return null; }
+        }
+
         async function refreshAllProjectUrls() {
             if (!currentProjectId) return;
 
             const sceneIds = (visualsScenes || []).map(s => s.sceneId).filter(Boolean);
-
             const blobPaths = new Set();
-            // Cast portraits — reference_sheet plus legacy face_closeup/full_body
+            const pathFor = (img) => (img && (img.path || img.blob_path)) || pathFromFirebaseUrl(img?.url);
+
+            // Cast portraits (new + legacy keys)
             (currentCast?.cast || []).forEach(c => {
                 ['reference_sheet', 'face_closeup', 'full_body'].forEach(k => {
-                    const p = c.portraits?.[k]?.blob_path;
+                    const p = pathFor(c.portraits?.[k]);
                     if (p) blobPaths.add(p);
                 });
             });
-            // Visuals config style references
-            (visualsConfig?.styleImages || []).forEach(img => { if (img.path) blobPaths.add(img.path); });
-            // Per-character image refs
+            // Visuals config style refs
+            (visualsConfig?.styleImages || []).forEach(img => {
+                const p = pathFor(img); if (p) blobPaths.add(p);
+            });
+            // Style Review panel reference images
+            (typeof styleReferenceImages !== 'undefined' ? styleReferenceImages : []).forEach(img => {
+                const p = pathFor(img); if (p) blobPaths.add(p);
+            });
+            // Per-character refs (visualsCharacters)
             (visualsCharacters || []).forEach(ch => {
-                (ch.images || []).forEach(img => { if (img.path) blobPaths.add(img.path); });
+                (ch.images || []).forEach(img => {
+                    const p = pathFor(img); if (p) blobPaths.add(p);
+                });
+            });
+            // Per-scene last frame + scene-level reference images
+            (visualsScenes || []).forEach(s => {
+                const lp = pathFromFirebaseUrl(s.lastFrameUrl);
+                if (lp) blobPaths.add(lp);
+                (s.refImages || []).forEach(img => {
+                    const p = pathFor(img); if (p) blobPaths.add(p);
+                });
             });
 
             if (sceneIds.length === 0 && blobPaths.size === 0) return;
@@ -7084,45 +7125,48 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 const videos = data.videos || {};
 
                 let touched = 0;
+                const lookup = (img) => {
+                    const p = pathFor(img);
+                    return p ? blobs[p] : null;
+                };
 
-                // Scene image + video URLs (matched by scene_id)
-                visualsScenes.forEach((s, idx) => {
-                    if (scenes[s.sceneId]) {
-                        s.imageUrl = scenes[s.sceneId];
-                        s.imageStatus = 'complete';
-                        touched++;
-                    }
-                    if (videos[s.sceneId]) {
-                        s.videoUrl = videos[s.sceneId];
-                        s.videoStatus = 'complete';
-                        touched++;
-                    }
+                // Scenes — image, video, last frame, scene-level ref images
+                visualsScenes.forEach((s) => {
+                    if (scenes[s.sceneId]) { s.imageUrl = scenes[s.sceneId]; s.imageStatus = 'complete'; touched++; }
+                    if (videos[s.sceneId]) { s.videoUrl = videos[s.sceneId]; s.videoStatus = 'complete'; touched++; }
+                    const lp = pathFromFirebaseUrl(s.lastFrameUrl);
+                    if (lp && blobs[lp]) { s.lastFrameUrl = blobs[lp]; touched++; }
+                    (s.refImages || []).forEach(img => {
+                        const u = lookup(img);
+                        if (u) { img.url = u; if (img.data && img.data.startsWith?.('http')) img.data = u; touched++; }
+                    });
                 });
 
                 // Cast portraits
                 (currentCast?.cast || []).forEach(c => {
                     ['reference_sheet', 'face_closeup', 'full_body'].forEach(k => {
-                        const bp = c.portraits?.[k]?.blob_path;
-                        if (bp && blobs[bp]) {
-                            c.portraits[k].url = blobs[bp];
-                            touched++;
-                        }
+                        const u = lookup(c.portraits?.[k]);
+                        if (u) { c.portraits[k].url = u; touched++; }
                     });
                 });
 
-                // Style images
+                // visualsConfig.styleImages
                 (visualsConfig?.styleImages || []).forEach(img => {
-                    if (img.path && blobs[img.path]) { img.url = blobs[img.path]; touched++; }
+                    const u = lookup(img); if (u) { img.url = u; touched++; }
                 });
 
-                // Visuals characters
+                // styleReferenceImages (Style Review panel)
+                if (typeof styleReferenceImages !== 'undefined') {
+                    styleReferenceImages.forEach(img => {
+                        const u = lookup(img); if (u) { img.url = u; touched++; }
+                    });
+                }
+
+                // visualsCharacters
                 (visualsCharacters || []).forEach(ch => {
                     (ch.images || []).forEach(img => {
-                        if (img.path && blobs[img.path]) {
-                            img.url = blobs[img.path];
-                            img.data = blobs[img.path];
-                            touched++;
-                        }
+                        const u = lookup(img);
+                        if (u) { img.url = u; if (img.data && img.data.startsWith?.('http')) img.data = u; touched++; }
                     });
                 });
 
@@ -7132,6 +7176,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
                     if (visualsScenes.length) renderVisualsScenes();
                     if (typeof renderCharacterList === 'function') renderCharacterList();
                     if (typeof renderVisualsStylePreviews === 'function') renderVisualsStylePreviews();
+                    if (typeof renderStyleImagePreviews === 'function') renderStyleImagePreviews();
                     triggerAutosave();
                 }
             } catch (e) {
