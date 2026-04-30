@@ -5134,7 +5134,12 @@ No formatting needed — just paste your narration!"></textarea>
                         <label>Character Reference Sheet</label>
                         ${!approvedStyle ? '<span class="cast-style-warning">&#9888; No style set — character may not match your visuals</span>' : ''}
                         <div class="cast-portrait-images" id="cast-portraits-${idx}">
-                            ${char.portraits?.reference_sheet?.url ? `<img src="${char.portraits.reference_sheet.url}" class="cast-portrait-thumb cast-portrait-wide" title="Character Reference Sheet">` : ''}
+                            ${(() => {
+                                const url = char.portraits?.reference_sheet?.url
+                                    || char.portraits?.face_closeup?.url
+                                    || char.portraits?.full_body?.url;
+                                return url ? `<img src="${url}" class="cast-portrait-thumb cast-portrait-wide" title="Character Reference Sheet">` : '';
+                            })()}
                             ${isOutdated ? '<span class="outdated-badge">Outdated</span>' : ''}
                         </div>
                         <button class="btn-secondary btn-small" onclick="generatePortraitForCharacter(${idx})" id="portrait-btn-${idx}">
@@ -7039,6 +7044,101 @@ RESOLUTION: ${visualsConfig.resolution}`;
             triggerAutosave();
         }
 
+        // ── Refresh every signed URL on project load (URLs expire after 4h) ──
+        async function refreshAllProjectUrls() {
+            if (!currentProjectId) return;
+
+            const sceneIds = (visualsScenes || []).map(s => s.sceneId).filter(Boolean);
+
+            const blobPaths = new Set();
+            // Cast portraits — reference_sheet plus legacy face_closeup/full_body
+            (currentCast?.cast || []).forEach(c => {
+                ['reference_sheet', 'face_closeup', 'full_body'].forEach(k => {
+                    const p = c.portraits?.[k]?.blob_path;
+                    if (p) blobPaths.add(p);
+                });
+            });
+            // Visuals config style references
+            (visualsConfig?.styleImages || []).forEach(img => { if (img.path) blobPaths.add(img.path); });
+            // Per-character image refs
+            (visualsCharacters || []).forEach(ch => {
+                (ch.images || []).forEach(img => { if (img.path) blobPaths.add(img.path); });
+            });
+
+            if (sceneIds.length === 0 && blobPaths.size === 0) return;
+
+            try {
+                const res = await authFetch('/api/refresh-project-urls', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        project_id: currentProjectId,
+                        scene_ids: sceneIds,
+                        blob_paths: Array.from(blobPaths),
+                    }),
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                const blobs = data.blobs || {};
+                const scenes = data.scenes || {};
+                const videos = data.videos || {};
+
+                let touched = 0;
+
+                // Scene image + video URLs (matched by scene_id)
+                visualsScenes.forEach((s, idx) => {
+                    if (scenes[s.sceneId]) {
+                        s.imageUrl = scenes[s.sceneId];
+                        s.imageStatus = 'complete';
+                        touched++;
+                    }
+                    if (videos[s.sceneId]) {
+                        s.videoUrl = videos[s.sceneId];
+                        s.videoStatus = 'complete';
+                        touched++;
+                    }
+                });
+
+                // Cast portraits
+                (currentCast?.cast || []).forEach(c => {
+                    ['reference_sheet', 'face_closeup', 'full_body'].forEach(k => {
+                        const bp = c.portraits?.[k]?.blob_path;
+                        if (bp && blobs[bp]) {
+                            c.portraits[k].url = blobs[bp];
+                            touched++;
+                        }
+                    });
+                });
+
+                // Style images
+                (visualsConfig?.styleImages || []).forEach(img => {
+                    if (img.path && blobs[img.path]) { img.url = blobs[img.path]; touched++; }
+                });
+
+                // Visuals characters
+                (visualsCharacters || []).forEach(ch => {
+                    (ch.images || []).forEach(img => {
+                        if (img.path && blobs[img.path]) {
+                            img.url = blobs[img.path];
+                            img.data = blobs[img.path];
+                            touched++;
+                        }
+                    });
+                });
+
+                if (touched > 0) {
+                    console.log(`[Refresh] Re-signed ${touched} asset URLs for project ${currentProjectId}`);
+                    if (currentCast) renderCastPanel(currentCast);
+                    if (visualsScenes.length) renderVisualsScenes();
+                    if (typeof renderCharacterList === 'function') renderCharacterList();
+                    if (typeof renderVisualsStylePreviews === 'function') renderVisualsStylePreviews();
+                    triggerAutosave();
+                }
+            } catch (e) {
+                console.error('[Refresh] Failed:', e);
+            }
+        }
+
         // ── Sync Orphaned Images from Firebase Storage ──
         async function syncOrphanedImages() {
             const scenesWithoutImages = visualsScenes.filter(s => !s.imageUrl);
@@ -8559,17 +8659,13 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 if (vc) vc.textContent = `${visualsScenes.length} scenes`;
                 renderVisualsScenes();
 
-                // Auto-sync: recover any missing images from Firebase Storage
-                const scenesWithoutImages = visualsScenes.filter(s => !s.imageUrl);
-                if (scenesWithoutImages.length > 0 && currentProjectId) {
-                    // Some or all scenes are missing images — recover from Firebase Storage
-                    console.log(`[Auto-Sync] ${scenesWithoutImages.length}/${visualsScenes.length} scenes missing images, checking storage...`);
-                    syncOrphanedImages().catch(e => console.error('[Auto-Sync] Failed:', e));
-                }
-
                 // Fetch image history for all scenes
                 fetchImageHistory();
             }
+
+            // Re-sign every asset URL — covers the 4h signed-URL expiry so projects
+            // opened days/weeks later still show their images, videos, and portraits.
+            refreshAllProjectUrls().catch(e => console.error('[Refresh] Failed:', e));
 
             // Refresh reference images (restore base64 data from Firebase Storage)
             // This handles expired signed URLs and missing base64 data after reload

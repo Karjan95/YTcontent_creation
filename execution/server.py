@@ -2704,6 +2704,72 @@ def get_latest_production_table():
         return safe_error_response(e)
 
 
+@app.route('/api/refresh-project-urls', methods=['POST'])
+@require_auth
+@limiter.limit("400/hour")
+def refresh_project_urls():
+    """Re-sign every asset URL for a project so the UI works after the 4-hour expiry.
+
+    Accepts: { project_id, blob_paths: [str], scene_ids: [str] }
+    Returns: { blobs: {path: url}, scenes: {sid: url}, videos: {sid: url} }
+
+    Direct blob_path → URL is used for assets where we persist the path
+    (portraits, style refs, character images). Scene images/videos are matched
+    by listing the project's storage prefix (we don't persist their blob_path).
+    """
+    try:
+        if not bucket:
+            return jsonify({'error': 'Firebase Storage not configured'}), 500
+
+        data = request.json or {}
+        project_id = data.get('project_id')
+        blob_paths = data.get('blob_paths') or []
+        scene_ids = data.get('scene_ids') or []
+
+        blobs_out = {}
+        for bp in blob_paths:
+            if not isinstance(bp, str):
+                continue
+            if not (bp.startswith('references/') or bp.startswith('images/') or bp.startswith('videos/')):
+                continue
+            try:
+                blob = bucket.blob(bp)
+                if blob.exists():
+                    url = _generate_signed_url(blob)
+                    if url:
+                        blobs_out[bp] = url
+            except Exception as e:
+                print(f"[Refresh] blob_path failed for {bp}: {e}")
+
+        scenes_out = {}
+        videos_out = {}
+        if project_id and scene_ids:
+            img_blobs = list(bucket.list_blobs(prefix=f"images/{project_id}/scene_"))
+            vid_blobs = list(bucket.list_blobs(prefix=f"videos/{project_id}/scene_"))
+            for sid in scene_ids:
+                safe_id = str(sid).replace("/", "_").replace(" ", "_")
+                prefix = f"scene_{safe_id}_"
+                imgs = [b for b in img_blobs if b.name.split('/')[-1].startswith(prefix)]
+                if imgs:
+                    imgs.sort(key=lambda b: b.name)
+                    url = _generate_signed_url(imgs[-1])
+                    if url:
+                        scenes_out[str(sid)] = url
+                vids = [b for b in vid_blobs if b.name.split('/')[-1].startswith(prefix)]
+                if vids:
+                    vids.sort(key=lambda b: b.name)
+                    url = _generate_signed_url(vids[-1])
+                    if url:
+                        videos_out[str(sid)] = url
+
+        print(f"[Refresh] project={project_id} blobs={len(blobs_out)}/{len(blob_paths)} "
+              f"scenes={len(scenes_out)}/{len(scene_ids)} videos={len(videos_out)}/{len(scene_ids)}")
+        return jsonify({'blobs': blobs_out, 'scenes': scenes_out, 'videos': videos_out})
+
+    except Exception as e:
+        return safe_error_response(e)
+
+
 @app.route('/api/visuals/sync-storage-images', methods=['POST'])
 @require_auth
 @limiter.limit("200/hour")
