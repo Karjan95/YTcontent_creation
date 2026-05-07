@@ -449,10 +449,42 @@ def _kie_request(method, url, api_key, json_data=None, timeout=60):
 #  PAYLOAD BUILDER (handles per-model quirks)
 # ────────────────────────────────────────────────────────────────
 
+def _build_generic_passthrough_payload(model_key, prompt, image_urls=None, **params):
+    """Generic fallback for models not in KIE_MODELS.
+
+    Ships {model, input} where input is the user-supplied params merged with
+    `prompt` and `image_input`. Strips obvious orchestration keys that the API
+    won't accept (project_id, scene_id). Lists/strings are passed through
+    unchanged — the model's own validator will reject anything malformed."""
+    SKIP_KEYS = {'project_id', 'scene_id', 'model_id', 'callBackUrl'}
+    input_data = {k: v for k, v in (params or {}).items()
+                  if k not in SKIP_KEYS and v is not None and v != ""}
+    if prompt:
+        input_data.setdefault("prompt", prompt)
+    if image_urls:
+        # Most non-legacy models accept `image_input` as a list. Only set it if
+        # the caller didn't already pick a more specific slot name.
+        already_set = any(k in input_data for k in (
+            "image_input", "image_url", "image_urls", "first_frame_url",
+            "input_urls", "image"))
+        if not already_set:
+            arr = image_urls if isinstance(image_urls, list) else [image_urls]
+            input_data["image_input"] = arr
+    return {"model": model_key, "input": input_data}
+
+
+
 def _build_task_payload(model_key, prompt, image_urls=None, **params):
-    """Build the createTask payload, normalizing per-model parameter quirks."""
+    """Build the createTask payload, normalizing per-model parameter quirks.
+
+    For models in the legacy KIE_MODELS dict, runs full per-model
+    normalization. For any other model_key (e.g. the ~130 entries from
+    MODEL_SCHEMAS that haven't been hand-mapped here yet), falls back to a
+    generic passthrough that ships the prompt + params verbatim. The API
+    itself will surface validation errors if the shape is wrong, which
+    bubble up to the Studio UI through the dispatch layer."""
     if model_key not in KIE_MODELS:
-        raise ValueError(f"Unknown model: {model_key}")
+        return _build_generic_passthrough_payload(model_key, prompt, image_urls, **params)
 
     config = KIE_MODELS[model_key]
 

@@ -26,7 +26,8 @@ from gemini_client import (generate_image_content, generate_tts, generate_conten
                            analyze_style_from_images, analyze_style_from_text,
                            expand_creative_direction, refine_creative_direction,
                            generate_scene_image, edit_scene_image,
-                           start_video_generation, poll_video_generation)
+                           start_video_generation, poll_video_generation,
+                           generate_music_content)
 from research_templates import (get_all_templates_metadata, get_template, build_research_queries,
                                 build_title_suggestions_prompt, AUDIENCE_PROFILES, TONE_DEFINITIONS,
                                 FORMAT_PRESETS, VIEWER_OUTCOMES)
@@ -47,6 +48,10 @@ from kie_client import (check_credits as kie_check_credits,
                         mj_poll_task as kie_mj_poll_task,
                         mj_upscale as kie_mj_upscale,
                         mj_vary as kie_mj_vary)
+from seedance_studio import register_routes as register_seedance_routes
+from model_schemas import (MODEL_SCHEMAS as STUDIO_MODELS,
+                           get_provider_groups as studio_provider_groups,
+                           get_schema as studio_get_schema)
 
 # Paths relative to this script's location
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -408,6 +413,9 @@ def require_auth(f):
     return decorated
 
 
+register_seedance_routes(app, limiter, require_auth, upload_to_storage)
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -592,15 +600,29 @@ def kie_generate():
     reserved_keys = {'model', 'prompt', 'image_urls', 'project_id'}
     params = {k: v for k, v in data.items() if k not in reserved_keys}
 
-    # Upload ref images to Kie.ai CDN (Seedance multimodal — Firebase URLs need re-hosting)
+    # Upload ref images/videos/audios to Kie.ai CDN (Seedance multimodal — Firebase URLs need re-hosting).
+    # User-uploaded files via /api/kie/upload-media are already on the Kie CDN; this is idempotent for those.
+    def _rehost_refs(urls, limit, upload_path):
+        out = []
+        for u in (urls or [])[:limit]:
+            if not u:
+                continue
+            s = str(u)
+            # Skip if already on Kie's CDN
+            if 'tempfile.redpandaai.co' in s:
+                out.append(s)
+                continue
+            up = kie_upload_image(s, g.kie_api_key, upload_path=upload_path)
+            if up.get('success'):
+                out.append(up['url'])
+        return out
+
     if params.get('ref_image_urls'):
-        uploaded_refs = []
-        for img_url in (params['ref_image_urls'] or [])[:9]:
-            if img_url:
-                up = kie_upload_image(str(img_url), g.kie_api_key)
-                if up.get('success'):
-                    uploaded_refs.append(up['url'])
-        params['ref_image_urls'] = uploaded_refs
+        params['ref_image_urls'] = _rehost_refs(params['ref_image_urls'], 9, 'images/user-uploads')
+    if params.get('ref_video_urls'):
+        params['ref_video_urls'] = _rehost_refs(params['ref_video_urls'], 3, 'videos/user-uploads')
+    if params.get('ref_audio_urls'):
+        params['ref_audio_urls'] = _rehost_refs(params['ref_audio_urls'], 3, 'audios/user-uploads')
 
     print(f"[Kie Generate] model={model}, prompt={prompt[:50]}, images={len(image_urls or [])}, params={list(params.keys())}")
 
@@ -751,6 +773,256 @@ def kie_mj_vary_route():
 
 
 # ────────────────────────────────────────────────────────────────
+#  STUDIO — unified model registry & generate dispatcher
+# ────────────────────────────────────────────────────────────────
+
+@app.route('/api/studio/models', methods=['GET'])
+@require_auth
+def studio_list_models():
+    """Return the full Studio model registry, grouped by provider.
+
+    The frontend uses this to render the model picker and the dynamic
+    parameter form. Schema is the single source of truth — see
+    execution/model_schemas.py."""
+    return jsonify({
+        "providers": studio_provider_groups(),
+        "schemas": STUDIO_MODELS,
+    })
+
+
+@app.route('/api/studio/generate', methods=['POST'])
+@require_auth
+@limiter.limit("600/hour")
+def studio_generate():
+    """Single dispatch point for every model in the registry.
+
+    Body: {model_id, inputs:{...}, params:{...}, project_id?}
+
+    Routes to the right backend (`google_imagen` / `kie_generic` / etc.)
+    based on the schema's `backend` field. The frontend never needs to
+    know which underlying API to call."""
+    data = request.json or {}
+    model_id = (data.get('model_id') or '').strip()
+    inputs = data.get('inputs') or {}
+    params = data.get('params') or {}
+    project_id = data.get('project_id')
+
+    schema = studio_get_schema(model_id)
+    if not schema:
+        return jsonify({'error': f'Unknown model: {model_id}'}), 400
+
+    backend = schema['backend']
+    print(f"[Studio] model={model_id} backend={backend} kind={schema['kind']}")
+
+    try:
+        if backend == 'kie_generic':
+            return _studio_dispatch_kie_generic(schema, inputs, params, project_id)
+        if backend == 'kie_veo3':
+            return _studio_dispatch_kie_veo(schema, inputs, params, project_id)
+        if backend == 'kie_runway':
+            return _studio_dispatch_kie_runway(schema, inputs, params, project_id)
+        if backend == 'google_gemini_image':
+            return _studio_dispatch_google_image(schema, inputs, params, project_id,
+                                                 native=True)
+        if backend == 'google_imagen':
+            return _studio_dispatch_google_image(schema, inputs, params, project_id,
+                                                 native=False)
+        if backend == 'google_veo':
+            return _studio_dispatch_google_veo(schema, inputs, params, project_id)
+        if backend == 'google_tts':
+            return _studio_dispatch_google_tts(schema, inputs, params, project_id)
+        if backend == 'google_lyria':
+            return _studio_dispatch_google_lyria(schema, inputs, params, project_id)
+        return jsonify({'error': f'Backend not yet implemented: {backend}'}), 501
+    except Exception as e:
+        return safe_error_response(e)
+
+
+def _studio_dispatch_kie_generic(schema, inputs, params, project_id):
+    """Most Kie market models — hand off to /api/v1/jobs/createTask via kie_create_task."""
+    if not g.kie_api_key:
+        return jsonify({'error': 'No Kie.ai API key configured'}), 400
+    payload = {**inputs, **params}
+    prompt = (inputs.get('prompt') or inputs.get('text') or '').strip()
+    image_urls = inputs.get('image_input') or inputs.get('image_urls') or []
+    if isinstance(image_urls, str):
+        image_urls = [image_urls]
+    extras = {k: v for k, v in payload.items()
+              if k not in {'prompt', 'text', 'image_input', 'image_urls'}}
+    result = kie_create_task(schema['id'], prompt, g.kie_api_key,
+                             image_urls=image_urls, **extras)
+    if not result.get('success'):
+        return jsonify({'error': result.get('error', 'Kie task failed')}), 500
+    return jsonify({**result, 'backend': 'kie_generic'})
+
+
+def _studio_dispatch_kie_veo(schema, inputs, params, project_id):
+    """Kie's Veo 3 wrapper lives under /veo3-api/* with a different request shape
+    than generic market models. Until task #8 wires it natively, surface a clear
+    error rather than silently mis-routing through /jobs/createTask."""
+    if not g.kie_api_key:
+        return jsonify({'error': 'No Kie.ai API key configured'}), 400
+    return jsonify({
+        'error': 'Veo via Kie isn\'t wired in Studio yet — use the Google '
+                 'Veo entries (provider: Google) for now, or wait for task #8.'
+    }), 501
+
+
+def _studio_dispatch_kie_runway(schema, inputs, params, project_id):
+    """Runway lives under /runway-api/* with its own shape — same situation as Veo."""
+    if not g.kie_api_key:
+        return jsonify({'error': 'No Kie.ai API key configured'}), 400
+    return jsonify({
+        'error': 'Runway via Kie isn\'t wired in Studio yet (different endpoint '
+                 'shape than market models). Coming in task #8.'
+    }), 501
+
+
+def _studio_dispatch_google_image(schema, inputs, params, project_id, native):
+    """Google's image models — Gemini-native (Nano Banana family) or Imagen.
+
+    Plumbs reference images, count (num_images), and @-mention `prompt_parts`
+    through to gemini_client. Returns a list of public URLs in `image_urls`
+    plus a back-compat `image_url` for the first result."""
+    prompt = (inputs.get('prompt') or '').strip()
+    prompt_parts = inputs.get('prompt_parts') or None
+    if not prompt and not prompt_parts:
+        return jsonify({'error': 'prompt is required'}), 400
+
+    refs = inputs.get('reference_images') or []
+    if isinstance(refs, str):
+        refs = [refs]
+    if (refs or prompt_parts) and not native:
+        return jsonify({
+            'error': 'Imagen models can\'t use reference images. Pick a Nano Banana variant for image-to-image.'
+        }), 400
+
+    # Clamp count against schema's declared range so a hostile/malformed param
+    # can't ask for 99 images.
+    count = 1
+    for p in (schema.get('params') or []):
+        if p.get('name') in ('num_images', 'max_images'):
+            try:
+                want = int(params.get(p['name']) or p.get('default') or 1)
+            except (TypeError, ValueError):
+                want = 1
+            count = max(int(p.get('min', 1)), min(want, int(p.get('max', 4))))
+            break
+
+    aspect_ratio = (params.get('aspect_ratio') or '').strip() or None
+    image_size = (params.get('image_size') or '').strip() or None
+
+    paths = generate_image_content(
+        prompt or '', model_name=schema['id'], api_key=g.api_key,
+        uid=g.uid, project_id=project_id,
+        reference_images=refs if refs else None,
+        prompt_parts=prompt_parts,
+        count=count,
+        aspect_ratio=aspect_ratio,
+        image_size=image_size,
+        return_list=True,
+    )
+    if not paths or (isinstance(paths, str) and paths.startswith('Error')):
+        return jsonify({'error': paths or 'Image generation returned no result'}), 500
+
+    image_urls = []
+    for p in paths:
+        public_url = upload_to_storage(p, 'images', project_id=project_id)
+        image_urls.append(public_url or f'/generated/{os.path.basename(p)}')
+    return jsonify({
+        'success': True,
+        'image_urls': image_urls,
+        'image_url': image_urls[0],
+        'backend': 'google_gemini_image' if native else 'google_imagen',
+    })
+
+
+def _studio_dispatch_google_veo(schema, inputs, params, project_id):
+    """Veo — long-running. Supports T2V, I2V, first→last frame interpolation,
+    and reference-image conditioning. All ref slots accept URLs / data URIs /
+    local paths; gemini_client resolves them to types.Image."""
+    prompt = (inputs.get('prompt') or '').strip()
+    if not prompt:
+        return jsonify({'error': 'prompt is required'}), 400
+
+    first_frame = inputs.get('first_frame') or None
+    last_frame = inputs.get('last_frame') or None
+    refs = inputs.get('reference_images') or []
+    if isinstance(refs, str):
+        refs = [refs]
+
+    if last_frame and not first_frame:
+        return jsonify({
+            'error': 'last_frame requires first_frame — Veo interpolates between the two.'
+        }), 400
+
+    op = start_video_generation(
+        image_path=first_frame, prompt=prompt, model_name=schema['id'],
+        aspect_ratio=params.get('aspect_ratio') or '16:9',
+        duration=int(params.get('duration_seconds') or 6),
+        resolution=params.get('resolution') or '720p',
+        api_key=g.api_key, uid=g.uid, project_id=project_id,
+        last_frame=last_frame,
+        reference_images=refs or None,
+        negative_prompt=(params.get('negative_prompt') or '').strip() or None,
+        seed=params.get('seed'),
+        enhance_prompt=params.get('enhance_prompt'),
+    )
+    return jsonify({'success': True, 'operation': op, 'backend': 'google_veo'})
+
+
+def _studio_dispatch_google_tts(schema, inputs, params, project_id):
+    text = (inputs.get('prompt') or inputs.get('text') or '').strip()
+    if not text:
+        return jsonify({'error': 'text is required'}), 400
+    audio_path = generate_tts(
+        text, voice_name=(params.get('voice') or 'Kore').lower(),
+        api_key=g.api_key, uid=g.uid, project_id=project_id,
+    )
+    if not audio_path:
+        return jsonify({'error': 'TTS returned no audio'}), 500
+    public_url = upload_to_storage(audio_path, 'audio', project_id=project_id)
+    return jsonify({
+        'success': True,
+        'audio_url': public_url or f'/audio/{os.path.basename(audio_path)}',
+        'backend': 'google_tts',
+    })
+
+
+def _studio_dispatch_google_lyria(schema, inputs, params, project_id):
+    """Lyria 3 — text-to-music with optional mood-image refs.
+    Output is mp3 (Clip) or mp3/wav (Pro). Synchronous; not long-running."""
+    prompt = (inputs.get('prompt') or '').strip()
+    if not prompt:
+        return jsonify({'error': 'prompt is required'}), 400
+
+    mood_refs = inputs.get('mood_references') or []
+    if isinstance(mood_refs, str):
+        mood_refs = [mood_refs]
+
+    output_format = (params.get('output_format') or 'mp3').strip().lower()
+    if output_format not in {'mp3', 'wav'}:
+        output_format = 'mp3'
+
+    audio_path = generate_music_content(
+        prompt, model_name=schema['id'], api_key=g.api_key,
+        uid=g.uid, project_id=project_id,
+        mood_references=mood_refs or None,
+        output_format=output_format,
+    )
+    if not audio_path or (isinstance(audio_path, str) and audio_path.startswith('Error')):
+        return jsonify({'error': audio_path or 'Lyria returned no audio'}), 500
+
+    public_url = upload_to_storage(audio_path, 'audio', project_id=project_id)
+    audio_url = public_url or f'/generated/{os.path.basename(audio_path)}'
+    return jsonify({
+        'success': True,
+        'audio_url': audio_url,
+        'backend': 'google_lyria',
+    })
+
+
+# ────────────────────────────────────────────────────────────────
 #  IMAGE GENERATION
 # ────────────────────────────────────────────────────────────────
 
@@ -818,6 +1090,72 @@ def upload_reference_image():
         return jsonify({'success': True, 'url': url, 'path': blob_path})
     except Exception as e:
         return safe_error_response(e)
+
+
+def _upload_reference_media(kind, allowed_mime_prefixes, default_ext_map):
+    """Shared logic for video/audio reference uploads. Accepts a base64 data URI.
+
+    `kind`: 'video' or 'audio' — used as the storage subfolder.
+    `allowed_mime_prefixes`: tuple of MIME prefixes the data URI's header must match.
+    `default_ext_map`: { mime_substr: ext } for filename extension inference.
+    """
+    try:
+        data = request.json or {}
+        media_b64 = data.get('media')
+        project_id = data.get('project_id')
+        filename = data.get('filename', f'{kind}.bin')
+
+        if not media_b64 or not media_b64.startswith('data:'):
+            return jsonify({'error': 'Valid base64 data URI is required'}), 400
+        header, encoded = media_b64.split(',', 1)
+        if not any(p in header for p in allowed_mime_prefixes):
+            return jsonify({'error': f'Expected a {kind} data URI'}), 400
+
+        ext = next((v for k, v in default_ext_map.items() if k in header), default_ext_map['_default'])
+        safe_name = f"{kind}_{int(time.time())}_{filename.rsplit('.', 1)[0]}.{ext}"
+
+        tmp_dir = tempfile.mkdtemp()
+        tmp_path = os.path.join(tmp_dir, safe_name)
+        with open(tmp_path, 'wb') as tmp:
+            tmp.write(base64_module.b64decode(encoded))
+
+        remote_folder = f"references/{project_id}/{kind}" if project_id else f"references/{kind}"
+        url, blob_path = upload_to_storage(tmp_path, remote_folder, return_path=True)
+        os.unlink(tmp_path)
+        os.rmdir(tmp_dir)
+
+        if not url:
+            return jsonify({'error': 'Failed to upload to storage'}), 500
+        return jsonify({'success': True, 'url': url, 'path': blob_path})
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/upload-reference-video', methods=['POST'])
+@require_auth
+@limiter.limit("30/hour")
+def upload_reference_video():
+    """Upload a base64 reference video to Firebase Storage, return public URL."""
+    return _upload_reference_media(
+        'video',
+        allowed_mime_prefixes=('video/',),
+        default_ext_map={'mp4': 'mp4', 'webm': 'webm', 'quicktime': 'mov',
+                         'mov': 'mov', '_default': 'mp4'},
+    )
+
+
+@app.route('/api/upload-reference-audio', methods=['POST'])
+@require_auth
+@limiter.limit("30/hour")
+def upload_reference_audio():
+    """Upload a base64 reference audio file to Firebase Storage, return public URL."""
+    return _upload_reference_media(
+        'audio',
+        allowed_mime_prefixes=('audio/',),
+        default_ext_map={'mpeg': 'mp3', 'mp3': 'mp3', 'wav': 'wav',
+                         'ogg': 'ogg', 'webm': 'webm', 'm4a': 'm4a',
+                         'aac': 'aac', '_default': 'mp3'},
+    )
 
 
 @app.route('/api/refresh-reference-images', methods=['POST'])
@@ -1828,10 +2166,21 @@ def update_project(project_id):
 @require_auth
 @limiter.limit("200/hour")
 def delete_project(project_id):
-    """Delete a specific project and all its Firebase Storage assets."""
+    """Delete a specific project, its asset subcollection, and Storage files."""
     try:
-        # Delete Firestore document
-        db.collection('users').document(g.uid).collection('projects').document(project_id).delete()
+        project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
+
+        # Cascade-delete the assets subcollection (Firestore doesn't auto-cascade).
+        try:
+            asset_docs = list(project_ref.collection('assets').stream())
+            for ad in asset_docs:
+                ad.reference.delete()
+            if asset_docs:
+                print(f"[Asset Cleanup] Deleted {len(asset_docs)} asset docs for project {project_id}")
+        except Exception as e:
+            print(f"[Asset Cleanup] Error: {e}")
+
+        project_ref.delete()
 
         # Clean up Firebase Storage files for this project
         if bucket:
@@ -1853,6 +2202,123 @@ def delete_project(project_id):
             if deleted_count > 0:
                 print(f"[Storage Cleanup] Deleted {deleted_count} files for project {project_id}")
 
+        return jsonify({'success': True})
+    except Exception as e:
+        return safe_error_response(e)
+
+
+# ────────────────────────────────────────────────────────────────
+#  STUDIO — per-project asset library (Firestore subcollection)
+# ────────────────────────────────────────────────────────────────
+
+# Fields the client is allowed to set/update on an asset doc.
+_ASSET_WRITE_FIELDS = {
+    'kind', 'url', 'thumbnail_url', 'prompt', 'model_id', 'provider',
+    'refs', 'params', 'favorite',
+}
+# Fields the client is allowed to PATCH after creation.
+_ASSET_PATCH_FIELDS = {'favorite', 'prompt'}
+
+
+def _serialize_asset(doc):
+    d = doc.to_dict() or {}
+    d['id'] = doc.id
+    ts = d.get('ts')
+    if hasattr(ts, 'isoformat'):
+        d['ts'] = ts.isoformat()
+    return d
+
+
+@app.route('/api/projects/<project_id>/assets', methods=['GET'])
+@require_auth
+@limiter.limit("600/hour")
+def list_project_assets(project_id):
+    """List Studio assets for a project, newest first."""
+    try:
+        try:
+            limit = max(1, min(int(request.args.get('limit', 200)), 500))
+        except (TypeError, ValueError):
+            limit = 200
+        kind = request.args.get('kind')
+
+        coll = (db.collection('users').document(g.uid)
+                  .collection('projects').document(project_id)
+                  .collection('assets'))
+        query = coll.order_by('ts', direction=firestore.Query.DESCENDING).limit(limit)
+        if kind in {'image', 'video', 'audio'}:
+            query = coll.where('kind', '==', kind) \
+                        .order_by('ts', direction=firestore.Query.DESCENDING).limit(limit)
+
+        assets = [_serialize_asset(d) for d in query.stream()]
+        return jsonify({'success': True, 'assets': assets})
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/projects/<project_id>/assets', methods=['POST'])
+@require_auth
+@limiter.limit("1200/hour")
+def create_project_asset(project_id):
+    """Persist a Studio generation result to the project's asset library."""
+    try:
+        data = request.json or {}
+        kind = (data.get('kind') or '').strip()
+        url = (data.get('url') or '').strip()
+        if kind not in {'image', 'video', 'audio'}:
+            return jsonify({'error': 'kind must be image, video, or audio'}), 400
+        if not url:
+            return jsonify({'error': 'url is required'}), 400
+
+        doc = {k: data[k] for k in _ASSET_WRITE_FIELDS if k in data}
+        doc['kind'] = kind
+        doc['url'] = url
+        doc['favorite'] = bool(doc.get('favorite', False))
+        doc['created_by'] = g.uid
+        doc['ts'] = firestore.SERVER_TIMESTAMP
+
+        ref = (db.collection('users').document(g.uid)
+                 .collection('projects').document(project_id)
+                 .collection('assets').document())
+        ref.set(doc)
+
+        # Echo back with an ISO timestamp so the client can render immediately
+        # without re-fetching (SERVER_TIMESTAMP isn't JSON-serializable).
+        echo = {**doc, 'id': ref.id, 'ts': datetime.utcnow().isoformat() + 'Z'}
+        return jsonify({'success': True, 'asset': echo})
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/projects/<project_id>/assets/<asset_id>', methods=['PATCH'])
+@require_auth
+@limiter.limit("1200/hour")
+def patch_project_asset(project_id, asset_id):
+    """Toggle favorite, edit prompt, etc. — whitelist of fields only."""
+    try:
+        data = request.json or {}
+        update = {k: data[k] for k in _ASSET_PATCH_FIELDS if k in data}
+        if not update:
+            return jsonify({'error': 'No updatable fields supplied'}), 400
+        if 'favorite' in update:
+            update['favorite'] = bool(update['favorite'])
+
+        ref = (db.collection('users').document(g.uid)
+                 .collection('projects').document(project_id)
+                 .collection('assets').document(asset_id))
+        ref.set(update, merge=True)
+        return jsonify({'success': True})
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/projects/<project_id>/assets/<asset_id>', methods=['DELETE'])
+@require_auth
+@limiter.limit("600/hour")
+def delete_project_asset(project_id, asset_id):
+    try:
+        (db.collection('users').document(g.uid)
+           .collection('projects').document(project_id)
+           .collection('assets').document(asset_id).delete())
         return jsonify({'success': True})
     except Exception as e:
         return safe_error_response(e)
@@ -3801,4 +4267,4 @@ if __name__ == '__main__':
     os.makedirs(AUDIO_DIR, exist_ok=True)
     os.makedirs(VIDEO_DIR, exist_ok=True)
     os.makedirs(TMP_DIR, exist_ok=True)
-    app.run(debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true', port=8080)
+    app.run(debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true', port=int(os.environ.get('PORT', 8080)))

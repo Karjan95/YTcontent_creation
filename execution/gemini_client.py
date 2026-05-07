@@ -129,55 +129,173 @@ def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=Fal
         return f"Error (after {MAX_RETRIES + 1} attempts): {str(e)}"
 
 
+def _ref_to_image(ref):
+    """Convert one reference (data URI / raw bytes / URL / local path) into a
+    `types.Image` for Veo. Returns None if the ref can't be resolved."""
+    if not ref:
+        return None
+    if isinstance(ref, types.Image):
+        return ref
+    try:
+        if isinstance(ref, (bytes, bytearray)):
+            return types.Image(image_bytes=bytes(ref), mime_type="image/png")
+        if isinstance(ref, str) and ref.startswith("data:"):
+            header, b64data = ref.split(",", 1)
+            mime = header.split(";")[0].split(":", 1)[1] or "image/png"
+            return types.Image(image_bytes=base64.b64decode(b64data), mime_type=mime)
+        if isinstance(ref, str) and (ref.startswith("http://") or ref.startswith("https://")):
+            import urllib.request
+            with urllib.request.urlopen(ref, timeout=15) as resp:
+                raw = resp.read()
+                ctype = resp.headers.get("Content-Type") or "image/png"
+            return types.Image(image_bytes=raw, mime_type=ctype)
+        if isinstance(ref, str) and os.path.exists(ref):
+            with open(ref, "rb") as f:
+                raw = f.read()
+            ext = os.path.splitext(ref)[1].lower()
+            mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                    ".webp": "image/webp"}.get(ext, "image/png")
+            return types.Image(image_bytes=raw, mime_type=mime)
+    except Exception as e:
+        print(f"[Veo] Skipping ref {str(ref)[:80]}…: {e}")
+    return None
+
+
+def _ref_to_part(ref):
+    """Convert one reference (data URI / raw bytes / URL) into a genai Part.
+    Returns None and logs if the ref can't be resolved."""
+    if not ref:
+        return None
+    if isinstance(ref, str) and ref.startswith("data:"):
+        try:
+            header, b64data = ref.split(",", 1)
+            mime = header.split(";")[0].split(":", 1)[1] or "image/png"
+            raw = base64.b64decode(b64data)
+            return types.Part.from_bytes(data=raw, mime_type=mime)
+        except Exception as e:
+            print(f"[Image Gen] Skipping malformed ref: {e}")
+            return None
+    if isinstance(ref, (bytes, bytearray)):
+        return types.Part.from_bytes(data=bytes(ref), mime_type="image/png")
+    # URL
+    try:
+        import urllib.request
+        with urllib.request.urlopen(ref, timeout=15) as resp:
+            raw = resp.read()
+            ctype = resp.headers.get("Content-Type") or "image/png"
+        return types.Part.from_bytes(data=raw, mime_type=ctype)
+    except Exception as e:
+        print(f"[Image Gen] Skipping ref URL {str(ref)[:80]}…: {e}")
+        return None
+
+
 def _generate_with_gemini_model(client, model_name, prompt, timestamp,
-                                uid=None, project_id=None):
-    """Generate image using Gemini's native image generation (generate_content API)."""
-    print(f"[Image Gen] Trying Gemini model: {model_name}...")
+                                uid=None, project_id=None,
+                                reference_images=None,
+                                prompt_parts=None,
+                                count=1,
+                                aspect_ratio=None,
+                                image_size=None):
+    """Generate one or more images via Gemini's generate_content API.
+
+    `reference_images`: list of data URIs / URLs / bytes — appended as Parts before the prompt.
+    `prompt_parts`: optional structured prompt for @-mention interleaving. List of
+        {type:'text', text} or {type:'ref', url}. When supplied, overrides the simple
+        ref-then-prompt assembly so refs sit at the user's chosen positions in the prompt.
+    `count`: number of images to generate (called sequentially — Gemini-native image
+        models don't expose a candidate-count knob in this preview).
+    `aspect_ratio` / `image_size`: optional. Plumbed into `GenerateContentConfig.image_config`.
+        Both are pass-through strings (e.g. '16:9', '2K').
+    Returns: list of saved file paths (length up to `count`)."""
+    print(f"[Image Gen] Gemini model: {model_name} (refs={len(reference_images or [])}, parts={bool(prompt_parts)}, n={count}, ar={aspect_ratio}, size={image_size})")
+
+    # Build contents — either from prompt_parts (positional) or refs-then-prompt.
+    if prompt_parts:
+        parts = []
+        for tok in prompt_parts:
+            if tok.get('type') == 'text' and tok.get('text'):
+                parts.append(types.Part.from_text(text=tok['text']))
+            elif tok.get('type') == 'ref':
+                p = _ref_to_part(tok.get('url'))
+                if p:
+                    parts.append(p)
+        contents = parts if parts else prompt
+        print(f"[Image Gen] interleaved {len(parts)} parts")
+    elif reference_images:
+        parts = []
+        for ref in reference_images:
+            p = _ref_to_part(ref)
+            if p:
+                parts.append(p)
+        parts.append(types.Part.from_text(text=prompt))
+        contents = parts
+    else:
+        contents = prompt
+
+    image_config = None
+    if aspect_ratio or image_size:
+        image_config = types.ImageConfig(
+            aspect_ratio=aspect_ratio or None,
+            image_size=image_size or None,
+        )
 
     def _call():
         return client.models.generate_content(
             model=model_name,
-            contents=prompt,
+            contents=contents,
             config=types.GenerateContentConfig(
                 response_modalities=["IMAGE", "TEXT"],
+                image_config=image_config,
             )
         )
 
-    response, retries = _retry_api_call(_call, description=f"image_gen({model_name})")
+    saved = []
+    for i in range(max(1, int(count))):
+        response, retries = _retry_api_call(_call, description=f"image_gen({model_name}#{i})")
 
-    if cost_tracker is not None:
-        cost_tracker.track_image(
-            uid=uid, project_id=project_id, model=model_name,
-            response=response, retries=retries, description=f"image_gen({model_name})",
-        )
+        if cost_tracker is not None:
+            cost_tracker.track_image(
+                uid=uid, project_id=project_id, model=model_name,
+                response=response, retries=retries, description=f"image_gen({model_name})",
+            )
 
-    if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
-        for part in response.candidates[0].content.parts:
-            if part.inline_data and part.inline_data.mime_type.startswith("image/"):
-                image_data = part.inline_data.data
-                ext = part.inline_data.mime_type.split("/")[-1]
-                filename = os.path.join(
-                    os.path.dirname(__file__), '..', 'generated_images',
-                    f"image_{timestamp}_0.{ext}"
-                )
-                with open(filename, "wb") as f:
-                    f.write(image_data)
-                print(f"[Image Gen] Success with {model_name}! Saved to {filename}")
-                return filename
-    return None
+        if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if part.inline_data and part.inline_data.mime_type.startswith("image/"):
+                    image_data = part.inline_data.data
+                    ext = part.inline_data.mime_type.split("/")[-1]
+                    filename = os.path.join(
+                        os.path.dirname(__file__), '..', 'generated_images',
+                        f"image_{timestamp}_{i}.{ext}"
+                    )
+                    with open(filename, "wb") as f:
+                        f.write(image_data)
+                    saved.append(filename)
+                    break  # one image per call
+    if saved:
+        print(f"[Image Gen] {model_name} → {len(saved)} image(s) saved.")
+    return saved or None
 
 
 def _generate_with_imagen_model(client, model_name, prompt, timestamp,
-                                uid=None, project_id=None):
-    """Generate image using Imagen API (generate_images endpoint)."""
-    print(f"[Image Gen] Trying Imagen model: {model_name}...")
+                                uid=None, project_id=None, count=1,
+                                aspect_ratio=None, image_size=None):
+    """Generate one or more images via the Imagen generate_images endpoint.
+
+    Imagen's API natively supports `number_of_images` — single call, multiple results.
+    `aspect_ratio` / `image_size`: optional pass-through strings.
+    Returns list of saved file paths."""
+    n = max(1, int(count))
+    print(f"[Image Gen] Imagen model: {model_name} (n={n}, ar={aspect_ratio}, size={image_size})")
 
     def _call():
         return client.models.generate_images(
             model=model_name,
             prompt=prompt,
             config=types.GenerateImagesConfig(
-                number_of_images=1,
+                number_of_images=n,
+                aspect_ratio=aspect_ratio or None,
+                image_size=image_size or None,
             )
         )
 
@@ -189,54 +307,71 @@ def _generate_with_imagen_model(client, model_name, prompt, timestamp,
             response=response, retries=retries, description=f"imagen_gen({model_name})",
         )
 
-    if response.generated_images:
-        image_data = response.generated_images[0].image.image_bytes
+    saved = []
+    for i, gi in enumerate(response.generated_images or []):
+        image_data = gi.image.image_bytes
         filename = os.path.join(
             os.path.dirname(__file__), '..', 'generated_images',
-            f"image_{timestamp}_0.png"
+            f"image_{timestamp}_{i}.png"
         )
         with open(filename, "wb") as f:
             f.write(image_data)
-        print(f"[Image Gen] Success with {model_name}! Saved to {filename}")
-        return filename
-    return None
+        saved.append(filename)
+    if saved:
+        print(f"[Image Gen] {model_name} → {len(saved)} image(s) saved.")
+    return saved or None
 
 
 def generate_image_content(prompt, model_name=None, api_key=None,
-                           uid=None, project_id=None):
-    """
-    Generate an image using the specified model.
+                           uid=None, project_id=None,
+                           reference_images=None,
+                           prompt_parts=None,
+                           count=1,
+                           aspect_ratio=None,
+                           image_size=None,
+                           return_list=False):
+    """Generate one or more images using the specified model.
 
-    Args:
-        prompt: Text prompt for image generation
-        model_name: One of:
-            - 'gemini-3-pro-image-preview' (Gemini 3 Pro, quality)
-            - 'gemini-2.5-flash-image' (Gemini Flash, fast)
-            - 'imagen-4.0-generate-001' (Imagen 4 Standard)
-            - 'imagen-4.0-fast-generate-001' (Imagen 4 Fast)
-            - 'imagen-4.0-ultra-generate-001' (Imagen 4 Ultra)
-            - None (auto: tries Gemini 3 Pro → Imagen 4 Standard fallback)
-        api_key: Gemini API key
-
-    Returns:
-        Path to saved image file, or error string starting with "Error:"
+    `count`: how many images to make (Imagen: native; Gemini-native: sequential calls).
+    `prompt_parts`: optional structured prompt for @-mention interleaving (Gemini-native only).
+    `return_list`: when True, returns `list[str]` paths. When False (legacy), returns the
+        first path only — old callers get backward-compatible single-string returns.
+    Errors are still surfaced as a string starting with "Error:".
     """
     client = get_client(api_key)
     os.makedirs(os.path.join(os.path.dirname(__file__), '..', 'generated_images'), exist_ok=True)
     timestamp = int(time.time())
 
+    def _wrap(result):
+        if not result:
+            return None
+        if isinstance(result, str):
+            result = [result]
+        return result if return_list else result[0]
+
     # Direct model selection — no fallback
     if model_name:
         try:
             if model_name.startswith("imagen-"):
+                if reference_images or prompt_parts:
+                    print(f"[Image Gen] Note: Imagen doesn't accept reference images. "
+                          f"Refs/prompt_parts ignored — use a Nano Banana variant for image-to-image.")
                 result = _generate_with_imagen_model(client, model_name, prompt, timestamp,
-                                                     uid=uid, project_id=project_id)
+                                                     uid=uid, project_id=project_id, count=count,
+                                                     aspect_ratio=aspect_ratio,
+                                                     image_size=image_size)
             else:
                 result = _generate_with_gemini_model(client, model_name, prompt, timestamp,
-                                                     uid=uid, project_id=project_id)
+                                                     uid=uid, project_id=project_id,
+                                                     reference_images=reference_images,
+                                                     prompt_parts=prompt_parts,
+                                                     count=count,
+                                                     aspect_ratio=aspect_ratio,
+                                                     image_size=image_size)
 
-            if result:
-                return result
+            wrapped = _wrap(result)
+            if wrapped:
+                return wrapped
             return f"Error: {model_name} returned no image. Try a different prompt."
         except Exception as e:
             print(f"[Image Gen] {model_name} failed: {e}")
@@ -245,21 +380,92 @@ def generate_image_content(prompt, model_name=None, api_key=None,
     # Auto mode (backward compat): Gemini 3 Pro → Imagen 4 fallback
     try:
         result = _generate_with_gemini_model(client, "gemini-3-pro-image-preview", prompt, timestamp,
-                                             uid=uid, project_id=project_id)
-        if result:
-            return result
+                                             uid=uid, project_id=project_id, count=count)
+        wrapped = _wrap(result)
+        if wrapped:
+            return wrapped
         print(f"[Image Gen] Gemini 3 Pro returned no image. Trying Imagen fallback...")
     except Exception as e:
         print(f"[Image Gen] Gemini 3 Pro failed: {e}. Trying Imagen fallback...")
 
     try:
         result = _generate_with_imagen_model(client, "imagen-4.0-generate-001", prompt, timestamp,
-                                             uid=uid, project_id=project_id)
-        if result:
-            return result
+                                             uid=uid, project_id=project_id, count=count)
+        wrapped = _wrap(result)
+        if wrapped:
+            return wrapped
         return "Error: Both models failed to generate an image. Try a different prompt (avoid real person names)."
     except Exception as e:
         print(f"[Image Gen] Imagen fallback failed: {e}")
+        return f"Error: {str(e)}"
+
+
+def generate_music_content(prompt, model_name="lyria-3-clip-preview", api_key=None,
+                           uid=None, project_id=None,
+                           mood_references=None,
+                           output_format="mp3"):
+    """Generate music via Lyria 3.
+
+    `mood_references`: optional list of image refs (URL/data URI/bytes) used as
+        mood guidance. The Pro variant accepts these alongside the lyrics prompt.
+    `output_format`: 'mp3' or 'wav' (Pro only — Clip is mp3-locked).
+    Returns: local path to the saved audio file, or a string starting with 'Error:'.
+    """
+    try:
+        client = get_client(api_key)
+        os.makedirs(os.path.join(os.path.dirname(__file__), '..', 'generated_audio'), exist_ok=True)
+        timestamp = int(time.time())
+
+        contents = [prompt]
+        if mood_references:
+            parts = [types.Part.from_text(text=prompt)]
+            for r in mood_references:
+                p = _ref_to_part(r)
+                if p:
+                    parts.append(p)
+            contents = parts
+
+        def _call():
+            return client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    response_modalities=["AUDIO"],
+                ),
+            )
+
+        response, retries = _retry_api_call(_call, description=f"lyria_gen({model_name})")
+
+        if cost_tracker is not None:
+            try:
+                cost_tracker.track_text(
+                    uid=uid, project_id=project_id, model=model_name,
+                    response=response, retries=retries,
+                    description=f"lyria_gen({model_name})",
+                )
+            except Exception as e:
+                print(f"[Lyria] cost track skipped: {e}")
+
+        if not response.candidates or not response.candidates[0].content:
+            return f"Error: {model_name} returned no audio."
+
+        for part in response.candidates[0].content.parts or []:
+            if part.inline_data and (part.inline_data.mime_type or '').startswith("audio/"):
+                ext = 'wav' if 'wav' in (part.inline_data.mime_type or '') else 'mp3'
+                if output_format == 'wav':
+                    ext = 'wav'
+                filename = os.path.join(
+                    os.path.dirname(__file__), '..', 'generated_audio',
+                    f"music_{timestamp}.{ext}",
+                )
+                with open(filename, "wb") as f:
+                    f.write(part.inline_data.data)
+                print(f"[Lyria] {model_name} → saved {filename}")
+                return filename
+
+        return f"Error: {model_name} returned no audio bytes."
+    except Exception as e:
+        print(f"[Lyria] {model_name} failed: {e}")
         return f"Error: {str(e)}"
 
 
@@ -1263,22 +1469,29 @@ def edit_scene_image(source_image_data, edit_prompt, model_name="gemini-3-pro-im
         return {"error": str(e)}
 
 
-def start_video_generation(image_path, prompt, model_name="veo-3.1-generate-preview",
+def start_video_generation(image_path=None, prompt="", model_name="veo-3.1-generate-preview",
                            aspect_ratio="16:9", duration=6,
                            resolution="720p", scene_id=None, api_key=None,
-                           uid=None, project_id=None):
+                           uid=None, project_id=None,
+                           last_frame=None, reference_images=None,
+                           negative_prompt=None, seed=None, enhance_prompt=None):
     """
-    Start async video generation (image-to-video) using Veo 3.1.
+    Start async video generation using Veo 3.1.
 
     Args:
-        image_path: Local path to the source image
-        prompt: Animation/motion prompt (veo_prompt)
+        image_path: First-frame source — local path str, data URI, URL, bytes, or
+                    pre-resolved `types.Image`. None for text-to-video.
+        prompt: Animation/motion prompt (veo_prompt). Required.
         model_name: 'veo-3.1-generate-preview' (quality+audio), 'veo-3.1-fast-generate-preview' (fast), or 'veo-3.1-lite-generate-preview' (budget, no 4K)
         aspect_ratio: '16:9' or '9:16'
         duration: 4, 6, or 8 (seconds)
         resolution: '720p', '1080p', or '4k'
         scene_id: Scene identifier
         api_key: Gemini API key
+        last_frame: Optional final-frame ref (same forms as image_path) for first→last
+                    frame interpolation. Requires `image_path` to be set.
+        reference_images: Optional list of refs for style/subject conditioning.
+        negative_prompt, seed, enhance_prompt: Optional Veo config knobs.
 
     Returns:
         dict with {operation_name, scene_id, status} or {error}
@@ -1286,37 +1499,50 @@ def start_video_generation(image_path, prompt, model_name="veo-3.1-generate-prev
     try:
         client = get_client(api_key)
 
-        # Read the source image
-        with open(image_path, "rb") as f:
-            image_bytes = f.read()
-
-        # Determine mime type from extension
-        ext = os.path.splitext(image_path)[1].lower()
-        mime_map = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
-        mime_type = mime_map.get(ext, "image/png")
+        first_image = _ref_to_image(image_path) if image_path else None
+        last_image = _ref_to_image(last_frame) if last_frame else None
+        ref_images_resolved = []
+        for r in (reference_images or []):
+            img = _ref_to_image(r)
+            if img:
+                ref_images_resolved.append(types.VideoGenerationReferenceImage(image=img))
 
         # Veo 3.1 Lite does not support 4K — cap to 1080p
         if model_name == "veo-3.1-lite-generate-preview" and resolution == "4k":
             resolution = "1080p"
             print(f"[Veo] Lite model selected — capping resolution to 1080p")
 
-        print(f"[Veo] Starting animation for scene {scene_id} with {model_name} "
-              f"(duration={duration}s, resolution={resolution})")
+        mode = "i2v" if first_image else "t2v"
+        if last_image:
+            mode = "first→last"
+        print(f"[Veo] Starting {mode} for scene {scene_id} with {model_name} "
+              f"(duration={duration}s, resolution={resolution}, refs={len(ref_images_resolved)})")
+
+        config_kwargs = {
+            "aspect_ratio": aspect_ratio,
+            "resolution": resolution,
+            "duration_seconds": int(duration),
+        }
+        if last_image is not None:
+            config_kwargs["last_frame"] = last_image
+        if ref_images_resolved:
+            config_kwargs["reference_images"] = ref_images_resolved
+        if negative_prompt:
+            config_kwargs["negative_prompt"] = negative_prompt
+        if seed is not None:
+            try:
+                config_kwargs["seed"] = int(seed)
+            except (TypeError, ValueError):
+                pass
+        if enhance_prompt is not None:
+            config_kwargs["enhance_prompt"] = bool(enhance_prompt)
 
         def _call():
-            return client.models.generate_videos(
-                model=model_name,
-                prompt=prompt,
-                image=types.Image(
-                    image_bytes=image_bytes,
-                    mime_type=mime_type,
-                ),
-                config=types.GenerateVideosConfig(
-                    aspect_ratio=aspect_ratio,
-                    resolution=resolution,
-                    duration_seconds=int(duration),
-                ),
-            )
+            kwargs = {"model": model_name, "prompt": prompt,
+                      "config": types.GenerateVideosConfig(**config_kwargs)}
+            if first_image is not None:
+                kwargs["image"] = first_image
+            return client.models.generate_videos(**kwargs)
 
         operation, retries = _retry_api_call(_call, description=f"veo_start({scene_id})")
 
