@@ -9291,6 +9291,10 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 kieGenerations = [];
                 clearKieGalleries();
             }
+
+            // Sync badges based on restored state
+            updateScriptSourceBadge();
+            updateProdSourceBadge();
         }
 
         // ── Gather full project state for saving ──
