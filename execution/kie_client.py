@@ -64,6 +64,25 @@ KIE_MODELS = {
         "description": "Top-tier video generation with multi-shot storytelling and native audio",
     },
 
+    "kling/kling-3-0": {
+        "display_name": "Kling 3.0",
+        "provider": "Kuaishou",
+        "type": "video",
+        "modes": ["t2v", "i2v"],
+        "model_id": "kling-3.0/video",
+        "durations": ["3", "5", "10", "15"],
+        "resolutions": ["720p", "1080p"],
+        "aspect_ratios": ["16:9", "9:16", "1:1"],
+        "supports_audio": True,
+        "image_param": "image_urls",
+        "max_images": 1,
+        "pricing": {
+            "720p": {"per_sec_no_audio": 0.10, "per_sec_audio": 0.15},
+            "1080p": {"per_sec_no_audio": 0.135, "per_sec_audio": 0.20},
+        },
+        "description": "Top-tier video generation with multi-shot storytelling and native audio",
+    },
+
     "kling-2.6": {
         "display_name": "Kling 2.6",
         "provider": "Kuaishou",
@@ -575,13 +594,37 @@ def _build_task_payload(model_key, prompt, image_urls=None, **params):
     if config.get("uses_generate_audio"):
         # Seedance: generate_audio boolean (default true per API, adds cost)
         input_data["generate_audio"] = bool(params.get("audio", True))
-    elif "audio" in params and config.get("supports_audio"):
-        input_data["sound"] = params["audio"]
+    elif config.get("supports_audio"):
+        if "sound" in params:
+            input_data["sound"] = str(params["sound"]).lower() == "true" if isinstance(params["sound"], str) else bool(params["sound"])
+        elif "audio" in params:
+            input_data["sound"] = str(params["audio"]).lower() == "true" if isinstance(params["audio"], str) else bool(params["audio"])
 
     # ── Output format (image models) ──
     output_format = params.get("output_format")
     if output_format:
         input_data["output_format"] = output_format
+
+    # ── Kling 3.0 specific params ──
+    if model_key in ("kling-3.0", "kling/kling-3-0"):
+        if "mode" in params:
+            input_data["mode"] = params["mode"]
+        if "multi_shots" in params:
+            input_data["multi_shots"] = str(params["multi_shots"]).lower() == "true"
+        if "multi_prompt" in params and params["multi_prompt"]:
+            import json
+            val = params["multi_prompt"]
+            try:
+                input_data["multi_prompt"] = json.loads(val) if isinstance(val, str) else val
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON for multi_prompt: {str(e)}")
+        if "kling_elements" in params and params["kling_elements"]:
+            import json
+            val = params["kling_elements"]
+            try:
+                input_data["kling_elements"] = json.loads(val) if isinstance(val, str) else val
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON for kling_elements: {str(e)}")
 
     # ── Hailuo constraint: no 10s at 1080P ──
     if config.get("constraints", {}).get("no_10s_1080p"):

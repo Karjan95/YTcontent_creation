@@ -851,7 +851,31 @@ _register(_kling_entry("kling/v2-1-master-image-to-video", "Kling 2.1 Master I2V
                        KIND_I2V, has_image=True))
 _register(_kling_entry("kling/v2-1-pro", "Kling 2.1 Pro", KIND_I2V, has_image=True))
 _register(_kling_entry("kling/v2-1-standard", "Kling 2.1", KIND_I2V, has_image=True))
-_register(_kling_entry("kling/kling-3-0", "Kling 3.0", KIND_T2V, has_image=False))
+
+# Kling 3.0 Custom Entry
+_register({
+    "id": "kling/kling-3-0", "display_name": "Kling 3.0", "provider": "Kling",
+    "backend": B_KIE_GENERIC, "kind": KIND_T2V,
+    "kinds_supported": [KIND_T2V, KIND_I2V],
+    "inputs": [
+        _text("prompt", required=True, max_chars=2500),
+        _image("image_url", required=False, max_mb=10, help="First frame image (optional)"),
+        _text("kling_elements", label="Kling Elements (JSON)",
+              help='Optional. Array of {"name": "...", "description": "...", "element_input_urls": ["..."]}'),
+        _text("multi_prompt", label="Multi-Shot Prompts (JSON)",
+              help='Optional. Array of {"prompt": "...", "duration": 3}.'),
+    ],
+    "params": [
+        _enum("duration", ["3", "5", "10", "15"], default="5", unit="sec"),
+        _enum("aspect_ratio", ["16:9", "9:16", "1:1"], default="16:9"),
+        _enum("mode", ["std", "pro"], default="pro", label="Generation Mode"),
+        _bool("multi_shots", default=False, label="Multi-Shots Mode"),
+        _bool("sound", default=False, label="Generate Audio"),
+    ],
+    "output": {"kind": "video", "count_max": 1, "format": "mp4"},
+    "cost": {"note": "See Kie credits dashboard"},
+})
+
 _register(_kling_entry("kling/text-to-video", "Kling T2V", KIND_T2V, has_image=False))
 _register(_kling_entry("kling/image-to-video", "Kling I2V", KIND_I2V, has_image=True))
 
