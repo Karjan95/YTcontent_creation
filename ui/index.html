@@ -11943,7 +11943,12 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 <div class="studio-ref-chip-label">${escapeHtml(tag)}</div>
             </div>`;
         }).join('');
-        refsEl.innerHTML = banner + chips;
+        // "Clear all" pill — shown when ≥2 refs so users can wipe in one click
+        // (since refs are now preserved across generations).
+        const clearAll = studioState.refs.length >= 2
+            ? `<button class="studio-ref-clear-all" onclick="studioClearAllRefs()" title="Remove all references">Clear all ×</button>`
+            : '';
+        refsEl.innerHTML = banner + chips + clearAll;
         window.renderIcons && window.renderIcons();
     }
     function studioSwitchToVariant(modelId) {
@@ -11954,6 +11959,10 @@ RESOLUTION: ${visualsConfig.resolution}`;
     }
     function studioRemoveRef(idx) {
         studioState.refs.splice(idx, 1);
+        studioRenderRefs();
+    }
+    function studioClearAllRefs() {
+        studioState.refs = [];
         studioRenderRefs();
     }
 
@@ -12495,6 +12504,15 @@ RESOLUTION: ${visualsConfig.resolution}`;
         const timeoutId = setTimeout(() => ctrl.abort(), 60_000);
 
         try {
+            studioState.generating = true;
+            studioState._genModelId = id;
+            studioState._genStartTs = Date.now();
+            clearInterval(studioState._genInterval);
+            studioState._genInterval = setInterval(() => {
+                if (studioState.generating && typeof studioRenderGallery === 'function') studioRenderGallery();
+            }, 1000);
+            if (typeof studioRenderGallery === 'function') studioRenderGallery();
+            
             let r;
             try {
                 r = await authFetch('/api/studio/generate', {
@@ -12543,11 +12561,17 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 }
                 studioShowStatus('');
                 studioClearComposerInputs();
+                studioState.generating = false;
+                clearInterval(studioState._genInterval);
+                if (typeof studioRenderGallery === 'function') studioRenderGallery();
             } else if (data.audio_url) {
                 studioAddAsset({kind: 'audio', url: data.audio_url,
                                 model_id: id, prompt, ts: Date.now()});
                 studioShowStatus('');
                 studioClearComposerInputs();
+                studioState.generating = false;
+                clearInterval(studioState._genInterval);
+                if (typeof studioRenderGallery === 'function') studioRenderGallery();
             } else if (data.taskId) {
                 // Async — poller continues after this turn returns.
                 studioPollKieTask(data.taskId, id, prompt);
@@ -12564,19 +12588,23 @@ RESOLUTION: ${visualsConfig.resolution}`;
             console.error('[Studio] generate failed', e);
             studioShowError(e.message || String(e));
             studioShowStatus('');
+            studioState.generating = false;
+            clearInterval(studioState._genInterval);
+            if (typeof studioRenderGallery === 'function') studioRenderGallery();
         } finally {
             clearTimeout(timeoutId);
-            studioState.generating = false;
             studioSetGoButton(false);
         }
     }
     function studioClearComposerInputs() {
-        // After a successful submit, clear prompt + refs so the user can start fresh.
-        // (We DON'T reset model selection or params — keep the user's tuning.)
+        // After a successful submit, clear the prompt but KEEP refs — users
+        // commonly want to generate multiple videos with the same character
+        // references and shouldn't have to re-upload them each time.
+        // (We also keep model selection + params.)
         const promptEl = document.getElementById('studioPrompt');
         if (promptEl) { promptEl.value = ''; studioAutosizePrompt(); }
-        studioState.refs = [];
-        studioRenderRefs();
+        // refs are preserved — user can click ✕ on individual chips or the
+        // "Clear all" button rendered by studioRenderRefs() to remove them.
     }
 
     function studioSetGoButton(busy) {
@@ -12596,6 +12624,15 @@ RESOLUTION: ${visualsConfig.resolution}`;
         let consecutiveErrors = 0;
         studioShowError(''); // clear prior
         studioShowStatus(`Generating with ${(studioState.schemas[modelId]||{}).display_name||modelId}…`);
+        
+        studioState.generating = true;
+        studioState._genModelId = modelId;
+        studioState._genStartTs = start;
+        clearInterval(studioState._genInterval);
+        studioState._genInterval = setInterval(() => {
+            if (studioState.generating && typeof studioRenderGallery === 'function') studioRenderGallery();
+        }, 1000);
+        
         while (Date.now() - start < timeoutMs) {
             await new Promise(r => setTimeout(r, 4000));
             try {
@@ -12620,11 +12657,17 @@ RESOLUTION: ${visualsConfig.resolution}`;
                         studioAddAsset({kind, url: u, model_id: modelId, prompt, ts: Date.now()});
                     }
                     studioShowStatus('');
+                    studioState.generating = false;
+                    clearInterval(studioState._genInterval);
+                    if (typeof studioRenderGallery === 'function') studioRenderGallery();
                     return;
                 }
                 if (data.status === 'failed' || data.status === 'error') {
                     studioShowError('Generation failed: ' + (data.error || data.msg || 'unknown error'));
                     studioShowStatus('');
+                    studioState.generating = false;
+                    clearInterval(studioState._genInterval);
+                    if (typeof studioRenderGallery === 'function') studioRenderGallery();
                     return;
                 }
                 // status === 'pending' / 'running' / etc. — keep polling.
@@ -12634,12 +12677,18 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 if (consecutiveErrors >= 5) {
                     studioShowError('Lost connection while polling. Generation may still complete — check back later.');
                     studioShowStatus('');
+                    studioState.generating = false;
+                    clearInterval(studioState._genInterval);
+                    if (typeof studioRenderGallery === 'function') studioRenderGallery();
                     return;
                 }
             }
         }
         studioShowError('Generation timed out after 10 min.');
         studioShowStatus('');
+        studioState.generating = false;
+        clearInterval(studioState._genInterval);
+        if (typeof studioRenderGallery === 'function') studioRenderGallery();
     }
     async function studioPollVeoOp(op, modelId, prompt) {
         // Veo long-running ops are polled by the existing Visuals flow.
@@ -12777,17 +12826,38 @@ RESOLUTION: ${visualsConfig.resolution}`;
             window.renderIcons && window.renderIcons();
             return;
         }
-        grid.innerHTML = items.map((a, idx) => {
+        // ── Progress card (shown above tiles when generating) ──
+        let progressHtml = '';
+        if (studioState.generating && studioState._genModelId) {
+            const s = studioState.schemas[studioState._genModelId];
+            const modelName = s ? s.display_name : studioState._genModelId;
+            const elapsed = studioState._genStartTs
+                ? Math.round((Date.now() - studioState._genStartTs) / 1000) : 0;
+            const elapsedStr = elapsed > 0 ? `${elapsed}s elapsed` : 'starting…';
+            progressHtml = `<div class="studio-progress-card">
+                <div class="studio-progress-spinner"></div>
+                <div class="studio-progress-info">
+                    <div class="studio-progress-title">Generating with ${escapeHtml(modelName)}…</div>
+                    <div class="studio-progress-sub">${escapeHtml(elapsedStr)} — please wait</div>
+                </div>
+            </div>`;
+        }
+        grid.innerHTML = progressHtml + items.map((a) => {
+            // Resolve to the REAL index in studioState.assets, not the filtered
+            // array's iteration index.  Without this, clicking an asset while a
+            // filter or search is active opens a completely different one.
+            const realIdx = studioState.assets.indexOf(a);
             const inner = a.kind === 'image'
-                ? `<img src="${escapeHtml(a.url)}" alt="">`
+                ? `<img src="${escapeHtml(a.url)}" alt="" onerror="this.parentElement.classList.add('studio-tile-broken')">`
                 : a.kind === 'video'
                 ? `<video src="${escapeHtml(a.url)}" muted loop></video>`
                 : `<div class="studio-ref-chip-audio" style="height:100%"><i data-lucide="music-2" style="width:32px;height:32px"></i></div>`;
             const fav = a.favorite ? 'is-favorited' : '';
-            return `<div class="studio-asset-tile" onclick="studioOpenAsset(${idx})">
+            const pendingCls = a._pending ? ' studio-tile-pending' : '';
+            return `<div class="studio-asset-tile${pendingCls}" onclick="studioOpenAsset(${realIdx})">
                 ${inner}
                 <span class="studio-asset-tile-badge">${escapeHtml(a.kind)}</span>
-                <button class="studio-asset-tile-fav ${fav}" onclick="event.stopPropagation();studioToggleFav(${idx})" aria-label="Favorite">
+                <button class="studio-asset-tile-fav ${fav}" onclick="event.stopPropagation();studioToggleFav(${realIdx})" aria-label="Favorite">
                     <i data-lucide="heart"></i>
                 </button>
             </div>`;

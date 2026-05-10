@@ -849,6 +849,57 @@ def _studio_dispatch_kie_generic(schema, inputs, params, project_id):
         image_urls = [image_urls]
     extras = {k: v for k, v in payload.items()
               if k not in {'prompt', 'text', 'image_input', 'image_urls'}}
+
+    # ── Re-host Firebase Storage URLs to KIE CDN ──
+    # Firebase URLs (firebasestorage.googleapis.com) are behind Firebase auth;
+    # KIE servers can't access them.  Upload to KIE's CDN first so the API
+    # receives reachable URLs.  This mirrors the rehosting in /api/kie/generate
+    # and fixes Seedance 2 character references / multimodal refs in Studio.
+    def _rehost_url(url, upload_path='images/user-uploads'):
+        """Re-host a single URL to KIE CDN if it isn't already there."""
+        if not url or not isinstance(url, str):
+            return url
+        if 'tempfile.redpandaai.co' in url:
+            return url  # already on KIE CDN
+        up = kie_upload_image(url, g.kie_api_key, upload_path=upload_path)
+        if up.get('success'):
+            return up['url']
+        print(f"[Studio] KIE rehost failed for {url[:80]}: {up.get('error')}")
+        return url  # fallback: pass original, API may still reject
+
+    def _rehost_list(key, limit, upload_path):
+        urls = extras.get(key)
+        if not urls or not isinstance(urls, list):
+            return
+        out = []
+        for u in urls[:limit]:
+            out.append(_rehost_url(u, upload_path))
+        extras[key] = out
+
+    # Multimodal ref arrays (Seedance, Wan R2V, HappyHorse R2V, etc.)
+    _rehost_list('reference_image_urls', 9, 'images/user-uploads')
+    _rehost_list('reference_image', 9, 'images/user-uploads')
+    _rehost_list('reference_video_urls', 3, 'videos/user-uploads')
+    _rehost_list('reference_video', 3, 'videos/user-uploads')
+    _rehost_list('reference_audio_urls', 3, 'audios/user-uploads')
+    _rehost_list('image_urls', 14, 'images/user-uploads')
+
+    # Single-URL image inputs (first_frame_url, last_frame_url, image_url, etc.)
+    for single_key in ('first_frame_url', 'last_frame_url', 'first_frame',
+                        'image_url', 'image', 'video_url', 'reference_voice',
+                        'driving_audio_url', 'audio_url'):
+        if single_key in extras and isinstance(extras[single_key], str):
+            upload_path = 'images/user-uploads'
+            if 'video' in single_key:
+                upload_path = 'videos/user-uploads'
+            elif 'audio' in single_key or 'voice' in single_key:
+                upload_path = 'audios/user-uploads'
+            extras[single_key] = _rehost_url(extras[single_key], upload_path)
+
+    # Also rehost top-level image_urls (the primary image input)
+    if image_urls:
+        image_urls = [_rehost_url(u) for u in image_urls]
+
     result = kie_create_task(schema['id'], prompt, g.kie_api_key,
                              image_urls=image_urls, **extras)
     if not result.get('success'):
@@ -2226,6 +2277,41 @@ def _serialize_asset(doc):
     ts = d.get('ts')
     if hasattr(ts, 'isoformat'):
         d['ts'] = ts.isoformat()
+        
+    # Check and refresh signed URL if it has expired
+    url = d.get('url', '')
+    if url and "X-Goog-Signature" in url and bucket:
+        try:
+            from urllib.parse import urlparse, parse_qs
+            import datetime
+            parsed = urlparse(url)
+            qs = parse_qs(parsed.query)
+            if "X-Goog-Date" in qs and "X-Goog-Expires" in qs:
+                date_str = qs["X-Goog-Date"][0]
+                expires_sec = int(qs["X-Goog-Expires"][0])
+                issue_time = datetime.datetime.strptime(date_str, "%Y%m%dT%H%M%SZ")
+                expiry_time = issue_time + datetime.timedelta(seconds=expires_sec)
+                now = datetime.datetime.utcnow()
+                
+                if now > expiry_time:
+                    # Extract blob path from url
+                    bucket_name = bucket.name
+                    path = parsed.path
+                    prefix = f"/{bucket_name}/"
+                    if path.startswith(prefix):
+                        blob_path = path[len(prefix):]
+                        # Regenerate signed URL
+                        blob = bucket.blob(blob_path)
+                        new_url = _generate_signed_url(blob)
+                        d['url'] = new_url
+                        # Update the database to store the new URL
+                        try:
+                            doc.reference.update({'url': new_url})
+                        except Exception as update_err:
+                            print(f"[Storage] Failed to update asset doc with new URL: {update_err}")
+        except Exception as e:
+            print(f"[Storage] Failed to refresh URL for asset {doc.id}: {e}")
+            
     return d
 
 
