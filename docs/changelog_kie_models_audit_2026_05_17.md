@@ -156,3 +156,35 @@ When the schema declared the wrong name, the API silently dropped it.
 Verified by `import model_schemas` (129 entries register clean) and spot-check
 of every catastrophic-id fix. No live API calls were run as part of this
 change — user will smoke-test on staging.
+
+---
+
+## Follow-up: passthrough payload field default (commit 798542a)
+
+First smoke test on staging caught a regression: Seedream 5 Lite I2I returned
+HTTP 500 after the audit. Root cause was in `kie_client._build_generic_passthrough_payload`,
+not the schema audit itself — the passthrough builder defaulted the image-array
+field to `image_input` when the schema declared `image_urls`. Because the
+`/api/studio/generate` dispatcher extracts the image URLs out of inputs and
+hands them to `kie_create_task` as a positional `image_urls` arg, the
+passthrough never sees them in its `params` dict and always falls back to
+the default — so it shipped the wrong field name and Kie silently dropped
+the image, then errored.
+
+Fix: changed the passthrough default from `image_input` to `image_urls`
+(the field name verified-correct for every modern Kie market model). The
+two nano-banana variants that genuinely use `image_input` route through the
+hand-tuned `_build_task_payload` legacy path, not the passthrough, so they
+aren't affected.
+
+Models unblocked by this one-line change:
+`seedream/v4-edit`, `seedream/4.5-edit`, `seedream/5-lite-image-to-image`,
+`google/nano-banana-edit`, `sora-2-image-to-video`, `sora-2-pro-image-to-video`,
+`kling-2.6/image-to-video`, `happyhorse/image-to-video`,
+`grok-imagine/image-to-image`, `grok-imagine/image-to-video`,
+`wan/2-6-image-to-video`, `wan/2-6-flash-image-to-video`.
+
+Models that send `input_urls` (Flux 2 I2I, GPT Image I2I, Seedance 1.5 Pro,
+Wan 2.7 Image, Kling motion-control) were already correct — the dispatcher
+doesn't extract `input_urls`, so it stays in `extras` and reaches the
+passthrough via `params`, where it's preserved as-is.
