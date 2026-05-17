@@ -472,23 +472,31 @@ def _build_generic_passthrough_payload(model_key, prompt, image_urls=None, **par
     """Generic fallback for models not in KIE_MODELS.
 
     Ships {model, input} where input is the user-supplied params merged with
-    `prompt` and `image_input`. Strips obvious orchestration keys that the API
-    won't accept (project_id, scene_id). Lists/strings are passed through
-    unchanged — the model's own validator will reject anything malformed."""
+    `prompt` and the primary image array. Strips obvious orchestration keys
+    that the API won't accept (project_id, scene_id). Lists/strings are passed
+    through unchanged — the model's own validator will reject anything
+    malformed.
+
+    Image field name: when the caller's params already contain one of the
+    known image slots (image_url / image_urls / image_input / input_urls /
+    first_frame_url / image), that wins. When only the positional
+    `image_urls` is provided and the schema didn't declare a slot, default
+    to `image_urls` — the field name used by every modern Kie market model
+    verified against docs.kie.ai/market/*. The two nano-banana variants that
+    genuinely use `image_input` always go through the hand-tuned legacy path
+    in `_build_task_payload`, so they don't hit this default."""
     SKIP_KEYS = {'project_id', 'scene_id', 'model_id', 'callBackUrl'}
     input_data = {k: v for k, v in (params or {}).items()
                   if k not in SKIP_KEYS and v is not None and v != ""}
     if prompt:
         input_data.setdefault("prompt", prompt)
     if image_urls:
-        # Most non-legacy models accept `image_input` as a list. Only set it if
-        # the caller didn't already pick a more specific slot name.
         already_set = any(k in input_data for k in (
             "image_input", "image_url", "image_urls", "first_frame_url",
             "input_urls", "image"))
         if not already_set:
             arr = image_urls if isinstance(image_urls, list) else [image_urls]
-            input_data["image_input"] = arr
+            input_data["image_urls"] = arr
     return {"model": model_key, "input": input_data}
 
 
