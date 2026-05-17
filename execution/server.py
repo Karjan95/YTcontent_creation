@@ -850,6 +850,20 @@ def _studio_dispatch_kie_generic(schema, inputs, params, project_id):
     extras = {k: v for k, v in payload.items()
               if k not in {'prompt', 'text', 'image_input', 'image_urls'}}
 
+    # Two Kie models accept a structured array in a field the UI can only ship
+    # as a JSON text blob — parse here so the request body matches the docs.
+    #   ElevenLabs Dialogue v3 → `dialogue` (array of {text, voice})
+    #   Sora 2 Pro Storyboard  → `shots`    (array of {Scene, duration})
+    import json as _json
+    for _json_field in ('dialogue', 'shots'):
+        if _json_field in extras and isinstance(extras[_json_field], str):
+            raw = extras[_json_field].strip()
+            if raw:
+                try:
+                    extras[_json_field] = _json.loads(raw)
+                except _json.JSONDecodeError as e:
+                    return jsonify({'error': f'{_json_field} must be valid JSON: {e}'}), 400
+
     # ── Re-host Firebase Storage URLs to KIE CDN ──
     # Firebase URLs (firebasestorage.googleapis.com) are behind Firebase auth;
     # KIE servers can't access them.  Upload to KIE's CDN first so the API
@@ -883,14 +897,25 @@ def _studio_dispatch_kie_generic(schema, inputs, params, project_id):
     _rehost_list('reference_video', 3, 'videos/user-uploads')
     _rehost_list('reference_audio_urls', 3, 'audios/user-uploads')
     _rehost_list('image_urls', 14, 'images/user-uploads')
+    # Newer field names introduced by the doc-verified sweep:
+    #   input_urls — Flux 2 I2I, GPT Image I2I, Wan 2.7 Image, Kling motion-control,
+    #                Seedance 1.5 Pro
+    #   video_urls — Wan 2.6 V2V/Flash V2V, Kling motion-control
+    _rehost_list('input_urls', 16, 'images/user-uploads')
+    _rehost_list('video_urls', 3, 'videos/user-uploads')
 
-    # Single-URL image inputs (first_frame_url, last_frame_url, image_url, etc.)
+    # Single-URL image/video/audio inputs across all models. Per the
+    # doc-verified sweep these include the new field names: tail_image_url
+    # (Kling 2.1 Pro), end_image_url (Hailuo 02 + Seedance v1 Lite),
+    # mask_url (Ideogram V3 Edit + character variants).
     for single_key in ('first_frame_url', 'last_frame_url', 'first_frame',
                         'image_url', 'image', 'video_url', 'reference_voice',
-                        'driving_audio_url', 'audio_url'):
+                        'driving_audio_url', 'audio_url',
+                        'tail_image_url', 'end_image_url', 'mask_url',
+                        'first_clip_url'):
         if single_key in extras and isinstance(extras[single_key], str):
             upload_path = 'images/user-uploads'
-            if 'video' in single_key:
+            if 'video' in single_key or single_key == 'first_clip_url':
                 upload_path = 'videos/user-uploads'
             elif 'audio' in single_key or 'voice' in single_key:
                 upload_path = 'audios/user-uploads'
