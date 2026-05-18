@@ -205,6 +205,24 @@
         </div>
     </div>
 
+    <!-- Coverage-failure modal: some script beats didn't make it into the production table -->
+    <div id="coverageFailureModal" class="modal-overlay" style="display: none;">
+        <div class="modal-card" style="max-width: 580px;">
+            <h2>⚠️ Some scenes are missing</h2>
+            <p id="coverageFailureSummary" style="margin-bottom: 12px;"></p>
+            <div id="coverageFailureBeats" style="max-height: 240px; overflow-y: auto; background: #fff8e1;
+                 border: 1px solid #ffc107; padding: 10px 12px; border-radius: 6px;
+                 font-size: 13px; line-height: 1.5; margin-bottom: 16px;"></div>
+            <div style="display: flex; gap: 8px;">
+                <button class="btn-primary" style="flex: 2" onclick="retryMissingBeats()">🔁 Retry missing scenes</button>
+                <button class="btn-secondary" style="flex: 1" onclick="closeCoverageFailureModal()">Use partial</button>
+            </div>
+            <p class="modal-hint" style="margin-top: 10px; font-size: 12px;">
+                "Retry" re-runs only the missing beats (cheap). "Use partial" keeps the table as-is — you can always regenerate later.
+            </p>
+        </div>
+    </div>
+
     <!-- Image Lightbox with Edit Controls -->
     <div id="imageLightboxModal" class="modal-overlay" style="display: none;" onclick="closeImageLightbox(event)">
         <div class="lightbox-card">
@@ -222,9 +240,7 @@
                     rows="2"></textarea>
                 <div class="lightbox-edit-row">
                     <select id="lightboxModelSelect" class="scene-model-select">
-                        <option value="gemini-3-pro-image-preview">Pro (Quality)</option>
-                        <option value="gemini-3.1-flash-image-preview">Flash 3.1 (Fast)</option>
-                        <option value="gemini-2.5-flash-image">Flash 2.5</option>
+                        <!-- Populated dynamically by openImageEditor() from studioState.schemas -->
                     </select>
                     <button id="lightboxEditBtn" class="btn-primary" onclick="submitImageEdit()">Edit Image</button>
                 </div>
@@ -297,7 +313,7 @@
             <!-- ═══ TOPBAR (project title · pipeline stepper · export) ═══ -->
             <div class="topbar" id="appTopbar">
                 <div class="topbar-left">
-                    <span class="topbar-project-title" id="topbarProjectTitle">Untitled project</span>
+                    <span class="topbar-project-title" id="topbarProjectTitle" onclick="editProjectTitle()" style="cursor: pointer;" title="Click to rename project">Untitled project</span>
                     <span class="topbar-autosave" id="topbarAutosave"></span>
                 </div>
                 <div class="topbar-center">
@@ -471,6 +487,12 @@
                         </button>
                         <span class="studio-variations-pill" id="studioVariationsPill" style="display:none;"></span>
                         <span class="studio-cost-note" id="studioCostNote"></span>
+                        <button class="btn-secondary btn-sm" id="studioSaveAsVisualsEngineBtn"
+                                onclick="visualsSaveCurrentStudioAsEngine()"
+                                title="Use this model + params for Generate All / Animate All in the Visuals tab"
+                                style="margin-left:auto;">
+                            <i data-lucide="bookmark"></i> Save as Visuals Engine
+                        </button>
                     </div>
 
                     <div id="studioError" class="error-message" style="display:none;"></div>
@@ -535,6 +557,10 @@
                         <button class="btn-ghost" data-lb-action="open_external"
                                 onclick="studioLightboxAction('open_external')">
                             <i data-lucide="external-link"></i> Open in new tab
+                        </button>
+                        <button class="btn-ghost" data-lb-action="delete"
+                                onclick="studioLightboxAction('delete')" style="color: var(--danger, #ff4d4f);">
+                            <i data-lucide="trash-2"></i> Delete
                         </button>
                     </div>
                 </div>
@@ -838,6 +864,35 @@
                         scenes.</p>
                     <div id="characterList" class="character-list"></div>
                     <button class="btn-secondary" onclick="openAddCharacterModal()">+ Add Character</button>
+                </div>
+
+                <!-- Visuals Engine (Studio-backed model picker for batch generation) -->
+                <div class="visuals-engine-section" id="visualsEngineSection" style="display: none; margin-top: 16px; padding: 14px 16px; border: 1px solid #2a2a2a; border-radius: 10px; background: #141414;">
+                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+                        <h3 class="section-title" style="margin:0; flex:1;">Studio Engine</h3>
+                        <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:#bbb; cursor:pointer;">
+                            <input type="checkbox" id="visualsEngineToggle" onchange="visualsEngineToggleChanged()">
+                            Use for Generate All / Animate All
+                        </label>
+                    </div>
+                    <p class="paste-hint" style="margin: 0 0 12px;">
+                        Pick any model from the 100+ in Studio (Kie · Google · Kling · Runway · Sora · …) to power batch generation.
+                        Configure full params in Studio, then click <strong>Save as Visuals Engine</strong>. For per-scene tweaks, click <em>Iterate in Studio</em> on a scene card.
+                    </p>
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+                        <div style="padding:10px 12px; border:1px solid #2a2a2a; border-radius:8px; background:#0e0e0e;">
+                            <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:#888; margin-bottom:4px;">Image Engine</div>
+                            <div id="visualsEngineImageName" style="font-size:14px; color:#eee; margin-bottom:8px;">Not set — using legacy Gemini path</div>
+                            <button class="btn-secondary btn-sm" onclick="visualsConfigureEngine('image')">Configure in Studio →</button>
+                            <button class="btn-secondary btn-sm" id="visualsClearImageEngineBtn" onclick="visualsClearEngine('image')" style="display:none; margin-left:6px;">Clear</button>
+                        </div>
+                        <div style="padding:10px 12px; border:1px solid #2a2a2a; border-radius:8px; background:#0e0e0e;">
+                            <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:#888; margin-bottom:4px;">Video Engine</div>
+                            <div id="visualsEngineVideoName" style="font-size:14px; color:#eee; margin-bottom:8px;">Not set — using legacy Veo path</div>
+                            <button class="btn-secondary btn-sm" onclick="visualsConfigureEngine('video')">Configure in Studio →</button>
+                            <button class="btn-secondary btn-sm" id="visualsClearVideoEngineBtn" onclick="visualsClearEngine('video')" style="display:none; margin-left:6px;">Clear</button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Character Modal -->
@@ -1228,19 +1283,9 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                         <div id="scriptManualInput" style="display: none;">
                             <label class="input-label">Paste Your Script</label>
                             <p class="paste-hint">
-                                ✅ <strong>Paste your plain text script</strong> — the system will automatically break it
-                                down into scenes<br>
-                                <small style="color: #666;">Or paste structured JSON:
-                                    <code>{ "script": [ { "scene": 1, ... } ] }</code></small>
+                                Paste your plain-text script. We'll structure it into acts and beats automatically — every word is preserved.
                             </p>
-                            <textarea id="scriptPasteArea" rows="8" class="paste-area" placeholder="Paste your script here as plain text...
-
-The system will automatically:
-• Break it down into timed scenes
-• Extract visual descriptions
-• Prepare it for production (Phase 3)
-
-No formatting needed — just paste your narration!"></textarea>
+                            <textarea id="scriptPasteArea" rows="8" class="paste-area" placeholder="Paste your narration here…"></textarea>
 
                             <!-- Manual Style Input -->
                             <div style="margin-top: 15px; border-top: 1px solid #333; padding-top: 10px;">
@@ -1309,36 +1354,11 @@ No formatting needed — just paste your narration!"></textarea>
                     </div>
 
                     <div class="phase-body" id="phase3Body">
-                        <!-- Input Mode Toggle -->
-                        <div class="input-mode-toggle">
-                            <button class="mode-btn active" id="prodModeAuto" onclick="setProdInputMode('auto')">
-                                <i data-lucide="link" style="width:14px;height:14px"></i> Use Script from Phase 2
-                            </button>
-                            <button class="mode-btn" id="prodModeManual" onclick="setProdInputMode('manual')">
-                                <i data-lucide="clipboard" style="width:14px;height:14px"></i> Paste Your Own Narration JSON
-                            </button>
-                        </div>
-
-                        <!-- Auto mode: uses script data -->
+                        <!-- Narration is sourced from Phase 2. -->
                         <div id="prodAutoInput">
                             <div class="source-badge" id="prodSourceBadge">
                                 <span class="source-dot idle"></span>
-                                No narration loaded yet — complete Phase 2 or switch to manual mode
-                            </div>
-                        </div>
-
-                        <!-- Manual mode: paste JSON -->
-                        <div id="prodManualInput" style="display: none;">
-                            <label class="input-label">Paste Narration JSON</label>
-                            <p class="paste-hint">Paste a JSON object with a <code>"narration"</code> array of
-                                acts/beats.
-                                Legacy <code>"script"</code> arrays are also accepted and will be converted.</p>
-                            <textarea id="prodPasteArea" rows="8" class="paste-area"
-                                placeholder='{ "title": "My Video", "narration": [ { "act": "ACT 1", "beat": "Hook", "text": "..." } ] }'></textarea>
-                            <div class="controls" style="margin-top: 12px;">
-                                <button onclick="importSceneBreakdown()">
-                                    <span>📋 Import Narration</span>
-                                </button>
+                                No narration loaded yet — complete Phase 2 to continue
                             </div>
                         </div>
 
@@ -1674,7 +1694,6 @@ No formatting needed — just paste your narration!"></textarea>
                                             <th>Dur</th>
                                             <th>Director's Intent</th>
                                             <th>First Frame Prompt</th>
-                                            <th>Last Frame Prompt</th>
                                             <th>Veo 3.1 Prompt</th>
                                         </tr>
                                     </thead>
@@ -1695,8 +1714,6 @@ No formatting needed — just paste your narration!"></textarea>
 
                             <div class="controls script-actions">
                                 <button class="btn-secondary" onclick="copyFirstFramePrompts()">🖼️ Copy All First Frame
-                                    Prompts</button>
-                                <button class="btn-secondary" onclick="copyLastFramePrompts()">🖼️ Copy All Last Frame
                                     Prompts</button>
                                 <button class="btn-secondary" onclick="copyVeoPrompts()">🎬 Copy All Veo
                                     Prompts</button>
@@ -2581,6 +2598,27 @@ No formatting needed — just paste your narration!"></textarea>
             if (el) el.textContent = title && title.trim() ? title : 'Untitled project';
         }
 
+        function editProjectTitle() {
+            if (!currentProjectId) return;
+            const currentName = document.getElementById('topbarProjectTitle').textContent;
+            const newName = prompt('Rename project:', currentName);
+            if (newName !== null && newName.trim() !== '') {
+                const trimmedName = newName.trim();
+                selectedTitle = trimmedName;
+                if (currentNarration && currentNarration.title) {
+                    currentNarration.title = trimmedName;
+                }
+                updateTopbarProjectTitle(trimmedName);
+                
+                // update sidebar
+                const activeItem = document.querySelector('.project-item.active .project-title');
+                if (activeItem) activeItem.textContent = trimmedName;
+                
+                // save
+                doSaveProject();
+            }
+        }
+
         // Lightweight autosave indicator. Hooks: setAutosaveState('saving'|'saved'|'error'|'')
         function setAutosaveState(state, message) {
             const el = document.getElementById('topbarAutosave');
@@ -3077,23 +3115,10 @@ No formatting needed — just paste your narration!"></textarea>
             }
         }
 
-        function setProdInputMode(mode) {
-            const autoBtn = document.getElementById('prodModeAuto');
-            const manualBtn = document.getElementById('prodModeManual');
-            const autoInput = document.getElementById('prodAutoInput');
-            const manualInput = document.getElementById('prodManualInput');
-
-            if (mode === 'auto') {
-                autoBtn.classList.add('active');
-                manualBtn.classList.remove('active');
-                autoInput.style.display = 'block';
-                manualInput.style.display = 'none';
-            } else {
-                autoBtn.classList.remove('active');
-                manualBtn.classList.add('active');
-                autoInput.style.display = 'none';
-                manualInput.style.display = 'block';
-            }
+        function setProdInputMode(_mode) {
+            // No-op: Phase 3 now always sources narration from Phase 2.
+            // Kept for back-compat with old saved projects and reset paths
+            // that call setProdInputMode('auto').
         }
 
         /* ── Source Badge Updates ── */
@@ -3939,6 +3964,7 @@ No formatting needed — just paste your narration!"></textarea>
 
         /* ── Title Suggestions (Phase 2 Wizard) ── */
         async function suggestTitles() {
+            const targetProjectId = currentProjectId;
             const spinnerWrap = document.getElementById('titleSpinnerWrap');
             const cardsDiv = document.getElementById('titleCards');
             const editSection = document.getElementById('titleEditSection');
@@ -3949,7 +3975,7 @@ No formatting needed — just paste your narration!"></textarea>
             selectedTitle = null;
 
             // Track background OP
-            setBackgroundOp(currentProjectId, {
+            setBackgroundOp(targetProjectId, {
                 status: 'in_progress',
                 type: 'title_suggestion'
             });
@@ -3969,7 +3995,7 @@ No formatting needed — just paste your narration!"></textarea>
                 const data = await response.json();
 
                 // Track completion
-                setBackgroundOp(currentProjectId, {
+                setBackgroundOp(targetProjectId, {
                     status: 'completed',
                     type: 'title_suggestion',
                     data: data
@@ -4072,13 +4098,14 @@ No formatting needed — just paste your narration!"></textarea>
         }
 
         async function autoSuggestTone() {
+            const targetProjectId = currentProjectId;
             const badge = document.getElementById('toneSuggestionBadge');
             badge.style.display = 'block';
             badge.innerHTML = 'Suggesting tone...';
 
             try {
                 // Track background OP
-                setBackgroundOp(currentProjectId, {
+                setBackgroundOp(targetProjectId, {
                     status: 'in_progress',
                     type: 'tone_suggestion'
                 });
@@ -4096,7 +4123,7 @@ No formatting needed — just paste your narration!"></textarea>
                 const data = await response.json();
 
                 // Track completion
-                setBackgroundOp(currentProjectId, {
+                setBackgroundOp(targetProjectId, {
                     status: 'completed',
                     type: 'tone_suggestion',
                     data: data
@@ -4129,6 +4156,7 @@ No formatting needed — just paste your narration!"></textarea>
         }
 
         async function generateNarration() {
+            const targetProjectId = currentProjectId;
             if (!currentDossier) return alert('No research data. Run research first, or switch to manual mode.');
 
             const topic = document.getElementById('researchTopic').value.trim();
@@ -4181,7 +4209,7 @@ No formatting needed — just paste your narration!"></textarea>
                 }
 
                 // Synchronous narration generation - Set background op to track
-                setBackgroundOp(currentProjectId, {
+                setBackgroundOp(targetProjectId, {
                     status: 'in_progress',
                     type: 'narration'
                 });
@@ -4214,7 +4242,7 @@ No formatting needed — just paste your narration!"></textarea>
                 if (!response.ok) throw new Error(data.error || 'Narration generation failed');
 
                 // Synchronous completed
-                setBackgroundOp(currentProjectId, {
+                setBackgroundOp(targetProjectId, {
                     status: 'completed',
                     data: data,
                     type: 'narration'
@@ -4532,68 +4560,30 @@ No formatting needed — just paste your narration!"></textarea>
 
             if (!rawValue) return alert("Please paste a script first.");
 
-            // Try parsing as JSON first
-            let isJson = false;
+            updatePhaseStatus(2, 'Structuring script into acts & beats...', 'working');
+            let structuringMode = 'llm';
             try {
-                const parsed = JSON.parse(rawValue);
-
-                if (parsed.narration && Array.isArray(parsed.narration)) {
-                    currentNarration = parsed;
-                    isJson = true;
-                } else if (parsed.script && Array.isArray(parsed.script)) {
-                    const beats = [];
-                    const seenBeats = {};
-                    for (const scene of parsed.script) {
-                        const actName = scene.act || 'IMPORTED';
-                        const beatName = scene.beat || ('Scene ' + (scene.scene || '?'));
-                        const key = actName + '|||' + beatName;
-                        if (seenBeats[key]) {
-                            seenBeats[key].text += ' ' + (scene.narration || '');
-                        } else {
-                            const beat = { act: actName, beat: beatName, text: scene.narration || '' };
-                            seenBeats[key] = beat;
-                            beats.push(beat);
-                        }
-                    }
-                    currentNarration = {
-                        title: parsed.title || 'Imported Script',
-                        duration_minutes: parsed.duration_minutes || 10,
-                        narration: beats,
-                    };
-                    isJson = true;
-                } else {
-                    throw new Error('JSON must have a "narration" or "script" array.');
-                }
-            } catch (jsonError) {
-                // Not valid JSON — send to AI for structuring
-                isJson = false;
-            }
-
-            if (!isJson) {
-                // Plain text → AI structures it into acts/beats
-                updatePhaseStatus(2, 'Structuring script into acts & beats...', 'working');
-                try {
-                    const response = await authFetch('/api/structure-script', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            raw_text: rawValue,
-                            duration_minutes: getSelectedDuration(),
-                        })
-                    });
-                    const data = await response.json();
-                    if (!response.ok) throw new Error(data.error || 'Script structuring failed');
-                    currentNarration = data.narration;
-                } catch (err) {
-                    console.error('Script structuring error:', err);
-                    updatePhaseStatus(2, 'Structuring failed — imported as single beat', 'warning');
-                    // Fallback: wrap as single beat so the user isn't stuck
-                    currentNarration = {
-                        title: 'Manual Script',
+                const response = await authFetch('/api/structure-script', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        raw_text: rawValue,
                         duration_minutes: getSelectedDuration(),
-                        narration: [{ act: 'MANUAL', beat: 'Full Script', text: rawValue }],
-                    };
-                }
+                    })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Script structuring failed');
+                currentNarration = data.narration;
+                structuringMode = data.structuring_mode || 'llm';
+            } catch (err) {
+                console.error('Script structuring error:', err);
+                // Network/server failure: wrap as single beat so the user isn't stuck.
+                currentNarration = {
+                    title: 'Imported Script',
+                    duration_minutes: getSelectedDuration(),
+                    narration: [{ act: 'ACT 1', beat: 'Full Script', text: rawValue }],
+                };
+                structuringMode = 'fallback';
             }
 
             renderNarration(currentNarration);
@@ -4601,7 +4591,8 @@ No formatting needed — just paste your narration!"></textarea>
 
             const beats = currentNarration.narration || [];
             const actCount = new Set(beats.map(b => b.act)).size;
-            updatePhaseStatus(2, `Imported (${actCount} acts, ${beats.length} beats)`, 'complete');
+            const suffix = structuringMode === 'fallback' ? ' — auto-labels' : '';
+            updatePhaseStatus(2, `Imported (${actCount} acts, ${beats.length} beats)${suffix}`, 'complete');
             updateProdSourceBadge();
             showSuggestCastButton(true);
             triggerAutosave();
@@ -4639,65 +4630,6 @@ No formatting needed — just paste your narration!"></textarea>
            PHASE 3: PRODUCTION TABLE
            ══════════════════════════════════════ */
 
-        function importSceneBreakdown() {
-            const textarea = document.getElementById('prodPasteArea');
-            const errorDiv = document.getElementById('phase3Error');
-            errorDiv.style.display = 'none';
-            const rawText = textarea.value.trim();
-            if (!rawText) return;
-
-            try {
-                const parsed = JSON.parse(rawText);
-
-                if (parsed.narration && Array.isArray(parsed.narration)) {
-                    // Already narration format
-                    currentNarration = parsed;
-                } else if (parsed.script && Array.isArray(parsed.script)) {
-                    // Legacy scene breakdown → convert to narration
-                    const beats = [];
-                    const seenBeats = {};
-                    for (const scene of parsed.script) {
-                        const actName = scene.act || 'IMPORTED';
-                        const beatName = scene.beat || ('Scene ' + (scene.scene || '?'));
-                        const key = actName + '|||' + beatName;
-                        if (seenBeats[key]) {
-                            seenBeats[key].text += ' ' + (scene.narration || '');
-                        } else {
-                            const beat = { act: actName, beat: beatName, text: scene.narration || '' };
-                            seenBeats[key] = beat;
-                            beats.push(beat);
-                        }
-                    }
-                    currentNarration = {
-                        title: parsed.title || 'Imported Script',
-                        duration_minutes: parsed.duration_minutes || 10,
-                        narration: beats,
-                    };
-                } else {
-                    throw new Error('JSON must have a "narration" or "script" array.');
-                }
-
-                const beatCount = (currentNarration.narration || []).length;
-                updatePhaseStatus(3, `✅ Imported ${beatCount} beats — ready to generate`, 'complete');
-                updateProdSourceBadge();
-                showSuggestCastButton(true);
-
-            } catch (error) {
-                // Not valid JSON, assume it is plain text script
-                console.log("Failed to parse as JSON, treating as plain text script.");
-                currentNarration = {
-                    title: "Pasted Script",
-                    duration_minutes: 10, // Default
-                    narration: [
-                        { act: "ACT 1", beat: "Full Text", text: rawText }
-                    ],
-                    raw_text: rawText
-                };
-                updatePhaseStatus(3, `✅ Imported text — ready to generate`, 'complete');
-                updateProdSourceBadge();
-                showSuggestCastButton(true);
-            }
-        }
         function updateEstimatedShots() {
             if (!currentNarration || !currentNarration.narration) {
                 document.getElementById('estimatedShotsDisplay').textContent = '--';
@@ -4729,6 +4661,7 @@ No formatting needed — just paste your narration!"></textarea>
         }
 
         async function generateProductionTable() {
+            const targetProjectId = currentProjectId;
             if (!currentNarration) return alert('No narration data. Generate narration first, or import a script.');
 
             const btn = document.getElementById('productionBtn');
@@ -4786,8 +4719,11 @@ No formatting needed — just paste your narration!"></textarea>
                     console.log('[Production] Using cast:', currentCast.cast.length, 'characters');
                 }
 
-                // Synchronous production table generation - Set background op to track
-                setBackgroundOp(currentProjectId, {
+                // Opt into streaming: server returns {task_id} immediately and writes
+                // per-batch progress to Firestore; we poll until status='complete'.
+                requestBody.streaming = true;
+
+                setBackgroundOp(targetProjectId, {
                     status: 'in_progress',
                     type: 'production'
                 });
@@ -4798,12 +4734,52 @@ No formatting needed — just paste your narration!"></textarea>
                     body: JSON.stringify(requestBody),
                 });
 
-                clearProdTimers();
                 const data = await response.json();
+                if (!response.ok && !data.task_id) {
+                    clearProdTimers();
+                    throw new Error(data.error || 'Production table generation failed');
+                }
+
+                // Streaming launched — hand off to the poller.
+                if (data.task_id) {
+                    clearProdTimers();
+                    // Persist task_id so a page refresh can resume polling instead of
+                    // orphaning the in-flight task. The worker keeps running on the
+                    // server regardless; this just lets the UI rejoin it.
+                    setBackgroundOp(targetProjectId, {
+                        status: 'in_progress',
+                        type: 'production',
+                        taskId: data.task_id,
+                        startedAt: Date.now(),
+                    });
+                    startProductionTaskPolling(data.task_id, currentProjectId, {
+                        btn, btnText, spinner, errorDiv,
+                    });
+                    return;
+                }
+
+                // ── Legacy synchronous path (kept for fallback) ──
+                clearProdTimers();
+
+                // Coverage failure: HTTP 200 with error="coverage_failure" — render the
+                // partial table, then open a blocking modal offering targeted retry.
+                if (data.error === 'coverage_failure') {
+                    if (currentProjectId === data.project_id || !data.project_id) {
+                        currentProductionData = { success: false, production_table: data.production_table };
+                        renderProductionTable(data.production_table);
+                        const shotCount = data.production_table?.shots?.length || 0;
+                        updatePhaseStatus(3, `⚠️ ${shotCount} shots — some scenes missing`, 'error');
+                        openCoverageFailureModal(data.missing_beats || [], data.production_table);
+                        triggerAutosave();
+                    }
+                    setBackgroundOp(targetProjectId, { status: 'coverage_failure', data, type: 'production' });
+                    return;
+                }
+
                 if (!response.ok) throw new Error(data.error || 'Production table generation failed');
 
                 // Synchronous completed
-                setBackgroundOp(currentProjectId, {
+                setBackgroundOp(targetProjectId, {
                     status: 'completed',
                     data: data,
                     type: 'production'
@@ -4848,6 +4824,180 @@ No formatting needed — just paste your narration!"></textarea>
             }
         }
 
+        // ── Streaming production-table state + poller ──
+        let productionTaskState = null;  // {taskId, projectId, intervalId, seenBatchIdx:Set, accumulatedShots:[], totalBatches}
+
+        function startProductionTaskPolling(taskId, projectId, controls, options = {}) {
+            // Cancel any stale poll first.
+            if (productionTaskState?.intervalId) clearInterval(productionTaskState.intervalId);
+            productionTaskState = {
+                taskId, projectId,
+                seenBatchIdx: new Set(),
+                accumulatedShots: [],
+                accumulatedContinuity: [],
+                totalBatches: null,
+                title: currentNarration?.title || 'Untitled',
+                aspectRatio: (approvedStyle && document.getElementById('reviewAspectRatio')?.value) || '16:9',
+                intervalId: null,
+                controls,
+                retainExistingRows: !!options.retainExistingRows,
+            };
+            // Show the table shell. For retry runs and resumes, keep existing rows
+            // visible so the user doesn't see the table flash empty — the worker
+            // doesn't stream per-batch progress for those, only a final merged
+            // table on completion.
+            document.getElementById('productionResults').style.display = 'block';
+            document.getElementById('productionMeta').innerHTML = `<span class="meta-tag">Streaming…</span>`;
+            if (!options.retainExistingRows) {
+                document.getElementById('productionTableBody').innerHTML = '';
+                updatePhaseStatus(3, 'Producing first act…', 'running');
+            }
+            productionTaskState.intervalId = setInterval(() => pollProductionTask(), 2500);
+            // Fire one immediately so the user sees activity fast.
+            pollProductionTask();
+        }
+
+        async function pollProductionTask() {
+            const state = productionTaskState;
+            if (!state) return;
+            // If the user navigated to a different project, suspend UI updates but
+            // keep polling — the worker is still doing work for that project, and
+            // we want the final save to land regardless.
+            const projectMatches = !state.projectId || state.projectId === currentProjectId;
+            try {
+                const resp = await authFetch(`/api/production-task/${encodeURIComponent(state.taskId)}`);
+                // 404 means the task was never created or has been cleaned up — a
+                // resume from a stale taskId would loop forever otherwise.
+                if (resp.status === 404) {
+                    if (projectMatches) updatePhaseStatus(3, 'Previous task expired — please retry', 'error');
+                    setBackgroundOp(state.projectId, {
+                        status: 'failed',
+                        type: 'production',
+                        error: 'Task no longer available (server restart or expired)',
+                    });
+                    stopProductionTaskPolling();
+                    return;
+                }
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || 'Poll failed');
+
+                if (typeof data.total_batches === 'number' && state.totalBatches === null) {
+                    state.totalBatches = data.total_batches;
+                }
+
+                // Append any new batches that we haven't rendered yet, in batch_idx order.
+                const completed = (data.batches_completed || []).slice()
+                    .sort((a, b) => (a.batch_idx || 0) - (b.batch_idx || 0));
+                for (const batch of completed) {
+                    if (state.seenBatchIdx.has(batch.batch_idx)) continue;
+                    state.seenBatchIdx.add(batch.batch_idx);
+                    state.accumulatedShots.push(...(batch.shots || []));
+                    if (projectMatches) appendStreamedBatchRows(batch.shots || []);
+                }
+
+                // Banner update (only for the active project)
+                const done = state.seenBatchIdx.size;
+                const total = state.totalBatches;
+                if (projectMatches && total && data.status === 'running') {
+                    const failedNow = (data.failed_batches || []).length;
+                    const failedSuffix = failedNow > 0 ? ` · ${failedNow} failed` : '';
+                    updatePhaseStatus(3, `Act ${done}/${total} ready${failedSuffix}…`, 'running');
+                }
+
+                // Terminal states
+                if (data.status === 'complete') {
+                    finalizeStreamedTable(data.final_table, state.projectId, false);
+                    stopProductionTaskPolling();
+                } else if (data.status === 'coverage_failure') {
+                    finalizeStreamedTable(data.final_table, state.projectId, true);
+                    if (projectMatches) {
+                        openCoverageFailureModal(data.missing_beats || [], data.final_table || {});
+                        updatePhaseStatus(3, `⚠️ ${data.final_table?.shots?.length || 0} shots — some scenes missing`, 'error');
+                    }
+                    stopProductionTaskPolling();
+                } else if (data.status === 'failed') {
+                    const errMsg = data.error || 'Production table generation failed';
+                    if (projectMatches && state.controls?.errorDiv) {
+                        state.controls.errorDiv.innerText = errMsg;
+                        state.controls.errorDiv.style.display = 'block';
+                    }
+                    if (projectMatches) updatePhaseStatus(3, '❌ Error', 'error');
+                    // Mark op as failed so a refresh doesn't show a phantom spinner.
+                    setBackgroundOp(state.projectId, {
+                        status: 'failed',
+                        type: 'production',
+                        error: errMsg,
+                    });
+                    stopProductionTaskPolling();
+                }
+            } catch (err) {
+                console.error('[Production poll] failed:', err);
+                // Don't kill the poller on transient errors — wait for next tick.
+            }
+        }
+
+        function stopProductionTaskPolling() {
+            const state = productionTaskState;
+            if (!state) return;
+            if (state.intervalId) clearInterval(state.intervalId);
+            // Re-enable the Generate button
+            if (state.controls?.btn) {
+                state.controls.btn.disabled = false;
+                if (state.controls.btnText) state.controls.btnText.style.display = 'inline';
+                if (state.controls.spinner) state.controls.spinner.style.display = 'none';
+            }
+            productionTaskState = null;
+        }
+
+        function appendStreamedBatchRows(shots) {
+            const tbody = document.getElementById('productionTableBody');
+            if (!tbody || !shots?.length) return;
+            const rows = shots.map(shot => `
+                <tr data-streaming-row="1" data-shot-num="${escapeHtml(shot.shot_number || '')}">
+                    <td class="cell-num">${escapeHtml(shot.shot_number || '')}</td>
+                    <td class="cell-beat">
+                        ${escapeHtml(shot.script_beat || '')}
+                        ${shot.cutting_rationale ? `<div class="cutting-rationale">${escapeHtml(shot.cutting_rationale)}</div>` : ''}
+                    </td>
+                    <td class="cell-dur">${escapeHtml(shot.duration || '')}</td>
+                    <td class="cell-intent">${escapeHtml(shot.directors_intent || '')}</td>
+                    <td class="cell-prompt"><pre class="prompt-cell">${escapeHtml(shot.first_frame_prompt || '')}</pre></td>
+                    <td class="cell-prompt"><pre class="prompt-cell">${escapeHtml(shot.veo_prompt || '')}</pre></td>
+                </tr>
+            `).join('');
+            tbody.insertAdjacentHTML('beforeend', rows);
+        }
+
+        function finalizeStreamedTable(finalTable, targetProjectId, partial = false) {
+            if (!finalTable) return;
+            
+            setBackgroundOp(targetProjectId, {
+                status: partial ? 'coverage_failure' : 'completed',
+                data: { production_table: finalTable },
+                type: 'production',
+            });
+            
+            if (targetProjectId === currentProjectId) {
+                // Replace the progressively-rendered rows with the final table so boundary-
+                // stitcher patches are reflected. Keep currentProductionData in sync.
+                currentProductionData = { success: !partial, production_table: finalTable };
+                renderProductionTable(finalTable);
+                const shotCount = finalTable.total_shots || finalTable.shots?.length || 0;
+                if (!partial) {
+                    const batchWarning = finalTable.batch_warning;
+                    if (batchWarning) {
+                        updatePhaseStatus(3, `⚠️ Partial — ${shotCount} shots`, 'complete');
+                        const ed = document.getElementById('phase3Error');
+                        ed.innerText = batchWarning;
+                        ed.style.display = 'block';
+                    } else {
+                        updatePhaseStatus(3, `✅ Complete — ${shotCount} shots`, 'complete');
+                    }
+                }
+                triggerAutosave();
+            }
+        }
+
         function renderProductionTable(pt) {
             document.getElementById('productionMeta').innerHTML = [
                 pt.aspect_ratio ? `<span class="meta-tag">${pt.aspect_ratio}</span>` : '',
@@ -4867,7 +5017,6 @@ No formatting needed — just paste your narration!"></textarea>
                         <td class="cell-dur">${escapeHtml(shot.duration || '')}</td>
                         <td class="cell-intent">${escapeHtml(shot.directors_intent || '')}</td>
                         <td class="cell-prompt"><pre class="prompt-cell">${escapeHtml(shot.first_frame_prompt || '')}</pre></td>
-                        <td class="cell-prompt"><pre class="prompt-cell">${escapeHtml(shot.last_frame_prompt || '')}</pre></td>
                         <td class="cell-prompt"><pre class="prompt-cell">${escapeHtml(shot.veo_prompt || '')}</pre></td>
                     </tr>
                 `).join('');
@@ -4895,7 +5044,7 @@ No formatting needed — just paste your narration!"></textarea>
                         return;
                     }
                 } catch (_) { /* recovery failed */ }
-                tbody.innerHTML = `<tr><td colspan="7" style="white-space:pre-wrap">${escapeHtml(pt.raw_text)}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="6" style="white-space:pre-wrap">${escapeHtml(pt.raw_text)}</td></tr>`;
             }
 
             if (pt.continuity_notes && pt.continuity_notes.length > 0) {
@@ -4923,15 +5072,6 @@ No formatting needed — just paste your narration!"></textarea>
             alert(`✅ Copied ${prompts.length} First Frame Prompts to clipboard!`);
         }
 
-        function copyLastFramePrompts() {
-            if (!currentProductionData?.production_table?.shots) return;
-            const prompts = currentProductionData.production_table.shots.map((s, idx) =>
-                `=== SHOT ${s.shot_number} - LAST FRAME ===\n${s.last_frame_prompt}`
-            );
-            navigator.clipboard.writeText(prompts.join('\n\n' + '='.repeat(50) + '\n\n'));
-            alert(`✅ Copied ${prompts.length} Last Frame Prompts to clipboard!`);
-        }
-
         function copyVeoPrompts() {
             if (!currentProductionData?.production_table?.shots) return;
             const prompts = currentProductionData.production_table.shots.map((s, idx) =>
@@ -4947,7 +5087,6 @@ No formatting needed — just paste your narration!"></textarea>
                 `=== SHOT ${s.shot_number} (${s.duration}) ===\n` +
                 `SCRIPT: ${s.script_beat}\n\n` +
                 `FIRST FRAME:\n${s.first_frame_prompt}\n\n` +
-                `LAST FRAME:\n${s.last_frame_prompt}\n\n` +
                 `VEO 3.1:\n${s.veo_prompt}\n`
             );
             navigator.clipboard.writeText(lines.join('\n\n'));
@@ -4969,6 +5108,120 @@ No formatting needed — just paste your narration!"></textarea>
             a.download = `production_table_${Date.now()}.json`;
             a.click();
             URL.revokeObjectURL(url);
+        }
+
+        // Coverage-failure modal state — set when the modal opens, consumed by the retry handler.
+        let pendingCoverageRetry = null;
+
+        function openCoverageFailureModal(missingBeats, productionTable) {
+            const summary = document.getElementById('coverageFailureSummary');
+            const beatsEl = document.getElementById('coverageFailureBeats');
+            const total = missingBeats.length;
+            summary.innerText =
+                `${total} script ${total === 1 ? 'beat' : 'beats'} couldn't be turned into shots ` +
+                `(usually a transient Gemini hiccup). The partial table is rendered below — retry to fill the gaps.`;
+            beatsEl.innerHTML = missingBeats.map((b, i) => `
+                <div style="margin-bottom: 8px;">
+                    <strong>${escapeHtml(b.act || 'ACT 1')} · ${escapeHtml(b.beat || `Beat ${i + 1}`)}</strong><br>
+                    <span style="color: #555">${escapeHtml((b.text || '').slice(0, 140))}${(b.text || '').length > 140 ? '…' : ''}</span>
+                </div>
+            `).join('');
+            pendingCoverageRetry = { missingBeats, productionTable };
+            document.getElementById('coverageFailureModal').style.display = 'flex';
+        }
+
+        function closeCoverageFailureModal() {
+            document.getElementById('coverageFailureModal').style.display = 'none';
+            pendingCoverageRetry = null;
+        }
+
+        async function retryMissingBeats() {
+            const targetProjectId = currentProjectId;
+            if (!pendingCoverageRetry) return closeCoverageFailureModal();
+            const { missingBeats, productionTable } = pendingCoverageRetry;
+            const errorDiv = document.getElementById('phase3Error');
+            const btn = document.getElementById('productionBtn');
+            const btnText = document.getElementById('productionBtnText');
+            const spinner = document.getElementById('productionSpinner');
+            updatePhaseStatus(3, `Retrying ${missingBeats.length} missing ${missingBeats.length === 1 ? 'scene' : 'scenes'}…`, 'running');
+            closeCoverageFailureModal();
+
+            try {
+                const body = {
+                    project_id: currentProjectId,
+                    missing_beats: missingBeats,
+                    existing_table: productionTable,
+                    duration_minutes: currentNarration?.duration_minutes || getSelectedDuration(),
+                    pacing_tier: document.getElementById('pacingTierSelect').value,
+                    format_preset: document.getElementById('formatPresetSelect').value,
+                    // Opt into streaming so a refresh can resume the retry via the
+                    // same poll endpoint as the main flow. Previously this ran as a
+                    // synchronous 10+ minute POST that orphaned on refresh.
+                    streaming: true,
+                };
+                if (approvedStyle) {
+                    body.style_analysis = approvedStyle;
+                    body.aspect_ratio = document.getElementById('reviewAspectRatio').value;
+                } else {
+                    body.aspect_ratio = '16:9';
+                }
+                if (currentCreativeDirection) body.creative_direction = currentCreativeDirection;
+                if (currentCast?.has_characters && currentCast?.cast?.length) body.cast = currentCast;
+
+                const response = await authFetch('/api/generate-production-table/retry-beats', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await response.json();
+
+                // Streaming path: hand off to the same poller as the main flow.
+                if (data.task_id) {
+                    setBackgroundOp(targetProjectId, {
+                        status: 'in_progress',
+                        type: 'production',
+                        taskId: data.task_id,
+                        startedAt: Date.now(),
+                        action: 'retry',
+                    });
+                    if (btn) {
+                        btn.disabled = true;
+                        if (btnText) btnText.style.display = 'none';
+                        if (spinner) spinner.style.display = 'block';
+                    }
+                    startProductionTaskPolling(data.task_id, currentProjectId, {
+                        btn, btnText, spinner, errorDiv,
+                    }, { retainExistingRows: true });
+                    return;
+                }
+
+                // ── Legacy sync path (only if backend doesn't return a task_id) ──
+                if (data.error === 'coverage_failure') {
+                    currentProductionData = { success: false, production_table: data.production_table };
+                    renderProductionTable(data.production_table);
+                    const shotCount = data.production_table?.shots?.length || 0;
+                    updatePhaseStatus(3, `⚠️ ${shotCount} shots — still missing some`, 'error');
+                    openCoverageFailureModal(data.missing_beats || [], data.production_table);
+                    return;
+                }
+                if (!response.ok || !data.success) {
+                    throw new Error(data.error || 'Retry failed');
+                }
+
+                currentProductionData = data;
+                renderProductionTable(data.production_table);
+                const shotCount = data.production_table?.total_shots || data.production_table?.shots?.length || '?';
+                updatePhaseStatus(3, `✅ Complete — ${shotCount} shots`, 'complete');
+                if (typeof showToast === 'function') {
+                    showToast(`Recovered ${missingBeats.length} missing ${missingBeats.length === 1 ? 'scene' : 'scenes'}`, 'success');
+                }
+                triggerAutosave();
+            } catch (err) {
+                console.error('[Coverage retry] failed:', err);
+                errorDiv.innerText = `Retry failed: ${err.message || err}. You can try again or regenerate the full table.`;
+                errorDiv.style.display = 'block';
+                updatePhaseStatus(3, '❌ Retry failed', 'error');
+            }
         }
 
         /* ══════════════════════════════════════
@@ -6076,7 +6329,8 @@ No formatting needed — just paste your narration!"></textarea>
             document.getElementById('productionResults').style.display = 'none';
             document.getElementById('continuityNotes').style.display = 'none';
             document.getElementById('scriptPasteArea').value = '';
-            document.getElementById('prodPasteArea').value = '';
+            const _prodPasteEl = document.getElementById('prodPasteArea');
+            if (_prodPasteEl) _prodPasteEl.value = '';
             resetTemplate();
 
             // Reset Cast panel
@@ -6150,6 +6404,471 @@ No formatting needed — just paste your narration!"></textarea>
         let animationPollers = {};
         let visualsGenerationPhase = 'idle'; // 'idle' | 'preview' | 'batch'
 
+        // ── Visuals Engine (Studio-backed model picker for batch generation) ──
+        // When `useForBatch` is on AND the relevant engine has a modelId,
+        // generateSceneImage / animateScene route through /api/studio/generate
+        // using the saved model + params + refs. Otherwise the legacy
+        // Gemini/Veo paths run unchanged.
+        let visualsEngine = {
+            image: null, // { modelId, displayName, params, refs }
+            video: null,
+            useForBatch: false,
+        };
+
+        function visualsEngineToggleChanged() {
+            const cb = document.getElementById('visualsEngineToggle');
+            visualsEngine.useForBatch = !!(cb && cb.checked);
+            if (typeof triggerAutosave === 'function') triggerAutosave();
+        }
+
+        function visualsRenderEngine() {
+            const section = document.getElementById('visualsEngineSection');
+            if (!section) return;
+            section.style.display = (visualsScenes && visualsScenes.length) ? 'block' : 'none';
+
+            const imgName = document.getElementById('visualsEngineImageName');
+            const vidName = document.getElementById('visualsEngineVideoName');
+            const imgClear = document.getElementById('visualsClearImageEngineBtn');
+            const vidClear = document.getElementById('visualsClearVideoEngineBtn');
+            if (imgName) imgName.textContent = visualsEngine.image
+                ? `${visualsEngine.image.displayName || visualsEngine.image.modelId}`
+                : 'Not set — using legacy Gemini path';
+            if (vidName) vidName.textContent = visualsEngine.video
+                ? `${visualsEngine.video.displayName || visualsEngine.video.modelId}`
+                : 'Not set — using legacy Veo path';
+            if (imgClear) imgClear.style.display = visualsEngine.image ? 'inline-block' : 'none';
+            if (vidClear) vidClear.style.display = visualsEngine.video ? 'inline-block' : 'none';
+
+            const cb = document.getElementById('visualsEngineToggle');
+            if (cb) cb.checked = !!visualsEngine.useForBatch;
+        }
+
+        // Open Studio in the right mode so the user can pick a model + tweak
+        // every param, then click "Save as Visuals Engine" in the Studio
+        // footer to snapshot the selection back into this Visuals state.
+        // When `sceneIdx` is provided, the snapshot saves to that scene's
+        // override slot instead of the global engine.
+        async function visualsConfigureEngine(kind, sceneIdx) {
+            if (typeof studioEnsureLoaded === 'function') await studioEnsureLoaded();
+            const wantMode = kind === 'video' ? 'video' : 'image';
+            const modeBtn = document.querySelector(`.studio-mode-tab[data-mode="${wantMode}"]`);
+            if (modeBtn && typeof studioSetMode === 'function') studioSetMode(wantMode, modeBtn);
+            // Configure-mode banner state read by the Studio footer button.
+            window._visualsEngineConfigKind = kind;
+            window._visualsEngineConfigScene = (typeof sceneIdx === 'number') ? sceneIdx : null;
+            if (typeof switchTab === 'function') switchTab('studio');
+            // Filter the picker to exclude multi-shot JSON models.
+            studioState._pickerForVisuals = true;
+            setTimeout(() => {
+                if (typeof studioOpenModelPicker === 'function') studioOpenModelPicker();
+            }, 250);
+        }
+
+        function visualsClearSceneEngine(idx, kind) {
+            const s = visualsScenes[idx];
+            if (!s || !s.studioEngine) return;
+            s.studioEngine[kind] = null;
+            updateSceneCard(idx);
+            if (typeof triggerAutosave === 'function') triggerAutosave();
+        }
+
+        function visualsClearEngine(kind) {
+            if (kind === 'image') visualsEngine.image = null;
+            else if (kind === 'video') visualsEngine.video = null;
+            visualsRenderEngine();
+            if (typeof triggerAutosave === 'function') triggerAutosave();
+        }
+
+        // Snapshot Studio's current model + params + refs into the Visuals
+        // engine slot matching the model's mode (image / video). Refs are
+        // copied so a later edit in Studio doesn't mutate the saved engine.
+        function visualsSaveCurrentStudioAsEngine() {
+            if (typeof studioState === 'undefined' || !studioState.selectedModelId) {
+                alert('Pick a model in Studio first.');
+                return;
+            }
+            const schema = studioState.schemas[studioState.selectedModelId];
+            if (!schema) { alert('Selected model is no longer available.'); return; }
+            const mode = (typeof studioKindMode === 'function')
+                ? studioKindMode(schema.kind)
+                : (schema.kind && schema.kind.indexOf('video') >= 0 ? 'video' : 'image');
+            if (mode !== 'image' && mode !== 'video') {
+                alert('Visuals only supports image and video engines. Audio models stay in Studio.');
+                return;
+            }
+            const snapshot = {
+                modelId: schema.id,
+                displayName: `${schema.display_name} · ${schema.provider}`,
+                kind: schema.kind,
+                params: JSON.parse(JSON.stringify(studioState.params || {})),
+                refs: (studioState.refs || []).map(r => ({
+                    slot: r.slot, kind: r.kind, url: r.url, name: r.name,
+                })),
+            };
+            // If the user came from a per-scene "Override" entry, save into
+            // that scene's slot instead of the global engine.
+            const targetSceneIdx = window._visualsEngineConfigScene;
+            window._visualsEngineConfigScene = null;
+            if (typeof targetSceneIdx === 'number' && visualsScenes && visualsScenes[targetSceneIdx]) {
+                const s = visualsScenes[targetSceneIdx];
+                s.studioEngine = s.studioEngine || { image: null, video: null };
+                s.studioEngine[mode] = snapshot;
+                if (typeof updateSceneCard === 'function') updateSceneCard(targetSceneIdx);
+                if (typeof triggerAutosave === 'function') triggerAutosave();
+                const shotLabel = s.shotNumber || (targetSceneIdx + 1);
+                alert(`Saved as ${mode === 'video' ? 'Video' : 'Image'} engine for Scene ${shotLabel}.\n\nThis scene will use this model on its next Generate.`);
+                return;
+            }
+
+            visualsEngine[mode] = snapshot;
+            visualsRenderEngine();
+            if (typeof triggerAutosave === 'function') triggerAutosave();
+            const label = mode === 'video' ? 'Video' : 'Image';
+            alert(`Saved as Visuals ${label} Engine.\n\nReturn to the Visuals tab and toggle "Use for Generate All / Animate All" to use it for batch generation.`);
+        }
+
+        // Resolve which engine the scene will use: per-scene override wins
+        // over the global engine. Returns null if neither is set.
+        function _visualsResolveEngine(idx, kind) {
+            const scene = visualsScenes[idx];
+            const sceneEng = scene && scene.studioEngine && scene.studioEngine[kind];
+            if (sceneEng) return sceneEng;
+            return (visualsEngine && visualsEngine[kind]) || null;
+        }
+
+        // Build the {model_id, inputs, params} payload for /api/studio/generate
+        // by zipping the engine snapshot with the scene's per-shot prompt + refs.
+        // Returns null with a console message if required slots can't be filled.
+        function _visualsBuildStudioPayload(idx, kind) {
+            const engine = _visualsResolveEngine(idx, kind);
+            if (!engine) return null;
+            const schema = (typeof studioState !== 'undefined' && studioState.schemas)
+                ? studioState.schemas[engine.modelId] : null;
+            if (!schema) {
+                console.warn('[Visuals] engine schema not loaded — call studioEnsureLoaded first');
+                return null;
+            }
+            const scene = visualsScenes[idx];
+            const inputs = {};
+
+            // 1. Text slot: scene prompt overrides engine defaults.
+            const textSlot = (schema.inputs || []).find(s => s.type === 'text' || s.type === 'line');
+            if (textSlot) {
+                const promptText = (kind === 'video' ? scene.veoPrompt : scene.imagePrompt) || '';
+                inputs[textSlot.name] = promptText;
+            }
+
+            // 2. Refs: combine engine refs + scene's own assets.
+            //    For VIDEO: scene image becomes first_frame (or single image slot).
+            //    For IMAGE: scene character images + style images go to list slot.
+            const slotByName = (name) => (schema.inputs || []).find(s => s.name === name);
+            const findListSlot = (refKind) =>
+                (schema.inputs || []).find(s => s.type === refKind + '_list');
+            const findScalarSlot = (refKind) =>
+                (schema.inputs || []).find(s => s.type === refKind);
+
+            // Engine refs first — they may explicitly target slots by name.
+            for (const r of (engine.refs || [])) {
+                const slot = (r.slot && slotByName(r.slot))
+                    || findScalarSlot(r.kind)
+                    || findListSlot(r.kind);
+                if (!slot) continue;
+                if (slot.type.endsWith('_list')) {
+                    inputs[slot.name] = inputs[slot.name] || [];
+                    inputs[slot.name].push(r.url);
+                } else if (inputs[slot.name] === undefined) {
+                    inputs[slot.name] = r.url;
+                }
+            }
+
+            if (kind === 'video' && scene.imageUrl && !scene.imageUrl.startsWith('data:')) {
+                // For I2V models: try named slot, then scalar image, then
+                // image LIST slot (e.g. Grok Imagine I2V uses `image_urls`).
+                // The previous logic only handled scalar slots, so models
+                // with a list-typed image input received the request with no
+                // image at all and the user saw "not taking my image."
+                const ff = slotByName('first_frame') || findScalarSlot('image');
+                if (ff && inputs[ff.name] === undefined) {
+                    inputs[ff.name] = scene.imageUrl;
+                } else {
+                    const list = findListSlot('image');
+                    if (list) {
+                        inputs[list.name] = inputs[list.name] || [];
+                        if (!inputs[list.name].includes(scene.imageUrl)) {
+                            // Scene image is the primary input — front of the list.
+                            inputs[list.name].unshift(scene.imageUrl);
+                        }
+                        const cap = list.max_count || list.max_n || 99;
+                        if (inputs[list.name].length > cap) {
+                            inputs[list.name] = inputs[list.name].slice(0, cap);
+                        }
+                    }
+                }
+            }
+
+            if (kind === 'image') {
+                // Character + style refs from the scene. IMPORTANT: prefer
+                // Firebase URLs over base64 `data:` URIs — Studio's backend
+                // re-hosts URLs to the Kie CDN, but it cannot fetch a `data:`
+                // URI, which causes Kie's createTask to return
+                // "File type not supported".
+                const charRefs = [];
+                for (const ch of (typeof visualsCharacters !== 'undefined' ? visualsCharacters : [])) {
+                    for (const img of (ch.images || [])) {
+                        const u = img.url || (img.data && img.data.startsWith('data:') ? null : img.data);
+                        if (u && !u.startsWith('data:') && charRefs.length < 10) charRefs.push(u);
+                    }
+                }
+                const styleRefs = ((typeof visualsConfig !== 'undefined' && visualsConfig.styleImages) || [])
+                    .map(img => img.url || (img.data && !img.data.startsWith('data:') ? img.data : null))
+                    .filter(Boolean);
+                const allImageRefs = [...charRefs, ...styleRefs];
+                if (allImageRefs.length) {
+                    const listSlot = findListSlot('image');
+                    if (listSlot) {
+                        inputs[listSlot.name] = inputs[listSlot.name] || [];
+                        const cap = listSlot.max_count || listSlot.max_n || 99;
+                        for (const u of allImageRefs) {
+                            if (inputs[listSlot.name].length >= cap) break;
+                            if (!inputs[listSlot.name].includes(u)) inputs[listSlot.name].push(u);
+                        }
+                    } else {
+                        const scalar = findScalarSlot('image');
+                        if (scalar && inputs[scalar.name] === undefined) inputs[scalar.name] = allImageRefs[0];
+                    }
+                }
+            }
+
+            // Final safety net: scrub any leftover base64 `data:` URIs from
+            // all input slots. Kie's upload + createTask endpoints can't
+            // fetch them and respond "File type not supported", which surfaces
+            // as a 500 to the caller. Log so users see which slot lost data.
+            const _isUploadable = (u) => typeof u === 'string' && u.length > 0 && !u.startsWith('data:');
+            for (const k of Object.keys(inputs)) {
+                const v = inputs[k];
+                if (Array.isArray(v)) {
+                    const cleaned = v.filter(_isUploadable);
+                    if (cleaned.length !== v.length) {
+                        console.warn(`[Visuals/Studio] dropped ${v.length - cleaned.length} base64 ref(s) from slot "${k}" — upload to Firebase first.`);
+                    }
+                    if (cleaned.length) inputs[k] = cleaned;
+                    else delete inputs[k];
+                } else if (typeof v === 'string' && v.startsWith('data:')) {
+                    console.warn(`[Visuals/Studio] dropped base64 ref from slot "${k}".`);
+                    delete inputs[k];
+                }
+            }
+
+            return {
+                model_id: engine.modelId,
+                inputs,
+                params: engine.params || {},
+                project_id: typeof currentProjectId !== 'undefined' ? currentProjectId : null,
+                // scene_id + kind let the backend name Kie uploads
+                // `scene_{id}_{ts}` in `images/`/`videos/` so the existing
+                // history scanner picks them up — parity with legacy Gemini.
+                scene_id: visualsScenes[idx]?.sceneId,
+                kind,
+            };
+        }
+
+        // Fire-and-forget: register a freshly-generated scene asset in the
+        // Studio asset library so it shows up in the cross-tab gallery and
+        // remains discoverable even if the scene is later regenerated.
+        // Safe to call without awaiting — failures are silent.
+        async function mirrorSceneToStudioLibrary(idx, kind, url) {
+            try {
+                const s = visualsScenes[idx];
+                if (!s || !url || !currentProjectId) return;
+                // Don't double-register if we already saved this URL.
+                if (s._mirroredUrls && s._mirroredUrls[url]) return;
+                const engine = (s.studioEngine && s.studioEngine[kind === 'video' ? 'video' : 'image'])
+                    || (typeof visualsEngine !== 'undefined' && visualsEngine && visualsEngine[kind === 'video' ? 'video' : 'image'])
+                    || {};
+                const body = {
+                    kind: kind === 'video' ? 'video' : 'image',
+                    url,
+                    prompt: kind === 'video' ? (s.veoPrompt || '') : (s.imagePrompt || ''),
+                    model_id: engine.modelId || '',
+                    refs: [],
+                    params: engine.params || {},
+                    // scene_id tag so a future "filter by scene" feature can group
+                    // all iterations of a given scene from the library view.
+                    scene_id: s.sceneId || null,
+                };
+                const r = await authFetch(`/api/projects/${encodeURIComponent(currentProjectId)}/assets`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body),
+                });
+                if (!r.ok) {
+                    console.warn('[Visuals] mirror to Studio library failed:', r.status);
+                    return;
+                }
+                s._mirroredUrls = s._mirroredUrls || {};
+                s._mirroredUrls[url] = true;
+                // Refresh the Studio gallery in-memory if it's been loaded
+                // already so the new tile appears without a tab roundtrip.
+                const data = await r.json().catch(() => null);
+                if (data && data.asset && typeof studioState !== 'undefined'
+                    && studioState && studioState.projectId === currentProjectId
+                    && Array.isArray(studioState.assets)) {
+                    studioState.assets.unshift(data.asset);
+                    if (typeof studioRenderGallery === 'function') studioRenderGallery();
+                }
+            } catch (e) {
+                console.warn('[Visuals] mirror to Studio library error:', e);
+            }
+        }
+
+        // Generate a scene image/video through Studio's dispatcher. Handles
+        // the three response shapes ({image_url}, {taskId}, {operation_name}/{operation}).
+        async function generateSceneViaStudio(idx, kind) {
+            const s = visualsScenes[idx];
+            if (!s) return;
+            if (typeof studioEnsureLoaded === 'function') await studioEnsureLoaded();
+            const payload = _visualsBuildStudioPayload(idx, kind);
+            if (!payload) {
+                alert(`No ${kind} engine configured. Click "Configure in Studio" to pick a model.`);
+                return;
+            }
+
+            const statusField = kind === 'video' ? 'videoStatus' : 'imageStatus';
+            const errorField  = kind === 'video' ? 'videoError'  : 'imageError';
+            const urlField    = kind === 'video' ? 'videoUrl'    : 'imageUrl';
+            s[statusField] = 'generating';
+            s[errorField] = null;
+            updateSceneCard(idx);
+            if (kind === 'video') updateVideoProgress(); else updateImageProgress();
+
+            try {
+                const r = await authFetch('/api/studio/generate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload),
+                });
+                const data = await r.json();
+                if (!r.ok) throw new Error(data.error || `Studio generation failed (HTTP ${r.status})`);
+
+                // Sync image — Google native path.
+                const syncUrls = Array.isArray(data.image_urls) && data.image_urls.length
+                    ? data.image_urls
+                    : (data.image_url ? [data.image_url] : null);
+                if (syncUrls) {
+                    s[urlField] = syncUrls[0];
+                    s[statusField] = 'complete';
+                    updateSceneCard(idx);
+                    doSaveProject();
+                    if (kind === 'image') fetchImageHistoryForScene(idx);
+                    mirrorSceneToStudioLibrary(idx, kind, syncUrls[0]);
+                    return;
+                }
+
+                // Async — Kie taskId.
+                if (data.taskId) {
+                    s[statusField] = 'polling';
+                    updateSceneCard(idx);
+                    _visualsPollStudioKie(idx, kind, data.taskId);
+                    return;
+                }
+
+                // Async — Veo operation. Reuse existing animation poller.
+                if (data.operation_name || data.operation) {
+                    const opName = data.operation_name || (data.operation && (data.operation.operation_name || data.operation.name)) || '';
+                    s.operationName = opName;
+                    s.isMidjourney = false;
+                    s[statusField] = 'polling';
+                    updateSceneCard(idx);
+                    if (kind === 'video' && typeof startPolling === 'function') {
+                        startPolling(idx, opName.startsWith('kie:') ? 5000 : 10000);
+                    }
+                    return;
+                }
+
+                throw new Error('Unexpected response shape from Studio. Check console.');
+            } catch (e) {
+                console.error('[Visuals/Studio] failed', e);
+                s[statusField] = 'error';
+                s[errorField] = e.message || String(e);
+                updateSceneCard(idx);
+            }
+        }
+
+        async function _visualsPollStudioKie(idx, kind, taskId) {
+            const s = visualsScenes[idx];
+            const statusField = kind === 'video' ? 'videoStatus' : 'imageStatus';
+            const errorField  = kind === 'video' ? 'videoError'  : 'imageError';
+            const urlField    = kind === 'video' ? 'videoUrl'    : 'imageUrl';
+            const start = Date.now();
+            const timeoutMs = 10 * 60 * 1000;
+            let consecutive = 0;
+            while (Date.now() - start < timeoutMs) {
+                await new Promise(r => setTimeout(r, 4000));
+                try {
+                    // Thread scene_id + kind so server names the Firebase upload
+                    // scene_{id}_{ts}, making it visible to the history scanner.
+                    const qs = new URLSearchParams();
+                    if (currentProjectId) qs.set('project_id', currentProjectId);
+                    if (s.sceneId) qs.set('scene_id', s.sceneId);
+                    if (kind) qs.set('kind', kind);
+                    const url = `/api/kie/poll/${encodeURIComponent(taskId)}`
+                        + (qs.toString() ? `?${qs.toString()}` : '');
+                    const r = await authFetch(url);
+                    if (!r.ok) {
+                        consecutive++;
+                        if (consecutive >= 5) throw new Error(`Polling failed (HTTP ${r.status})`);
+                        continue;
+                    }
+                    consecutive = 0;
+                    const data = await r.json();
+                    // Server flips status to 'rehost_failed' when it could not
+                    // persist any result. Don't store the kie tempfile URL — it
+                    // would die in ~24h. Surface a retryable error instead.
+                    if (data.status === 'rehost_failed') {
+                        s[statusField] = 'error';
+                        s[errorField] = 'Could not save to permanent storage — click Regenerate to retry';
+                        updateSceneCard(idx);
+                        return;
+                    }
+                    if (data.status === 'completed') {
+                        // Trust firebase_urls only; if absent, the rehost
+                        // couldn't persist anything and we treat it as failure.
+                        const persistent = data.firebase_urls || [];
+                        if (persistent.length) {
+                            s[urlField] = persistent[0];
+                            s[statusField] = 'complete';
+                            updateSceneCard(idx);
+                            doSaveProject();
+                            if (kind === 'image') fetchImageHistoryForScene(idx);
+                            else if (kind === 'video') fetchVideoHistoryForScene(idx);
+                            // Fire-and-forget mirror to Studio asset library.
+                            mirrorSceneToStudioLibrary(idx, kind, persistent[0]);
+                            return;
+                        }
+                        // Completed with no persisted URLs — treat as rehost failure.
+                        s[statusField] = 'error';
+                        s[errorField] = 'Generation finished but could not be saved — click Regenerate to retry';
+                        updateSceneCard(idx);
+                        return;
+                    }
+                    if (data.status === 'failed' || data.status === 'error') {
+                        throw new Error(data.error || data.msg || 'Generation failed');
+                    }
+                } catch (e) {
+                    consecutive++;
+                    if (consecutive >= 5) {
+                        s[statusField] = 'error';
+                        s[errorField] = e.message || String(e);
+                        updateSceneCard(idx);
+                        return;
+                    }
+                }
+            }
+            s[statusField] = 'error';
+            s[errorField] = 'Generation timed out after 10 min';
+            updateSceneCard(idx);
+        }
+
         // ── Data Loading ──
         function setVisualsDataMode(mode) {
             document.getElementById('visualsModeAuto').classList.toggle('active', mode === 'auto');
@@ -6168,42 +6887,73 @@ No formatting needed — just paste your narration!"></textarea>
             statusEl.innerHTML = '<span class="source-dot active"></span> Loading...';
 
             try {
-                // First: check if we already have production data in memory from Phase 3
+                // Always fetch fresh from backend to guarantee project-scoped data.
+                // Do NOT trust currentProductionData in memory — it may be stale
+                // from a background op that completed for a different project.
                 let pt = null;
-                if (currentProductionData?.production_table?.shots?.length) {
-                    pt = currentProductionData.production_table;
-                    console.log('[Visuals] Using in-memory production data from Phase 3');
-                } else if (currentProjectId) {
-                    // Second: load from backend project doc
-                    const res = await authFetch(`/api/projects/${currentProjectId}`);
-                    const data = await res.json();
-                    if (data.success && data.project.production_data) {
-                        const prodData = typeof data.project.production_data === 'string'
-                            ? JSON.parse(data.project.production_data)
-                            : data.project.production_data;
-                        if (prodData && prodData.production_table && prodData.production_table.shots) {
-                            pt = prodData.production_table;
-                            currentProductionData = prodData; // Cache it
-                            console.log('[Visuals] Loaded production data from project doc');
-                        }
+                let source = '';
+
+                // Priority 1: Load from backend project doc (authoritative, project-scoped)
+                const res = await authFetch(`/api/projects/${currentProjectId}`);
+                const data = await res.json();
+                if (data.success && data.project.production_data) {
+                    const prodData = typeof data.project.production_data === 'string'
+                        ? JSON.parse(data.project.production_data)
+                        : data.project.production_data;
+                    // Normalize: production_data may be the table itself or {production_table: ...}
+                    const candidate = prodData.production_table || prodData;
+                    if (candidate && candidate.shots && Array.isArray(candidate.shots)) {
+                        pt = candidate;
+                        // Keep currentProductionData in the wrapper format consumers expect
+                        currentProductionData = prodData.production_table
+                            ? prodData
+                            : { production_table: prodData };
+                        source = 'project doc';
+                        console.log(`[Visuals] Loaded production data from project doc for ${currentProjectId}`);
                     }
                 }
 
+                // Priority 2: Fallback to server .tmp folder (project-scoped only)
                 if (!pt) {
-                    // Fallback: fetch from server .tmp folder (project-scoped only)
-                    const res = await authFetch(`/api/latest-production-table?project_id=${currentProjectId}`);
-                    const data = await res.json();
-                    if (!res.ok) throw new Error(data.error || 'Failed to load production table');
-                    pt = data.production_table;
-                    console.log('[Visuals] Loaded production data from latest-production-table endpoint');
+                    const tmpRes = await authFetch(`/api/latest-production-table?project_id=${currentProjectId}`);
+                    const tmpData = await tmpRes.json();
+                    if (!tmpRes.ok) throw new Error(tmpData.error || 'Failed to load production table');
+                    pt = tmpData.production_table;
+                    currentProductionData = { production_table: pt };
+                    source = 'tmp storage';
+                    console.log(`[Visuals] Loaded production data from .tmp for ${currentProjectId}`);
                 }
 
                 if (!pt || !pt.shots || !Array.isArray(pt.shots)) {
                     throw new Error('No valid production data found. Generate one in Phase 3 first.');
                 }
 
+                // De-duplication: if the Visuals tab already shows scenes from an
+                // identical production table, skip the destructive re-import to
+                // preserve image/video URLs and generation state. The user likely
+                // already loaded this via restoreProjectState.
+                // Identity = title + shot count + first shot's prompt prefix
+                // (titles alone collide too easily; prompt prefix disambiguates
+                // distinct regenerations that happen to share a title).
+                const firstPromptSig = (shots) => {
+                    const s = shots?.[0] || {};
+                    return String(s.first_frame_prompt || s.directors_intent || s.script_beat || s.veo_prompt || '').slice(0, 120);
+                };
+                const alreadyLoaded = visualsScenes.length > 0
+                    && visualsScenes.length === pt.shots.length
+                    && visualsProductionData
+                    && (visualsProductionData.title || '') === (pt.title || '')
+                    && (visualsProductionData.shots?.length || 0) === (pt.shots?.length || 0)
+                    && firstPromptSig(visualsProductionData.shots) === firstPromptSig(pt.shots);
+
+                if (alreadyLoaded) {
+                    console.log('[Visuals] Production table already loaded for this project — skipping re-import');
+                    statusEl.innerHTML = `<span class="source-dot ready"></span> Already loaded: "${pt.title || 'Untitled'}" (${visualsScenes.length} scenes)`;
+                    return;
+                }
+
                 initVisualsFromProductionTable(pt);
-                statusEl.innerHTML = `<span class="source-dot ready"></span> Loaded: "${pt.title || 'Untitled'}" (${visualsScenes.length} scenes)`;
+                statusEl.innerHTML = `<span class="source-dot ready"></span> Loaded: "${pt.title || 'Untitled'}" (${visualsScenes.length} scenes) <small style="opacity:.6">(from ${source})</small>`;
             } catch (e) {
                 statusEl.innerHTML = `<span class="source-dot error"></span> ${e.message}`;
             }
@@ -6288,6 +7038,7 @@ No formatting needed — just paste your narration!"></textarea>
                     markedForImageGen: false,
                     selectedCharacters: existing?.selectedCharacters || [],
                     imageHistory: existing?.imageHistory || [],
+                    videoHistory: existing?.videoHistory || [],
                     // Multi-reference animation state (Seedance etc.)
                     seedanceMode: existing?.seedanceMode || 'first_frame',
                     lastFrameUrl: existing?.lastFrameUrl || null,
@@ -6360,8 +7111,9 @@ No formatting needed — just paste your narration!"></textarea>
 
             renderVisualsScenes();
 
-            // Fetch image history from Firebase Storage (populates history strips)
+            // Fetch image + video history from Firebase Storage (populates history strips)
             fetchImageHistory();
+            fetchVideoHistory();
 
             // Update price labels for current resolution
             updateModelPriceLabels();
@@ -6767,7 +7519,49 @@ No formatting needed — just paste your narration!"></textarea>
         }
 
         // ── Scene Card Rendering ──
+        // Render the per-scene "Studio engine" override row inside a scene
+        // card. Shows the effective engine (scene override > global > legacy)
+        // with an Override / Clear button.
+        function renderSceneEngineRow(idx, kind) {
+            const s = visualsScenes[idx];
+            if (!s) return '';
+            const sceneEngine = s.studioEngine && s.studioEngine[kind];
+            const globalEngine = visualsEngine && visualsEngine[kind];
+            const useGlobal = !!(visualsEngine && visualsEngine.useForBatch);
+            let badge, hint;
+            if (sceneEngine) {
+                badge = `<strong>${escapeHtml(sceneEngine.displayName || sceneEngine.modelId)}</strong>`;
+                hint = '<span style="color:#7aa37a;">scene override</span>';
+            } else if (useGlobal && globalEngine) {
+                badge = `<strong>${escapeHtml(globalEngine.displayName || globalEngine.modelId)}</strong>`;
+                hint = '<span style="color:#888;">global engine</span>';
+            } else if (globalEngine) {
+                badge = `<span style="color:#888;">${escapeHtml(globalEngine.displayName || globalEngine.modelId)}</span>`;
+                hint = '<span style="color:#888;">global saved · toggle off</span>';
+            } else {
+                badge = '<span style="color:#888;">Legacy ' + (kind === 'video' ? 'Veo' : 'Gemini') + '</span>';
+                hint = '<span style="color:#888;">no engine</span>';
+            }
+            const clearBtn = sceneEngine
+                ? `<button class="btn-small btn-ghost" onclick="visualsClearSceneEngine(${idx}, '${kind}')" title="Clear per-scene override">Clear</button>`
+                : '';
+            return `
+                <div class="scene-engine-row" style="display:flex; align-items:center; gap:8px; font-size:12px; color:#bbb; margin: 4px 0 6px; padding: 4px 8px; background:#0e0e0e; border:1px solid #2a2a2a; border-radius:6px;">
+                    <span style="color:#777;">Studio engine:</span>
+                    ${badge}
+                    <span>·</span>
+                    ${hint}
+                    <span style="flex:1;"></span>
+                    <button class="btn-small btn-ghost" onclick="visualsConfigureEngine('${kind}', ${idx})" title="Pick any of the 100+ Studio models for this scene">Override…</button>
+                    ${clearBtn}
+                </div>
+            `;
+        }
+
         function renderVisualsScenes() {
+            // Render the engine panel alongside the scene list so it shows
+            // up as soon as any scenes are loaded.
+            if (typeof visualsRenderEngine === 'function') visualsRenderEngine();
             const container = document.getElementById('visualsSceneList');
             container.innerHTML = visualsScenes.map((s, idx) => {
                 const imgModelOptions = `
@@ -6845,6 +7639,7 @@ No formatting needed — just paste your narration!"></textarea>
                                     <i data-lucide="sparkles"></i> Studio
                                 </button>
                             </div>
+                            ${renderSceneEngineRow(idx, 'image')}
                             <textarea class="scene-prompt-textarea" id="scene-img-prompt-${idx}"
                                 onchange="visualsScenes[${idx}].imagePrompt = this.value">${escapeHtml(s.imagePrompt)}</textarea>
                             <div class="scene-image-result" id="scene-img-result-${idx}">
@@ -6893,6 +7688,7 @@ No formatting needed — just paste your narration!"></textarea>
                                         </select>`;
                                 })()}
                             </div>
+                            ${renderSceneEngineRow(idx, 'video')}
                             <textarea class="scene-prompt-textarea" id="scene-veo-prompt-${idx}"
                                 onchange="visualsScenes[${idx}].veoPrompt = this.value">${escapeHtml(s.veoPrompt)}</textarea>
                             ${(() => {
@@ -6974,6 +7770,7 @@ No formatting needed — just paste your narration!"></textarea>
                         : `<div class="scene-placeholder">Video will appear here</div>`
                     }
                             </div>
+                            <div class="scene-video-history" id="scene-video-history-${idx}"></div>
                             <div class="scene-animation-controls">
                                 <label class="scene-animate-toggle">
                                     <input type="checkbox" ${s.markedForAnimation ? 'checked' : ''}
@@ -7236,6 +8033,13 @@ RESOLUTION: ${visualsConfig.resolution}`;
         async function generateSceneImage(idx) {
             const s = visualsScenes[idx];
             if (!s) { console.error(`Scene ${idx} not found. ${visualsScenes.length} scenes loaded.`); return; }
+            // Route through Studio engine when a per-scene override exists, or
+            // when the global toggle is on and a global image engine is saved.
+            const sceneOverride = s.studioEngine && s.studioEngine.image;
+            const globalActive = visualsEngine && visualsEngine.useForBatch && visualsEngine.image;
+            if (sceneOverride || globalActive) {
+                return generateSceneViaStudio(idx, 'image');
+            }
             s.imageStatus = 'generating';
             s.imageError = null;
             updateSceneCard(idx);
@@ -7322,6 +8126,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
         }
 
         async function generateAllImages() {
+            const targetProjectId = currentProjectId;
             updateVisualsConfig();
             _batchCancelled = false;
 
@@ -7376,7 +8181,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 _setBtnGenerating(btn, `Cancel Generation (0/${totalToGenerate})`);
 
                 // Set background op to track image generation
-                setBackgroundOp(currentProjectId, {
+                setBackgroundOp(targetProjectId, {
                     status: 'in_progress',
                     type: 'image_batch'
                 });
@@ -7852,6 +8657,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 renderVisualsScenes();
                 // Re-fetch history after scenes are re-rendered
                 fetchImageHistory();
+                fetchVideoHistory();
             } catch (e) {
                 console.warn('[Refresh] Failed to refresh reference images:', e);
             }
@@ -7969,6 +8775,133 @@ RESOLUTION: ${visualsConfig.resolution}`;
             }
         }
 
+        // ── Video History ──
+        // Mirror of the image-history strip for videos. Backed by
+        // /api/visuals/scene-video-history scanning `videos/{pid}/scene_*`,
+        // populated by _rehost_kie_results when Studio Engine generates a video.
+        function renderVideoHistoryStrip(idx) {
+            const container = document.getElementById(`scene-video-history-${idx}`);
+            if (!container) return;
+
+            const s = visualsScenes[idx];
+            const history = s.videoHistory || [];
+            if (history.length < 2) {
+                container.innerHTML = '';
+                return;
+            }
+            const previous = history.filter(v => v.url !== s.videoUrl);
+            if (previous.length === 0) {
+                container.innerHTML = '';
+                return;
+            }
+
+            container.innerHTML = `
+                <div class="history-strip-header" onclick="toggleVideoHistoryStrip(${idx})">
+                    <span class="history-strip-label">Previous versions (${previous.length})</span>
+                    <span class="history-strip-toggle" id="video-history-toggle-${idx}" style="transform: rotate(180deg)">&#9660;</span>
+                </div>
+                <div class="history-strip-body" id="video-history-body-${idx}" style="display: flex;">
+                    ${previous.map((v, i) => {
+                        const date = v.timestamp
+                            ? new Date(v.timestamp * 1000).toLocaleString()
+                            : 'Unknown date';
+                        const safeUrl = escapeHtml(v.url);
+                        const safeFn = escapeHtml(v.filename);
+                        return `
+                            <div class="history-thumb-wrapper">
+                                <video src="${safeUrl}" class="history-thumb" muted playsinline
+                                       onclick="restoreVideoFromHistory(${idx}, '${v.url.replace(/'/g, "\\'")}')"
+                                       onmouseover="this.play()" onmouseout="this.pause(); this.currentTime=0"></video>
+                                <div class="history-thumb-meta">
+                                    <span class="history-thumb-date">${date}</span>
+                                    <a class="history-thumb-download" href="javascript:void(0)"
+                                       onclick="event.stopPropagation(); downloadFirebaseFile('${v.url.replace(/'/g, "\\'")}', '${safeFn}')"
+                                       title="Download">&#11015;</a>
+                                </div>
+                            </div>`;
+                    }).join('')}
+                </div>
+            `;
+        }
+
+        function toggleVideoHistoryStrip(idx) {
+            const body = document.getElementById(`video-history-body-${idx}`);
+            const toggle = document.getElementById(`video-history-toggle-${idx}`);
+            if (body) {
+                const isHidden = body.style.display === 'none';
+                body.style.display = isHidden ? 'flex' : 'none';
+                if (toggle) toggle.style.transform = isHidden ? 'rotate(180deg)' : '';
+            }
+        }
+
+        function restoreVideoFromHistory(idx, url) {
+            const s = visualsScenes[idx];
+            if (!s) return;
+            // Push the current video into history before overwriting so the
+            // user can swap back. Same shape as image-history entries.
+            if (s.videoUrl && s.videoUrl !== url) {
+                s.videoHistory = Array.isArray(s.videoHistory) ? s.videoHistory : [];
+                if (!s.videoHistory.some(h => h.url === s.videoUrl)) {
+                    s.videoHistory.push({
+                        url: s.videoUrl,
+                        timestamp: Math.floor(Date.now() / 1000),
+                        filename: `scene_${s.sceneId}_${Date.now()}.mp4`,
+                    });
+                }
+            }
+            s.videoUrl = url;
+            updateSceneCard(idx);
+            doSaveProject();
+        }
+
+        async function fetchVideoHistoryForScene(idx) {
+            const s = visualsScenes[idx];
+            if (!s) return;
+            try {
+                const res = await authFetch('/api/visuals/scene-video-history', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        scene_ids: [s.sceneId],
+                        project_id: currentProjectId
+                    }),
+                });
+                const data = await res.json();
+                const entries = (data.history || {})[s.sceneId] || [];
+                s.videoHistory = entries;
+                renderVideoHistoryStrip(idx);
+            } catch (e) {
+                console.warn('Single scene video history fetch error:', e);
+            }
+        }
+
+        async function fetchVideoHistory() {
+            const sceneIds = visualsScenes.map(s => s.sceneId);
+            if (!sceneIds.length) return;
+            try {
+                const res = await authFetch('/api/visuals/scene-video-history', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        scene_ids: sceneIds,
+                        project_id: currentProjectId
+                    }),
+                });
+                const data = await res.json();
+                if (data.error) return;
+                const history = data.history || {};
+                for (const [sid, entries] of Object.entries(history)) {
+                    const idx = visualsScenes.findIndex(s => s.sceneId === sid);
+                    if (idx !== -1) {
+                        visualsScenes[idx].videoHistory = entries;
+                        renderVideoHistoryStrip(idx);
+                    }
+                }
+            } catch (e) {
+                console.warn('Video history fetch error:', e);
+            }
+        }
+
         // ── Image Lightbox ──
         let lightboxState = { url: null, sceneIdx: null, filename: null, editMode: false };
 
@@ -7982,6 +8915,53 @@ RESOLUTION: ${visualsConfig.resolution}`;
             document.getElementById('imageLightboxModal').style.display = 'flex';
         }
 
+        // Legacy Gemini image models — these route through /api/visuals/edit-image
+        // (image-to-image via google-genai). Anything else routes through Studio.
+        const _LEGACY_EDIT_MODELS = new Set([
+            'gemini-3-pro-image-preview',
+            'gemini-3.1-flash-image-preview',
+            'gemini-2.5-flash-image',
+        ]);
+
+        // Build the edit-capable model list from studioState.schemas, prepending
+        // the legacy Gemini trio (always available even before Studio loads).
+        // A model is "edit-capable" if it produces images and accepts an image input slot.
+        function _buildEditModelOptions(currentModel) {
+            const opts = [
+                { id: 'gemini-3-pro-image-preview', label: 'Pro (Quality) · Gemini' },
+                { id: 'gemini-3.1-flash-image-preview', label: 'Flash 3.1 (Fast) · Gemini' },
+                { id: 'gemini-2.5-flash-image', label: 'Flash 2.5 · Gemini' },
+            ];
+            const seen = new Set(opts.map(o => o.id));
+
+            if (typeof studioState !== 'undefined' && studioState && studioState.schemas) {
+                for (const [id, schema] of Object.entries(studioState.schemas)) {
+                    if (seen.has(id)) continue;
+                    // Only image-producing models.
+                    const k = (schema.kind || '').toLowerCase();
+                    if (!k.includes('image')) continue;
+                    // Must accept an image input slot (image_urls / reference_images / image / etc).
+                    const acceptsImage = (schema.inputs || []).some(slot => {
+                        const t = (slot.type || '').toLowerCase();
+                        const n = (slot.name || '').toLowerCase();
+                        return t === 'image' || t === 'images' || n.includes('image') || n.includes('reference');
+                    });
+                    if (!acceptsImage) continue;
+                    opts.push({
+                        id,
+                        label: `${schema.display_name || id} · ${schema.provider || ''}`,
+                    });
+                    seen.add(id);
+                }
+            }
+
+            // Ensure the current model is present even if it didn't match the filter.
+            if (currentModel && !seen.has(currentModel)) {
+                opts.unshift({ id: currentModel, label: `${currentModel} (current)` });
+            }
+            return opts;
+        }
+
         function openImageEditor(idx) {
             const s = visualsScenes[idx];
             if (!s || !s.imageUrl) return;
@@ -7989,16 +8969,26 @@ RESOLUTION: ${visualsConfig.resolution}`;
             document.getElementById('lightboxImage').src = s.imageUrl;
             document.getElementById('lightboxTitle').textContent =
                 `Edit Scene ${s.shotNumber}`;
-            // Show edit panel, hide "Use This Image" (already the active image)
             document.getElementById('lightboxEditPanel').style.display = '';
             document.getElementById('lightboxUseBtn').style.display = 'none';
             document.getElementById('lightboxEditError').style.display = 'none';
             document.getElementById('lightboxEditPrompt').value = '';
-            // Set model to match scene's current model
-            const model = s.imageModel || visualsConfig.imageModel || 'gemini-3-pro-image-preview';
-            document.getElementById('lightboxModelSelect').value = model;
+
+            // Default selection: scene's Studio Engine model if set, else its
+            // imageModel, else a known good Gemini fallback.
+            const engine = (s.studioEngine && s.studioEngine.image) || null;
+            const sceneModelId = (engine && engine.modelId)
+                || s.imageModel
+                || visualsConfig.imageModel
+                || 'gemini-3-pro-image-preview';
+
+            const opts = _buildEditModelOptions(sceneModelId);
+            const sel = document.getElementById('lightboxModelSelect');
+            sel.innerHTML = opts.map(o =>
+                `<option value="${o.id}" ${o.id === sceneModelId ? 'selected' : ''}>${o.label}</option>`
+            ).join('');
+
             document.getElementById('imageLightboxModal').style.display = 'flex';
-            // Focus the prompt textarea
             setTimeout(() => document.getElementById('lightboxEditPrompt').focus(), 100);
         }
 
@@ -8024,34 +9014,94 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 const model = document.getElementById('lightboxModelSelect').value;
                 const sourceImage = lightboxState.url;
 
-                const res = await authFetch('/api/visuals/edit-image', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        scene_id: s.sceneId,
-                        source_image: sourceImage,
-                        edit_prompt: editPrompt,
-                        model: model,
-                        aspect_ratio: visualsConfig.aspectRatio || '16:9',
-                        project_id: currentProjectId,
-                    }),
-                });
-                const data = await res.json();
+                // Legacy Gemini models keep the old /api/visuals/edit-image
+                // route (image-to-image via google-genai). Studio-Engine models
+                // go through /api/studio/generate with the source image plugged
+                // into the model's image input slot.
+                if (_LEGACY_EDIT_MODELS.has(model)) {
+                    const res = await authFetch('/api/visuals/edit-image', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            scene_id: s.sceneId,
+                            source_image: sourceImage,
+                            edit_prompt: editPrompt,
+                            model,
+                            aspect_ratio: visualsConfig.aspectRatio || '16:9',
+                            project_id: currentProjectId,
+                        }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok || data.error) throw new Error(data.error || 'Image edit failed');
+                    _applyEditResult(sceneIdx, data.image_url);
+                } else {
+                    // Studio-Engine edit path. Find the right image input slot on
+                    // the picked model (image_urls preferred, falls back to first
+                    // image-typed slot) and stuff the source image into it.
+                    const schema = (typeof studioState !== 'undefined' && studioState.schemas)
+                        ? studioState.schemas[model] : null;
+                    if (!schema) throw new Error('Model schema not loaded yet — switch to Studio tab once to load.');
+                    const inputs = { prompt: editPrompt };
+                    const imageSlot = (schema.inputs || []).find(slot => {
+                        const t = (slot.type || '').toLowerCase();
+                        const n = (slot.name || '').toLowerCase();
+                        return (t === 'image' || t === 'images' || n.includes('image') || n.includes('reference'));
+                    });
+                    if (!imageSlot) throw new Error('Picked model doesn\'t accept an image input.');
+                    // Image slots come in list and scalar flavors. Detect by max_count.
+                    if (imageSlot.max_count && imageSlot.max_count > 1) {
+                        inputs[imageSlot.name] = [sourceImage];
+                    } else if ((imageSlot.type || '').toLowerCase() === 'images') {
+                        inputs[imageSlot.name] = [sourceImage];
+                    } else {
+                        inputs[imageSlot.name] = sourceImage;
+                    }
 
-                if (!res.ok || data.error) throw new Error(data.error || 'Image edit failed');
+                    const res = await authFetch('/api/studio/generate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            model_id: model,
+                            inputs,
+                            params: {},
+                            project_id: currentProjectId,
+                            scene_id: s.sceneId,
+                            kind: 'image',
+                        }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error || `Studio edit failed (HTTP ${res.status})`);
 
-                // Update scene with new image (old one goes to history via Storage)
-                s.imageUrl = data.image_url;
-                s.imageStatus = 'complete';
-                doSaveProject();
-                fetchImageHistoryForScene(sceneIdx);
-                updateSceneCard(sceneIdx);
-
-                // Update lightbox for next edit iteration
-                lightboxState.url = data.image_url;
-                document.getElementById('lightboxImage').src = data.image_url;
-                document.getElementById('lightboxEditPrompt').value = '';
-                document.getElementById('lightboxEditPrompt').focus();
+                    // Sync image (Google native) — direct URL response.
+                    const syncUrls = Array.isArray(data.image_urls) && data.image_urls.length
+                        ? data.image_urls
+                        : (data.image_url ? [data.image_url] : null);
+                    if (syncUrls) {
+                        _applyEditResult(sceneIdx, syncUrls[0]);
+                    } else if (data.taskId) {
+                        // Async (Kie) — push previous image into history immediately,
+                        // then hand off to the poller. The lightbox will show the
+                        // result when the poll resolves.
+                        if (s.imageUrl) {
+                            s.imageHistory = Array.isArray(s.imageHistory) ? s.imageHistory : [];
+                            if (!s.imageHistory.some(h => h.url === s.imageUrl)) {
+                                s.imageHistory.push({
+                                    url: s.imageUrl,
+                                    filename: `scene_${s.sceneId}_${Date.now()}.png`,
+                                    timestamp: Math.floor(Date.now() / 1000),
+                                });
+                            }
+                        }
+                        s.imageStatus = 'polling';
+                        updateSceneCard(sceneIdx);
+                        _visualsPollStudioKie(sceneIdx, 'image', data.taskId);
+                        // Close the lightbox — poll updates the scene card directly.
+                        closeImageLightbox();
+                        return;
+                    } else {
+                        throw new Error('Unexpected response from Studio edit.');
+                    }
+                }
 
             } catch (e) {
                 errorDiv.textContent = e.message;
@@ -8060,6 +9110,35 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 btn.disabled = false;
                 btn.textContent = 'Edit Image';
             }
+        }
+
+        // Shared scene-update tail for the legacy + Studio sync edit paths.
+        function _applyEditResult(sceneIdx, newUrl) {
+            const s = visualsScenes[sceneIdx];
+            // Push the previous image into history before overwriting so the
+            // user can swap back. The Storage scanner also picks it up, but
+            // this makes the strip update immediately without waiting on a fetch.
+            if (s.imageUrl && s.imageUrl !== newUrl) {
+                s.imageHistory = Array.isArray(s.imageHistory) ? s.imageHistory : [];
+                if (!s.imageHistory.some(h => h.url === s.imageUrl)) {
+                    s.imageHistory.push({
+                        url: s.imageUrl,
+                        filename: `scene_${s.sceneId}_${Date.now()}.png`,
+                        timestamp: Math.floor(Date.now() / 1000),
+                    });
+                }
+            }
+            s.imageUrl = newUrl;
+            s.imageStatus = 'complete';
+            doSaveProject();
+            fetchImageHistoryForScene(sceneIdx);
+            updateSceneCard(sceneIdx);
+            mirrorSceneToStudioLibrary(sceneIdx, 'image', newUrl);
+
+            lightboxState.url = newUrl;
+            document.getElementById('lightboxImage').src = newUrl;
+            document.getElementById('lightboxEditPrompt').value = '';
+            document.getElementById('lightboxEditPrompt').focus();
         }
 
         function closeImageLightbox(event) {
@@ -8093,6 +9172,14 @@ RESOLUTION: ${visualsConfig.resolution}`;
             // Read latest animation prompt from textarea
             const textarea = document.getElementById(`scene-veo-prompt-${idx}`);
             if (textarea) s.veoPrompt = textarea.value;
+
+            // Route through Studio engine when a per-scene override exists, or
+            // when the global toggle is on and a global video engine is saved.
+            const sceneOverride = s.studioEngine && s.studioEngine.video;
+            const globalActive = visualsEngine && visualsEngine.useForBatch && visualsEngine.video;
+            if (sceneOverride || globalActive) {
+                return generateSceneViaStudio(idx, 'video');
+            }
 
             s.videoStatus = 'generating';
             s.videoError = null;
@@ -8201,6 +9288,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
         }
 
         async function animateAllScenes() {
+            const targetProjectId = currentProjectId;
             const marked = visualsScenes
                 .map((s, i) => ({ scene: s, idx: i }))
                 .filter(item => item.scene.markedForAnimation && item.scene.imageUrl && item.scene.videoStatus !== 'complete');
@@ -8225,7 +9313,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
             btn.textContent = 'Starting animations...';
 
             // Set background op
-            setBackgroundOp(currentProjectId, {
+            setBackgroundOp(targetProjectId, {
                 status: 'in_progress',
                 type: 'video_batch'
             });
@@ -8588,13 +9676,30 @@ RESOLUTION: ${visualsConfig.resolution}`;
                                 spinner.style.display = 'block';
                                 updatePhaseStatus(2, 'Writing narration…', 'running');
                             } else if (op.type === 'production') {
-                                const btn = document.getElementById('productionBtn');
-                                const btnText = document.getElementById('productionBtnText');
-                                const spinner = document.getElementById('productionSpinner');
-                                btn.disabled = true;
-                                btnText.style.display = 'none';
-                                spinner.style.display = 'block';
-                                updatePhaseStatus(3, 'Generating prompts…', 'running');
+                                if (op.taskId) {
+                                    const btn = document.getElementById('productionBtn');
+                                    const btnText = document.getElementById('productionBtnText');
+                                    const spinner = document.getElementById('productionSpinner');
+                                    const errorDiv = document.getElementById('phase3Error');
+                                    btn.disabled = true;
+                                    btnText.style.display = 'none';
+                                    spinner.style.display = 'block';
+                                    updatePhaseStatus(3, 'Resuming production table…', 'running');
+                                    // Rejoin the running task; backend is still streaming
+                                    // per-batch shots to Firestore. If the task has
+                                    // already finished, the first poll renders the final
+                                    // table and stops polling. Keep existing rendered
+                                    // rows visible so a refresh-mid-generation doesn't
+                                    // flash an empty table before re-rendering.
+                                    startProductionTaskPolling(op.taskId, id, {
+                                        btn, btnText, spinner, errorDiv,
+                                    }, { retainExistingRows: true });
+                                } else {
+                                    // Pre-flight (request never got a task_id back, or a
+                                    // legacy synchronous run was orphaned by refresh).
+                                    // Don't leave the user staring at a phantom spinner.
+                                    clearBackgroundOp(id);
+                                }
                             } else if (op.type === 'title_suggestion') {
                                 document.getElementById('titleSpinnerWrap').style.display = 'flex';
                             } else if (op.type === 'tone_suggestion') {
@@ -8764,6 +9869,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
             // Reset visuals
             visualsScenes = [];
             visualsCharacters = [];
+            visualsProductionData = null;
             visualsConfig = {
                 aspectRatio: '16:9',
                 resolution: '2K',
@@ -8781,6 +9887,9 @@ RESOLUTION: ${visualsConfig.resolution}`;
             document.getElementById('visualsCharactersSection').style.display = 'none';
             document.getElementById('visualsSceneList').style.display = 'none';
             document.getElementById('visualsActionBar').style.display = 'none';
+            // Reset the Visuals load status badge so it doesn't show stale project info
+            const visualsLoadStatus = document.getElementById('visualsLoadStatus');
+            if (visualsLoadStatus) visualsLoadStatus.innerHTML = '<span class="source-dot idle"></span> No production data loaded yet';
 
             // Reset style reference images
             styleReferenceImages = [];
@@ -9216,6 +10325,16 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 renderCharacterList();
             }
 
+            // Restore Visuals Engine (Studio-backed model picker for batch generation)
+            if (project.visuals_engine) {
+                visualsEngine = {
+                    image: project.visuals_engine.image || null,
+                    video: project.visuals_engine.video || null,
+                    useForBatch: !!project.visuals_engine.useForBatch,
+                };
+                if (typeof visualsRenderEngine === 'function') visualsRenderEngine();
+            }
+
             // Unhide visuals panels when any visuals-related state exists
             const hasVisualsState =
                 (project.visuals_scenes && project.visuals_scenes.length > 0)
@@ -9232,8 +10351,9 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 if (vc) vc.textContent = `${visualsScenes.length} scenes`;
                 renderVisualsScenes();
 
-                // Fetch image history for all scenes
+                // Fetch image + video history for all scenes
                 fetchImageHistory();
+                fetchVideoHistory();
             }
 
             // Re-sign every asset URL — covers the 4h signed-URL expiry so projects
@@ -9358,7 +10478,14 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 production_data: currentProductionData
                     ? (currentProductionData.production_table || currentProductionData)
                     : null,
-                visuals_scenes: visualsScenes || [],
+                // Persist the full scene array — including imageHistory/videoHistory.
+                // Cap each history array at the most recent 20 entries so the
+                // project doc can't blow past Firestore's 1 MB limit on heavy use.
+                visuals_scenes: (visualsScenes || []).map(s => ({
+                    ...s,
+                    imageHistory: Array.isArray(s.imageHistory) ? s.imageHistory.slice(-20) : [],
+                    videoHistory: Array.isArray(s.videoHistory) ? s.videoHistory.slice(-20) : [],
+                })),
                 // Save image URLs (from Firebase Storage) instead of base64 data.
                 // Base64 is excluded to stay under Firestore 1MB limit; URLs are lightweight.
                 visuals_config: visualsConfig ? {
@@ -9378,6 +10505,11 @@ RESOLUTION: ${visualsConfig.resolution}`;
                         path: img.path || null
                     }))
                 })),
+                visuals_engine: visualsEngine ? {
+                    image: visualsEngine.image,
+                    video: visualsEngine.video,
+                    useForBatch: !!visualsEngine.useForBatch,
+                } : null,
                 // Phase 3 style references and approved analysis
                 style_reference_images: (styleReferenceImages || []).map(img => ({
                     name: img.name,
@@ -11399,7 +12531,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
         refs: [],             // attached refs: [{slot, kind, url, dataUrl?, name}]
         assets: [],           // gallery items for the CURRENT project (mirrors Firestore)
         projectId: null,      // current project id, mirrors window.currentProjectId
-        generating: false,
+        activeTasks: [],      // array of concurrent generation tasks
         attachMenuTarget: null,
         // Visuals → Studio bridge: set when the user clicks "Open in Studio" on a scene card.
         // While set, every successful generation is also written back to that scene.
@@ -11627,15 +12759,28 @@ RESOLUTION: ${visualsConfig.resolution}`;
     }
     function studioCloseModelPicker() {
         document.getElementById('studioModelPickerOverlay').style.display = 'none';
+        // The "for Visuals" flag is one-shot — clear it whenever the picker
+        // closes so subsequent standalone Studio use sees the full catalog.
+        studioState._pickerForVisuals = false;
     }
+    // Models excluded from the Visuals engine picker because their input is a
+    // structured multi-shot JSON array that doesn't map to a per-scene workflow.
+    // They remain available in Studio's standalone composer.
+    const VISUALS_ENGINE_EXCLUDE = new Set([
+        'sora-2-pro-storyboard',
+        'elevenlabs/text-to-dialogue-v3',
+    ]);
+
     function studioRenderModelPicker() {
         const list = document.getElementById('studioModelPickerList');
         const search = (document.getElementById('studioModelSearch').value || '').toLowerCase();
         const mode = studioState.modeFilter;
+        const forVisuals = !!studioState._pickerForVisuals;
         const html = [];
         for (const group of studioState.providers) {
             const matches = group.models.filter(m => {
                 if (studioKindMode(m.kind) !== mode) return false;
+                if (forVisuals && VISUALS_ENGINE_EXCLUDE.has(m.id)) return false;
                 if (!search) return true;
                 return m.display_name.toLowerCase().includes(search)
                     || group.provider.toLowerCase().includes(search)
@@ -12355,7 +13500,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
     async function studioGenerate() {
         const id = studioState.selectedModelId;
         if (!id) { studioShowError('Pick a model first.'); return; }
-        if (studioState.generating) return;
+        // allow concurrent requests
 
         const s = studioState.schemas[id];
         if (!s) { studioShowError('Selected model is no longer available.'); return; }
@@ -12406,8 +13551,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
             const hasMentions = tokens.some(t => t.type === 'ref');
             if (isGoogleImage && hasMentions) {
                 inputs.prompt_parts = tokens.map(t => t.type === 'ref'
-                    ? { type: 'ref', url: studioState.refs[t.ref_index].dataUrl
-                                      || studioState.refs[t.ref_index].url }
+                    ? { type: 'ref', url: studioState.refs[t.ref_index].url }
                     : t);
                 // Keep a flat prompt too for logging / non-Part-aware fallbacks.
                 inputs[textSlot ? textSlot.name : 'prompt'] = tokens
@@ -12439,8 +13583,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
         //   3. Else: fill scalar slots in declaration order.
         //   4. Anything still unplaced → drop with a warning so the user knows.
         const inputSlots = s.inputs || [];
-        const refValue = (ref) =>
-            (ref.kind === 'image' && isGoogleImage && ref.dataUrl) ? ref.dataUrl : ref.url;
+        const refValue = (ref) => ref.url;
         const accepts = (slot, kind) =>
             slot.type === kind || slot.type === kind + '_list';
 
@@ -12494,25 +13637,35 @@ RESOLUTION: ${visualsConfig.resolution}`;
         // task_ref / persona_ref / character_ref params are stored in `params` already
         // (rendered as text inputs); the dispatcher forwards them transparently.
 
-        studioState.generating = true;
-        studioSetGoButton(true);
         studioShowError('');
-        studioShowStatus(`Generating with ${s.display_name}…`);
+        
+        const clientTaskId = 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+        studioState.activeTasks = studioState.activeTasks || [];
+        studioState.activeTasks.push({ id: clientTaskId, modelId: id, startTs: Date.now() });
+        
+        if (!studioState._genInterval) {
+            studioState._genInterval = setInterval(() => {
+                if (studioState.activeTasks && studioState.activeTasks.length > 0) {
+                    if (typeof studioRenderGallery === 'function') studioRenderGallery();
+                } else {
+                    clearInterval(studioState._genInterval);
+                    studioState._genInterval = null;
+                }
+            }, 1000);
+        }
+        if (typeof studioRenderGallery === 'function') studioRenderGallery();
 
         // Hard timeout for the create-task call itself (poll has its own).
         const ctrl = new AbortController();
         const timeoutId = setTimeout(() => ctrl.abort(), 60_000);
 
-        try {
-            studioState.generating = true;
-            studioState._genModelId = id;
-            studioState._genStartTs = Date.now();
-            clearInterval(studioState._genInterval);
-            studioState._genInterval = setInterval(() => {
-                if (studioState.generating && typeof studioRenderGallery === 'function') studioRenderGallery();
-            }, 1000);
+        // Helper to cleanup this specific task
+        const finishTask = () => {
+            studioState.activeTasks = studioState.activeTasks.filter(t => t.id !== clientTaskId);
             if (typeof studioRenderGallery === 'function') studioRenderGallery();
-            
+        };
+
+        try {
             let r;
             try {
                 r = await authFetch('/api/studio/generate', {
@@ -12559,41 +13712,31 @@ RESOLUTION: ${visualsConfig.resolution}`;
                     studioAddAsset({kind: 'image', url: u,
                                     model_id: id, prompt, ts: Date.now()});
                 }
-                studioShowStatus('');
                 studioClearComposerInputs();
-                studioState.generating = false;
-                clearInterval(studioState._genInterval);
-                if (typeof studioRenderGallery === 'function') studioRenderGallery();
+                finishTask();
             } else if (data.audio_url) {
                 studioAddAsset({kind: 'audio', url: data.audio_url,
                                 model_id: id, prompt, ts: Date.now()});
-                studioShowStatus('');
                 studioClearComposerInputs();
-                studioState.generating = false;
-                clearInterval(studioState._genInterval);
-                if (typeof studioRenderGallery === 'function') studioRenderGallery();
+                finishTask();
             } else if (data.taskId) {
                 // Async — poller continues after this turn returns.
-                studioPollKieTask(data.taskId, id, prompt);
+                studioPollKieTask(data.taskId, id, prompt, clientTaskId);
                 studioClearComposerInputs();
             } else if (data.operation) {
                 studioPollVeoOp(data.operation, id, prompt);
                 studioClearComposerInputs();
+                finishTask();
             } else {
                 console.warn('[Studio] Unexpected response shape', data);
-                studioShowStatus('');
                 throw new Error('Unexpected response from server. Check the JS console for details.');
             }
         } catch (e) {
             console.error('[Studio] generate failed', e);
             studioShowError(e.message || String(e));
-            studioShowStatus('');
-            studioState.generating = false;
-            clearInterval(studioState._genInterval);
-            if (typeof studioRenderGallery === 'function') studioRenderGallery();
+            finishTask();
         } finally {
             clearTimeout(timeoutId);
-            studioSetGoButton(false);
         }
     }
     function studioClearComposerInputs() {
@@ -12608,30 +13751,22 @@ RESOLUTION: ${visualsConfig.resolution}`;
     }
 
     function studioSetGoButton(busy) {
-        const btn = document.getElementById('studioGoBtn');
-        const arrow = btn.querySelector('[data-lucide]');
-        const sp = document.getElementById('studioGoSpinner');
-        btn.disabled = busy;
-        if (arrow) arrow.style.display = busy ? 'none' : '';
-        sp.style.display = busy ? 'block' : 'none';
+        // Obsolete function - Go button doesn't freeze anymore to allow concurrent generation
     }
 
-    async function studioPollKieTask(taskId, modelId, prompt) {
+    async function studioPollKieTask(taskId, modelId, prompt, clientTaskId) {
         // Reuse existing /api/kie/poll endpoint — same shape regardless of which Kie sub-API.
         const start = Date.now();
         const timeoutMs = 10 * 60 * 1000;
         const projectId = typeof currentProjectId !== 'undefined' ? currentProjectId : null;
         let consecutiveErrors = 0;
-        studioShowError(''); // clear prior
-        studioShowStatus(`Generating with ${(studioState.schemas[modelId]||{}).display_name||modelId}…`);
         
-        studioState.generating = true;
-        studioState._genModelId = modelId;
-        studioState._genStartTs = start;
-        clearInterval(studioState._genInterval);
-        studioState._genInterval = setInterval(() => {
-            if (studioState.generating && typeof studioRenderGallery === 'function') studioRenderGallery();
-        }, 1000);
+        const finishTask = () => {
+            if (studioState.activeTasks) {
+                studioState.activeTasks = studioState.activeTasks.filter(t => t.id !== clientTaskId);
+            }
+            if (typeof studioRenderGallery === 'function') studioRenderGallery();
+        };
         
         while (Date.now() - start < timeoutMs) {
             await new Promise(r => setTimeout(r, 4000));
@@ -12643,31 +13778,33 @@ RESOLUTION: ${visualsConfig.resolution}`;
                     consecutiveErrors++;
                     if (consecutiveErrors >= 5) {
                         studioShowError(`Polling failed (HTTP ${r.status}). The generation may still be running — check back in a few minutes.`);
-                        studioShowStatus('');
+                        finishTask();
                         return;
                     }
                     continue;
                 }
                 consecutiveErrors = 0;
                 const data = await r.json();
-                if (data.status === 'completed' && data.result_urls && data.result_urls.length) {
-                    const schema = studioState.schemas[modelId];
-                    const kind = schema && schema.output ? schema.output.kind : 'image';
-                    for (const u of data.result_urls) {
-                        studioAddAsset({kind, url: u, model_id: modelId, prompt, ts: Date.now()});
+                if (data.status === 'completed') {
+                    // Prefer Firebase-rehosted URLs (persistent, auto-resigned on read).
+                    // Fall back to Kie's tempfile.redpandaai.co URL only if rehost failed
+                    // — those expire after ~24h and the gallery would go dead overnight.
+                    const persistent = (data.firebase_urls && data.firebase_urls.length)
+                        ? data.firebase_urls
+                        : (data.result_urls || []);
+                    if (persistent.length) {
+                        const schema = studioState.schemas[modelId];
+                        const kind = schema && schema.output ? schema.output.kind : 'image';
+                        for (const u of persistent) {
+                            studioAddAsset({kind, url: u, model_id: modelId, prompt, ts: Date.now()});
+                        }
+                        finishTask();
+                        return;
                     }
-                    studioShowStatus('');
-                    studioState.generating = false;
-                    clearInterval(studioState._genInterval);
-                    if (typeof studioRenderGallery === 'function') studioRenderGallery();
-                    return;
                 }
                 if (data.status === 'failed' || data.status === 'error') {
                     studioShowError('Generation failed: ' + (data.error || data.msg || 'unknown error'));
-                    studioShowStatus('');
-                    studioState.generating = false;
-                    clearInterval(studioState._genInterval);
-                    if (typeof studioRenderGallery === 'function') studioRenderGallery();
+                    finishTask();
                     return;
                 }
                 // status === 'pending' / 'running' / etc. — keep polling.
@@ -12676,19 +13813,13 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 console.warn('[Studio] poll error', e);
                 if (consecutiveErrors >= 5) {
                     studioShowError('Lost connection while polling. Generation may still complete — check back later.');
-                    studioShowStatus('');
-                    studioState.generating = false;
-                    clearInterval(studioState._genInterval);
-                    if (typeof studioRenderGallery === 'function') studioRenderGallery();
+                    finishTask();
                     return;
                 }
             }
         }
         studioShowError('Generation timed out after 10 min.');
-        studioShowStatus('');
-        studioState.generating = false;
-        clearInterval(studioState._genInterval);
-        if (typeof studioRenderGallery === 'function') studioRenderGallery();
+        finishTask();
     }
     async function studioPollVeoOp(op, modelId, prompt) {
         // Veo long-running ops are polled by the existing Visuals flow.
@@ -12826,21 +13957,22 @@ RESOLUTION: ${visualsConfig.resolution}`;
             window.renderIcons && window.renderIcons();
             return;
         }
-        // ── Progress card (shown above tiles when generating) ──
+        // ── Progress cards (shown above tiles when generating) ──
         let progressHtml = '';
-        if (studioState.generating && studioState._genModelId) {
-            const s = studioState.schemas[studioState._genModelId];
-            const modelName = s ? s.display_name : studioState._genModelId;
-            const elapsed = studioState._genStartTs
-                ? Math.round((Date.now() - studioState._genStartTs) / 1000) : 0;
-            const elapsedStr = elapsed > 0 ? `${elapsed}s elapsed` : 'starting…';
-            progressHtml = `<div class="studio-progress-card">
-                <div class="studio-progress-spinner"></div>
-                <div class="studio-progress-info">
-                    <div class="studio-progress-title">Generating with ${escapeHtml(modelName)}…</div>
-                    <div class="studio-progress-sub">${escapeHtml(elapsedStr)} — please wait</div>
-                </div>
-            </div>`;
+        if (studioState.activeTasks && studioState.activeTasks.length > 0) {
+            progressHtml = studioState.activeTasks.map(task => {
+                const s = studioState.schemas[task.modelId];
+                const modelName = s ? s.display_name : task.modelId;
+                const elapsed = Math.round((Date.now() - task.startTs) / 1000);
+                const elapsedStr = elapsed > 0 ? `${elapsed}s elapsed` : 'starting…';
+                return `<div class="studio-progress-card" style="margin-bottom: 12px; display: flex; align-items: center; gap: 12px;">
+                    <div class="studio-progress-spinner" style="width: 24px; height: 24px;"></div>
+                    <div class="studio-progress-info">
+                        <div class="studio-progress-title">Generating with ${escapeHtml(modelName)}…</div>
+                        <div class="studio-progress-sub" style="font-size: 0.85em; opacity: 0.8;">${escapeHtml(elapsedStr)}</div>
+                    </div>
+                </div>`;
+            }).join('');
         }
         grid.innerHTML = progressHtml + items.map((a) => {
             // Resolve to the REAL index in studioState.assets, not the filtered
@@ -12971,6 +14103,33 @@ RESOLUTION: ${visualsConfig.resolution}`;
             studioPersistFavorite(studioState.assets[idx]);
         } else if (action === 'open_external') {
             window.open(a.url, '_blank');
+        } else if (action === 'delete') {
+            if (confirm('Are you sure you want to delete this asset?')) {
+                studioDeleteAsset(idx);
+            }
+        }
+    }
+
+    async function studioDeleteAsset(idx) {
+        const a = studioState.assets[idx];
+        const pid = studioState.projectId;
+        if (!a || !pid || !a.id || a.id.startsWith('__pending_')) return;
+        
+        try {
+            const res = await authFetch(`/api/projects/${encodeURIComponent(pid)}/assets/${encodeURIComponent(a.id)}`, {
+                method: 'DELETE'
+            });
+            if (res.ok) {
+                // Remove from state
+                studioState.assets.splice(idx, 1);
+                studioRenderGallery();
+                studioCloseLightbox();
+            } else {
+                alert('Failed to delete asset');
+            }
+        } catch (e) {
+            console.error('Error deleting asset:', e);
+            alert('Failed to delete asset');
         }
     }
 

@@ -29,6 +29,7 @@ from research_templates import (
     build_cinematographer_prompt,
     build_storyboard_prompt,
     build_continuity_supervisor_prompt,
+    build_boundary_stitcher_prompt,
     build_dp_prompt,
     build_spine_extraction_prompt,
     build_spine_rerank_prompt,
@@ -360,8 +361,64 @@ def suggest_spine_edits(spine: dict, title: str = "", audience: str = "",
     }
 
 
+def _salvage_truncated_shots(text: str):
+    """Recover the valid prefix of a truncated `{"shots": [...]}` payload.
+
+    Gemini occasionally hits its output token cap mid-object on huge phases
+    (we observed 70-120 KB JSON outputs from Phase 3/5). The standard parser
+    then loses ALL shots. This walks the shots array, tracks brace depth +
+    string state, and returns whatever objects completed before the truncation.
+    Returns a dict like `{"shots": [...N complete shots...]}` or None.
+    """
+    import re as _re
+    m = _re.search(r'"shots"\s*:\s*\[', text)
+    if not m:
+        return None
+    array_start = m.end()  # first char inside the array
+
+    depth = 0           # nesting depth INSIDE the array
+    in_string = False
+    escape = False
+    last_good_end = -1  # text index immediately after a complete top-level obj
+
+    i = array_start
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if escape:
+            escape = False
+        elif c == '\\' and in_string:
+            escape = True
+        elif in_string:
+            if c == '"':
+                in_string = False
+        elif c == '"':
+            in_string = True
+        elif c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                last_good_end = i + 1
+        elif c == ']' and depth == 0:
+            # Array closed cleanly — direct parse should have worked, bail.
+            return None
+        i += 1
+
+    if last_good_end < 0:
+        return None
+
+    salvaged = text[:array_start] + text[array_start:last_good_end] + "]}"
+    try:
+        return json.loads(salvaged)
+    except json.JSONDecodeError:
+        return None
+
+
 def _parse_json_response(raw_response: str) -> dict:
-    """Parse JSON from a Gemini response, handling markdown code fences."""
+    """Parse JSON from a Gemini response, handling markdown code fences and
+    salvaging truncated `{"shots": [...]}` payloads (huge phase outputs that
+    hit the model's output token cap mid-object)."""
     if not raw_response:
         raise ValueError("Empty response from Gemini")
     text = raw_response.strip()
@@ -390,7 +447,18 @@ def _parse_json_response(raw_response: str) -> dict:
     last_brace = text.rfind("}")
     if first_brace != -1 and last_brace > first_brace:
         candidate = text[first_brace:last_brace + 1]
-        return json.loads(candidate)  # Let this raise if it also fails
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+    # Last resort: salvage as many complete shot objects as possible from a
+    # truncated array. Better N-1 valid shots than zero — the coverage check
+    # downstream will detect any missing beats and trigger a targeted retry.
+    salvaged = _salvage_truncated_shots(text)
+    if salvaged is not None:
+        print(f"[parse] Salvaged truncated JSON: recovered {len(salvaged.get('shots') or [])} shots")
+        return salvaged
 
     raise json.JSONDecodeError("No JSON object found", text, 0)
 
@@ -635,6 +703,186 @@ def _claim_ids_match(regenerated_beats, original_claim_ids_per_idx, target_beat_
     return True
 
 
+def split_script_into_chunks(raw_text: str, max_words_per_chunk: int = 45) -> list:
+    """Deterministically split a pasted script into chunks.
+
+    Paragraph-first (blank-line split). Falls back to single-newline then
+    sentence-split. Long chunks are greedy-packed by sentence so no chunk
+    exceeds max_words_per_chunk. Markdown headers become their own chunk.
+    The verbatim text inside chunks is preserved (whitespace only normalized
+    for NBSP / zero-width characters before splitting).
+    """
+    import re
+
+    if not raw_text:
+        return []
+
+    # Normalize exotic whitespace before splitting.
+    text = raw_text.replace(" ", " ")  # NBSP → space
+    text = re.sub(r"[​-‍﻿]", "", text)  # zero-width chars
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Lift Markdown headers onto their own paragraph so they split cleanly.
+    text = re.sub(r"(?m)^(#{1,6})\s+(.*)$", r"\n\n\2\n\n", text)
+
+    # Primary split on blank-line paragraphs.
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+
+    # Fallback ladder: single-newline split, then sentence split.
+    if len(paragraphs) <= 1:
+        paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
+    if len(paragraphs) <= 1 and paragraphs:
+        sentences = re.split(r"(?<=[.!?]) +", paragraphs[0])
+        paragraphs = [s.strip() for s in sentences if s.strip()]
+
+    chunks = []
+    for para in paragraphs:
+        if len(para.split()) <= max_words_per_chunk:
+            chunks.append(para)
+            continue
+        # Greedy-pack sentences into chunks up to max_words_per_chunk.
+        sentences = re.split(r"(?<=[.!?]) +", para)
+        current = ""
+        for sentence in sentences:
+            proposed = len(current.split()) + len(sentence.split())
+            if proposed > max_words_per_chunk and current:
+                chunks.append(current.strip())
+                current = sentence
+            else:
+                current = (current + " " + sentence).strip()
+        if current:
+            chunks.append(current.strip())
+
+    return chunks
+
+
+def _beat_fingerprint(text: str, n_words: int = 8) -> str:
+    """First N normalized words of a beat — used to detect coverage in shots.
+    Lowercased, punctuation stripped, single-spaced."""
+    import re as _re
+    cleaned = _re.sub(r'[^a-z0-9 ]+', ' ', (text or '').lower())
+    cleaned = _re.sub(r'\s+', ' ', cleaned).strip()
+    words = cleaned.split()
+    return ' '.join(words[:n_words])
+
+
+def _check_beat_coverage(input_beats: list, final_shots: list) -> list:
+    """Return list of input beats not represented in final_shots.
+    A beat is 'covered' if any shot's script_beat contains its fingerprint."""
+    import re as _re
+    if not input_beats:
+        return []
+
+    shot_corpus = ' '.join(
+        _re.sub(r'\s+', ' ',
+                _re.sub(r'[^a-z0-9 ]+', ' ', (s.get('script_beat') or '').lower())).strip()
+        for s in (final_shots or [])
+    )
+
+    uncovered = []
+    for idx, beat in enumerate(input_beats):
+        text = beat.get('text', beat.get('narration', ''))
+        fp = _beat_fingerprint(text)
+        if not fp:
+            continue
+        if fp in shot_corpus:
+            continue
+        # Also try a shorter fingerprint as a fallback (Gemini may paraphrase)
+        short_fp = _beat_fingerprint(text, n_words=4)
+        if short_fp and short_fp in shot_corpus:
+            continue
+        uncovered.append({
+            'index': idx,
+            'act': beat.get('act', 'ACT 1'),
+            'beat': beat.get('beat', f'Beat {idx + 1}'),
+            'text': text,
+        })
+    return uncovered
+
+
+_PATCHABLE_FIELDS = {
+    "camera_movement", "camera_angle", "lighting_mood", "visual", "first_frame_prompt"
+}
+
+
+def _stitch_act_boundaries(final_shots: list, visual_brief: dict = None,
+                           api_key: str = None,
+                           uid: str = None, project_id: str = None) -> int:
+    """Patch shot fields at act boundaries to improve cross-act continuity.
+
+    Detects boundaries by finding consecutive shots whose 'act' differs.
+    For each boundary, sends the joint pair to Gemini and applies returned
+    deltas in place. Returns number of patches applied.
+
+    Never modifies: script_beat, narration, shot_number, act, beat, veo_prompt, duration.
+    """
+    if not final_shots or len(final_shots) < 2:
+        return 0
+
+    # Detect boundaries by act transition in sequential shots.
+    boundary_pairs = []
+    for i in range(1, len(final_shots)):
+        prev = final_shots[i - 1]
+        nxt = final_shots[i]
+        prev_act = (prev.get('act') or '').strip()
+        next_act = (nxt.get('act') or '').strip()
+        if prev_act and next_act and prev_act != next_act:
+            boundary_pairs.append({
+                'prev': prev, 'next': nxt,
+                'prev_act': prev_act, 'next_act': next_act,
+            })
+
+    if not boundary_pairs:
+        return 0
+
+    print(f"[Production] Boundary stitcher: {len(boundary_pairs)} act joint(s) found")
+
+    try:
+        prompt = build_boundary_stitcher_prompt(boundary_pairs, visual_brief)
+        raw = generate_content(
+            prompt, model_name="gemini-2.5-flash",
+            temperature=0.1, api_key=api_key,
+            uid=uid, project_id=project_id, description="boundary_stitcher",
+        )
+        if not raw or raw.startswith("Error:"):
+            print(f"[Production] Boundary stitcher skipped: {raw or 'empty response'}")
+            return 0
+        try:
+            data = _parse_json_response(raw)
+        except json.JSONDecodeError as e:
+            print(f"[Production] Boundary stitcher JSON parse failed: {e}")
+            return 0
+
+        patches = data.get('patches', []) or []
+        if not patches:
+            print(f"[Production] Boundary stitcher: no patches needed")
+            return 0
+
+        # Index shots by shot_number for O(1) lookup.
+        by_num = {str(s.get('shot_number', '')): s for s in final_shots}
+        applied = 0
+        for p in patches:
+            if not isinstance(p, dict):
+                continue
+            num = str(p.get('shot_number', ''))
+            field = p.get('field', '')
+            new_value = p.get('new_value', '')
+            if field not in _PATCHABLE_FIELDS:
+                continue
+            target = by_num.get(num)
+            if not target or not isinstance(new_value, str) or not new_value.strip():
+                continue
+            target[field] = new_value
+            applied += 1
+
+        print(f"[Production] Boundary stitcher: {applied} patch(es) applied across "
+              f"{len(boundary_pairs)} joint(s)")
+        return applied
+    except Exception as e:
+        print(f"[Production] Boundary stitcher error: {e}")
+        return 0
+
+
 def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                               style_analysis: dict = None,
                               aspect_ratio: str = "16:9",
@@ -645,7 +893,8 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                               cast: dict = None,
                               format_preset: str = "",
                               spine: dict = None,
-                              uid: str = None, project_id: str = None) -> dict:
+                              uid: str = None, project_id: str = None,
+                              progress_callback=None) -> dict:
     """
     Generate production-ready prompts from narration beats using the 6-phase pipeline.
 
@@ -740,14 +989,17 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
         print(f"[Production] Script Doctor error: {e}. Continuing without brief.")
         visual_brief = None
 
-    # Always use 6-phase pipeline
+    # Always use 6-phase pipeline. quality_mode controls whether Phase 4
+    # (Continuity Supervisor) runs — it's the slowest non-critical phase,
+    # so 'fast' (default) skips it and 'max' includes it.
     batch_fn = _generate_single_batch_6phase
-    mode_label = "6-Phase"
+    skip_continuity = (quality_mode or "fast").lower() != "max"
+    mode_label = "6-Phase (max quality)" if not skip_continuity else "6-Phase (fast, no Phase 4)"
 
     # Small narrations: single call
     if len(beats) <= BEATS_PER_BATCH + 2:
         print(f"[Production] Mode: {mode_label}")
-        return batch_fn(narration_json, duration_minutes,
+        single_result = batch_fn(narration_json, duration_minutes,
                         style_analysis=style_analysis,
                         aspect_ratio=aspect_ratio,
                         api_key=api_key,
@@ -757,10 +1009,19 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                         format_preset=format_preset,
                         visual_brief=visual_brief,
                         spine=spine,
+                        skip_continuity=skip_continuity,
                         uid=uid, project_id=project_id)
+        # Emit a single-batch progress event so streaming UI works uniformly.
+        if progress_callback and "error" not in single_result:
+            try:
+                single_shots = single_result.get("production_table", {}).get("shots", [])
+                progress_callback({"type": "batch", "batch_idx": 1, "total_batches": 1, "shots": single_shots})
+            except Exception as cb_err:
+                print(f"[Production] progress_callback error (ignored): {cb_err}")
+        return single_result
 
     # Large narrations: batch by act
-    MAX_CONCURRENT_BATCHES = 3
+    MAX_CONCURRENT_BATCHES = 6  # bumped from 3 (2026-05-18): halves wall-clock on 6+ batch runs
     print(f"[Production] Large narration ({len(beats)} beats). Mode: {mode_label}. Batching by act...")
 
     # Group beats by act
@@ -827,6 +1088,7 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                               format_preset=format_preset,
                               visual_brief=visual_brief,
                               spine=spine,
+                              skip_continuity=skip_continuity,
                               uid=uid, project_id=project_id)
 
             if "error" not in result:
@@ -854,8 +1116,89 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
             "style_summary": pt.get("style_summary", ""),
         }
 
-    # Process batches in parallel
+    # Process batches in parallel, streaming results in batch-index order.
+    # When a batch finishes out-of-order, hold it until the contiguous prefix
+    # (1..K) is complete — then renumber + flush + emit progress events for that
+    # prefix. This keeps shot_number assignment deterministic while still letting
+    # the UI receive Act 1 the moment its batches finish.
     batch_results = {}
+    streamed_up_to = 0
+    final_shots = []
+    final_continuity = []
+    final_challenging = []
+    failed_batches = []
+    current_shot_num = 1
+
+    if progress_callback:
+        try:
+            progress_callback({"type": "stage", "label": f"Producing {len(batches)} acts in parallel", "total_batches": len(batches)})
+        except Exception as cb_err:
+            print(f"[Production] progress_callback error (ignored): {cb_err}")
+
+    def _drain_ready():
+        """Flush every contiguous batch starting from streamed_up_to + 1.
+        Renumbers in place, appends to final_shots/continuity, emits a progress event."""
+        nonlocal streamed_up_to, current_shot_num, style_summary
+        while (streamed_up_to + 1) in batch_results:
+            next_idx = streamed_up_to + 1
+            r = batch_results[next_idx]
+
+            if "error" in r:
+                failed_batches.append({
+                    "batch": next_idx,
+                    "total_batches": len(batches),
+                    "error": r["error"],
+                })
+                print(f"[Production] WARNING: Batch {next_idx}/{len(batches)} failed permanently — "
+                      f"these scenes will be missing. Error: {r['error']}")
+                if progress_callback:
+                    try:
+                        progress_callback({"type": "batch_failed", "batch_idx": next_idx,
+                                           "total_batches": len(batches), "error": r["error"]})
+                    except Exception as cb_err:
+                        print(f"[Production] progress_callback error (ignored): {cb_err}")
+                streamed_up_to = next_idx
+                continue
+
+            batch_shots = r.get("shots", [])
+            batch_continuity = r.get("continuity_notes", [])
+            shot_map = {}
+            renumbered = []
+            for shot in batch_shots:
+                old_num = str(shot.get("shot_number", ""))
+                new_num = str(current_shot_num)
+                shot_map[old_num] = new_num
+                shot["shot_number"] = new_num
+                final_shots.append(shot)
+                renumbered.append(shot)
+                current_shot_num += 1
+
+            for note in batch_continuity:
+                from_old = str(note.get("from_shot", ""))
+                to_old = str(note.get("to_shot", ""))
+                if from_old in shot_map:
+                    note["from_shot"] = shot_map[from_old]
+                if to_old in shot_map:
+                    note["to_shot"] = shot_map[to_old]
+                final_continuity.append(note)
+
+            final_challenging.extend(r.get("challenging_shots", []))
+            if next_idx == 1:
+                style_summary = r.get("style_summary", "") or style_summary
+
+            if progress_callback:
+                try:
+                    progress_callback({
+                        "type": "batch",
+                        "batch_idx": next_idx,
+                        "total_batches": len(batches),
+                        "shots": renumbered,
+                    })
+                except Exception as cb_err:
+                    print(f"[Production] progress_callback error (ignored): {cb_err}")
+
+            streamed_up_to = next_idx
+
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_BATCHES) as executor:
         future_to_batch = {
             executor.submit(process_batch, idx + 1, batch_beats): idx + 1
@@ -871,64 +1214,73 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                 traceback.print_exc()
                 print(f"[Production] Batch {batch_idx} exception: {e}")
                 batch_results[batch_idx] = {"batch_idx": batch_idx, "error": str(e)}
-
-    # Reconstruct and NORMALIZE in order
-    final_shots = []
-    final_continuity = []
-    final_challenging = []
-    failed_batches = []
-
-    current_shot_num = 1
-
-    for batch_idx in sorted(batch_results.keys()):
-        result = batch_results[batch_idx]
-        if "error" in result:
-            failed_batches.append({
-                "batch": batch_idx,
-                "total_batches": len(batches),
-                "error": result["error"],
-            })
-            print(f"[Production] WARNING: Batch {batch_idx}/{len(batches)} failed permanently — "
-                  f"these scenes will be missing from the final table. Error: {result['error']}")
-            continue
-
-        batch_shots = result.get("shots", [])
-        batch_continuity = result.get("continuity_notes", [])
-
-        # Map old Gemini-generated numbers to new global sequential numbers
-        shot_map = {}
-
-        for shot in batch_shots:
-            old_num = str(shot.get("shot_number", ""))
-            new_num = str(current_shot_num)
-            shot_map[old_num] = new_num
-
-            shot["shot_number"] = new_num
-            # Note: we don't fix timestamps globally here because they are usually
-            # relative to the clip start or already handled by Gemini's sense of pacing.
-
-            final_shots.append(shot)
-            current_shot_num += 1
-
-        # Adjust continuity notes to point to new global numbers
-        for note in batch_continuity:
-            from_old = str(note.get("from_shot", ""))
-            to_old = str(note.get("to_shot", ""))
-
-            # Only include if we can map the shots (they belong to this batch)
-            if from_old in shot_map:
-                note["from_shot"] = shot_map[from_old]
-            if to_old in shot_map:
-                note["to_shot"] = shot_map[to_old]
-
-            final_continuity.append(note)
-
-        final_challenging.extend(result.get("challenging_shots", []))
-        if batch_idx == 1:
-            style_summary = result.get("style_summary", "")
+            _drain_ready()
 
     if not final_shots:
-        return {"error": "All batches failed to produce shots."}
+        return {"error": "All batches failed to produce shots.", "missing_beats": [
+            {'index': i, 'act': b.get('act', 'ACT 1'),
+             'beat': b.get('beat', f'Beat {i + 1}'),
+             'text': b.get('text', b.get('narration', ''))}
+            for i, b in enumerate(beats)
+        ]}
+
+    # ── Beat coverage check: did every input beat make it into the table? ──
+    uncovered = _check_beat_coverage(beats, final_shots)
+    if uncovered:
+        print(f"[Production] Coverage gap: {len(uncovered)}/{len(beats)} beats missing. Retrying as targeted batch...")
+        retry_narration = {
+            "title": title,
+            "hook_type": narration_json.get("hook_type", ""),
+            "narration": [{"act": u['act'], "beat": u['beat'], "text": u['text']} for u in uncovered],
+        }
+        retry_result = _generate_single_batch_6phase(
+            retry_narration, duration_minutes,
+            style_analysis=style_analysis,
+            aspect_ratio=aspect_ratio,
+            api_key=api_key,
+            shot_start_number=current_shot_num,
+            batch_label="coverage retry",
+            pacing_tier=pacing_tier,
+            creative_direction=creative_direction,
+            cast=cast,
+            format_preset=format_preset,
+            visual_brief=visual_brief,
+            spine=spine,
+            uid=uid, project_id=project_id,
+        )
+        if "error" not in retry_result:
+            retry_shots = retry_result.get("production_table", {}).get("shots", [])
+            for shot in retry_shots:
+                shot["shot_number"] = str(current_shot_num)
+                final_shots.append(shot)
+                current_shot_num += 1
+            print(f"[Production] Coverage retry recovered {len(retry_shots)} shots")
+        else:
+            print(f"[Production] Coverage retry failed: {retry_result['error']}")
+
+        # Re-check after retry
+        uncovered = _check_beat_coverage(beats, final_shots)
+        if uncovered:
+            print(f"[Production] Still uncovered after retry: {len(uncovered)} beats")
+            return {
+                "error": "coverage_failure",
+                "missing_beats": uncovered,
+                "production_table": {
+                    "title": title,
+                    "aspect_ratio": aspect_ratio,
+                    "style_summary": style_summary,
+                    "total_shots": len(final_shots),
+                    "shots": final_shots,
+                    "continuity_notes": final_continuity,
+                },
+            }
+
+    # ── Boundary Stitcher: patch cross-act transitions (only when multi-batch) ──
+    if len(batches) > 1:
+        _stitch_act_boundaries(
+            final_shots, visual_brief=visual_brief,
+            api_key=api_key, uid=uid, project_id=project_id,
+        )
 
     # Build warning message for partial failures
     batch_warning = None
@@ -1137,6 +1489,7 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
                                    format_preset: str = "",
                                    visual_brief: dict = None,
                                    spine: dict = None,
+                                   skip_continuity: bool = False,
                                    uid: str = None, project_id: str = None) -> dict:
     """
     Generate production table using the 6-phase pipeline.
@@ -1152,6 +1505,42 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
     title = narration_json.get("title", "Untitled")
     style_intent = style_analysis.get("style_intent", {}) if style_analysis else {}
 
+    def _call_phase(phase_name: str, prompt: str, temperature: float,
+                    description: str, prev_count: int = 0) -> tuple:
+        """Run a phase, parse shots, retry once if shot count drops >10% vs prev_count.
+        Returns (shots_list, error_str or None)."""
+        raw = generate_content(
+            prompt, model_name="gemini-2.5-flash",
+            temperature=temperature, api_key=api_key,
+            uid=uid, project_id=project_id, description=description,
+        )
+        if not raw or raw.startswith("Error:"):
+            return None, f"{phase_name} failed{label}: {raw or 'empty response'}"
+        try:
+            data = _parse_json_response(raw)
+            shots = data.get("shots", [])
+        except json.JSONDecodeError as e:
+            return None, f"{phase_name} JSON parse failed{label}: {e}"
+
+        if prev_count > 0 and len(shots) < prev_count * 0.9:
+            print(f"[Production 6-Phase] {phase_name} dropped shots "
+                  f"({len(shots)}/{prev_count}). Retrying once...")
+            raw_retry = generate_content(
+                prompt, model_name="gemini-2.5-flash",
+                temperature=temperature, api_key=api_key,
+                uid=uid, project_id=project_id, description=f"{description}_retry",
+            )
+            if raw_retry and not raw_retry.startswith("Error:"):
+                try:
+                    retry_data = _parse_json_response(raw_retry)
+                    retry_shots = retry_data.get("shots", [])
+                    if len(retry_shots) > len(shots):
+                        shots = retry_shots
+                        data = retry_data
+                except json.JSONDecodeError:
+                    pass
+        return (shots, data), None
+
     # ── Phase 1: Director ──
     print(f"[Production 6-Phase] Phase 1: Director{label}...")
     director_prompt = build_director_prompt(
@@ -1164,18 +1553,10 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
         visual_brief=visual_brief,
         spine=spine,
     )
-    raw_director = generate_content(
-        director_prompt, model_name="gemini-2.5-flash",
-        temperature=0.1, api_key=api_key,
-        uid=uid, project_id=project_id, description="director_6phase",
-    )
-    if not raw_director or raw_director.startswith("Error:"):
-        return {"error": f"Phase 1 (Director) failed{label}: {raw_director or 'empty response'}"}
-    try:
-        director_data = _parse_json_response(raw_director)
-        director_shots = director_data.get("shots", [])
-    except json.JSONDecodeError as e:
-        return {"error": f"Phase 1 (Director) JSON parse failed{label}: {e}"}
+    phase1, err = _call_phase("Phase 1 (Director)", director_prompt, 0.1, "director_6phase")
+    if err:
+        return {"error": err}
+    director_shots, _ = phase1
     print(f"[Production 6-Phase] Phase 1 complete: {len(director_shots)} shots{label}")
 
     # ── Phase 2: Cinematographer ──
@@ -1184,18 +1565,12 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
         director_shots=director_shots,
         visual_brief=visual_brief,
     )
-    raw_cinematographer = generate_content(
-        cinematographer_prompt, model_name="gemini-2.5-flash",
-        temperature=0.2, api_key=api_key,
-        uid=uid, project_id=project_id, description="cinematographer_6phase",
-    )
-    if not raw_cinematographer or raw_cinematographer.startswith("Error:"):
-        return {"error": f"Phase 2 (Cinematographer) failed{label}: {raw_cinematographer or 'empty response'}"}
-    try:
-        cinematographer_data = _parse_json_response(raw_cinematographer)
-        cinematographer_shots = cinematographer_data.get("shots", [])
-    except json.JSONDecodeError as e:
-        return {"error": f"Phase 2 (Cinematographer) JSON parse failed{label}: {e}"}
+    phase2, err = _call_phase("Phase 2 (Cinematographer)", cinematographer_prompt,
+                              0.2, "cinematographer_6phase",
+                              prev_count=len(director_shots))
+    if err:
+        return {"error": err}
+    cinematographer_shots, _ = phase2
     print(f"[Production 6-Phase] Phase 2 complete: {len(cinematographer_shots)} shots{label}")
 
     # ── Phase 3: Storyboard Artist ──
@@ -1208,44 +1583,53 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
         cast=cast,
         visual_brief=visual_brief,
     )
-    raw_storyboard = generate_content(
-        storyboard_prompt, model_name="gemini-2.5-flash",
-        temperature=0.1, api_key=api_key,
-        uid=uid, project_id=project_id, description="storyboard_6phase",
-    )
-    if not raw_storyboard or raw_storyboard.startswith("Error:"):
-        return {"error": f"Phase 3 (Storyboard) failed{label}: {raw_storyboard or 'empty response'}"}
-    try:
-        storyboard_data = _parse_json_response(raw_storyboard)
-        storyboard_shots = storyboard_data.get("shots", [])
-    except json.JSONDecodeError as e:
-        return {"error": f"Phase 3 (Storyboard) JSON parse failed{label}: {e}"}
+    phase3, err = _call_phase("Phase 3 (Storyboard)", storyboard_prompt,
+                              0.1, "storyboard_6phase",
+                              prev_count=len(cinematographer_shots))
+    if err:
+        return {"error": err}
+    storyboard_shots, _ = phase3
     print(f"[Production 6-Phase] Phase 3 complete: {len(storyboard_shots)} shots{label}")
 
     # ── Phase 4: Continuity Supervisor ──
-    print(f"[Production 6-Phase] Phase 4: Continuity Supervisor{label}...")
-    continuity_prompt = build_continuity_supervisor_prompt(
-        storyboard_shots=storyboard_shots,
-        visual_brief=visual_brief,
-    )
-    raw_continuity = generate_content(
-        continuity_prompt, model_name="gemini-2.5-flash",
-        temperature=0.05, api_key=api_key,
-        uid=uid, project_id=project_id, description="continuity_6phase",
-    )
-    if not raw_continuity or raw_continuity.startswith("Error:"):
-        # Continuity is non-critical — fall through with uncorrected shots
-        print(f"[Production 6-Phase] Phase 4 failed{label} — continuing with uncorrected shots")
+    # Phase 4 is a quality-of-life pass (variety/flow review) that takes
+    # ~90-120s per batch. It's non-critical — failures fall through. When
+    # skip_continuity is set we omit it entirely; the user opts in via the
+    # "Max Quality" toggle. Removes the largest single contributor to the
+    # 40-50 min wall-clock for large scripts.
+    if skip_continuity:
+        print(f"[Production 6-Phase] Phase 4 skipped{label} (fast mode)")
         corrected_shots = storyboard_shots
     else:
-        try:
-            continuity_data = _parse_json_response(raw_continuity)
-            corrected_shots = continuity_data.get("shots", storyboard_shots)
-            modified = continuity_data.get("review_summary", {}).get("shots_modified", 0)
-            print(f"[Production 6-Phase] Phase 4 complete: {modified} shots modified{label}")
-        except json.JSONDecodeError:
-            print(f"[Production 6-Phase] Phase 4 parse failed{label} — using uncorrected shots")
+        print(f"[Production 6-Phase] Phase 4: Continuity Supervisor{label}...")
+        continuity_prompt = build_continuity_supervisor_prompt(
+            storyboard_shots=storyboard_shots,
+            visual_brief=visual_brief,
+        )
+        raw_continuity = generate_content(
+            continuity_prompt, model_name="gemini-2.5-flash",
+            temperature=0.05, api_key=api_key,
+            uid=uid, project_id=project_id, description="continuity_6phase",
+        )
+        if not raw_continuity or raw_continuity.startswith("Error:"):
+            # Continuity is non-critical — fall through with uncorrected shots
+            print(f"[Production 6-Phase] Phase 4 failed{label} — continuing with uncorrected shots")
             corrected_shots = storyboard_shots
+        else:
+            try:
+                continuity_data = _parse_json_response(raw_continuity)
+                corrected_shots = continuity_data.get("shots", storyboard_shots)
+                # Guard: if Phase 4 truncated, fall back to uncorrected (never lose shots here)
+                if len(corrected_shots) < len(storyboard_shots) * 0.9:
+                    print(f"[Production 6-Phase] Phase 4 dropped shots "
+                          f"({len(corrected_shots)}/{len(storyboard_shots)}){label} — using uncorrected")
+                    corrected_shots = storyboard_shots
+                else:
+                    modified = continuity_data.get("review_summary", {}).get("shots_modified", 0)
+                    print(f"[Production 6-Phase] Phase 4 complete: {modified} shots modified{label}")
+            except json.JSONDecodeError:
+                print(f"[Production 6-Phase] Phase 4 parse failed{label} — using uncorrected shots")
+                corrected_shots = storyboard_shots
 
     # ── Phase 5: DP ──
     print(f"[Production 6-Phase] Phase 5: DP{label}...")
@@ -1258,28 +1642,13 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
         cast=cast,
         visual_brief=visual_brief,
     )
-    raw_dp = generate_content(
-        dp_prompt, model_name="gemini-2.5-flash",
-        temperature=0.1, api_key=api_key,
-        uid=uid, project_id=project_id, description="dp_6phase",
-    )
-    if not raw_dp or raw_dp.startswith("Error:"):
-        return {"error": f"Phase 5 (DP) failed{label}: {raw_dp or 'empty response'}"}
-
-    try:
-        production_data = _parse_json_response(raw_dp)
-        shot_count = len(production_data.get("shots", []))
-        print(f"[Production 6-Phase] Phase 5 complete: {shot_count} shots with prompts{label}")
-        return {"success": True, "production_table": production_data}
-    except json.JSONDecodeError:
-        return {
-            "success": True,
-            "production_table": {
-                "title": title,
-                "raw_text": raw_dp,
-                "parse_error": f"Could not parse Phase 5 (DP) JSON{label}."
-            }
-        }
+    phase5, err = _call_phase("Phase 5 (DP)", dp_prompt, 0.1, "dp_6phase",
+                              prev_count=len(corrected_shots))
+    if err:
+        return {"error": err}
+    dp_shots, production_data = phase5
+    print(f"[Production 6-Phase] Phase 5 complete: {len(dp_shots)} shots with prompts{label}")
+    return {"success": True, "production_table": production_data}
 
 
 def start_deep_research(topic: str, template_id: str, api_key: str = None) -> dict:

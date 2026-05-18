@@ -4,6 +4,7 @@ import base64
 import time
 import json
 import random
+import re
 import traceback
 from google import genai
 from google.genai import types
@@ -21,6 +22,10 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 # ── Retry logic for transient Gemini API errors ──
 MAX_RETRIES = 3
+# Hard cap on server-suggested retry delay. Gemini sometimes returns retryDelay
+# values like 57s for image-model quota; capping prevents a single batch from
+# stalling the worker if the cap is unusually high.
+MAX_RETRY_WAIT_S = 90
 
 
 def _is_retryable_error(e):
@@ -33,8 +38,54 @@ def _is_retryable_error(e):
     ])
 
 
+def _extract_retry_delay(e):
+    """Pull RetryInfo.retryDelay (seconds) from a Gemini API error, or None.
+
+    Gemini's 429/503 responses include `details: [{'@type': '...RetryInfo',
+    'retryDelay': '57s'}]` and a human-readable 'Please retry in 57.7s.' in
+    the message. Honoring this beats fixed exponential backoff during quota
+    storms — current 1-9s backoff exhausts attempts inside a 60s outage.
+    """
+    # 1) Structured: SDK exceptions expose .response_json or similar dict
+    resp = getattr(e, 'response_json', None) or getattr(e, 'details', None)
+    if isinstance(resp, dict):
+        details = (resp.get('error') or {}).get('details') or resp.get('details') or []
+        for d in details:
+            if isinstance(d, dict) and 'RetryInfo' in str(d.get('@type', '')):
+                rd = d.get('retryDelay') or d.get('retry_delay')
+                if isinstance(rd, str):
+                    m = re.match(r'^([\d.]+)s?$', rd.strip())
+                    if m:
+                        try:
+                            return float(m.group(1))
+                        except ValueError:
+                            pass
+    # 2) Fallback: scrape the message string
+    msg = str(e)
+    m = re.search(r"[Pp]lease retry in ([\d.]+)\s*(s|ms)", msg)
+    if m:
+        try:
+            val = float(m.group(1))
+            if m.group(2) == 'ms':
+                val = val / 1000.0
+            return val
+        except ValueError:
+            pass
+    # 3) Also try the structured form embedded in the stringified exception
+    m = re.search(r"'retryDelay':\s*'([\d.]+)s?'", msg)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            pass
+    return None
+
+
 def _retry_api_call(api_fn, max_retries=MAX_RETRIES, description="API call"):
-    """Execute api_fn() with exponential backoff on transient errors.
+    """Execute api_fn() with retry on transient errors.
+
+    Honors Gemini's RetryInfo.retryDelay when present (capped at MAX_RETRY_WAIT_S);
+    falls back to exponential backoff otherwise.
 
     Returns: (result, retries_used) where retries_used=0 means first attempt succeeded.
     Raises: the last exception if all retries are exhausted.
@@ -49,9 +100,15 @@ def _retry_api_call(api_fn, max_retries=MAX_RETRIES, description="API call"):
         except Exception as e:
             last_error = e
             if _is_retryable_error(e) and attempt < max_retries:
-                wait = (2 ** attempt) + random.uniform(0, 1)
+                server_delay = _extract_retry_delay(e)
+                if server_delay is not None:
+                    wait = min(server_delay + random.uniform(0, 1), MAX_RETRY_WAIT_S)
+                    wait_source = f"server retryDelay {server_delay:.1f}s"
+                else:
+                    wait = (2 ** attempt) + random.uniform(0, 1)
+                    wait_source = "exp backoff"
                 print(f"[Retry] {description} attempt {attempt + 1}/{max_retries + 1} failed: {e}")
-                print(f"[Retry] Waiting {wait:.1f}s before retry...")
+                print(f"[Retry] Waiting {wait:.1f}s ({wait_source}) before retry...")
                 time.sleep(wait)
             else:
                 raise
@@ -67,7 +124,7 @@ def get_client(api_key=None):
 def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=False,
                      temperature=None, api_key=None, max_output_tokens=None,
                      return_response=False, uid=None, project_id=None,
-                     description=None):
+                     description=None, timeout_s=180):
     """Generate text content using Gemini, optionally with Google Search.
 
     max_output_tokens: When set, unlocks Gemini's default 8192 cap (up to 65536 on Gemini 3).
@@ -77,6 +134,9 @@ def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=Fal
     uid / project_id: Identify the billing owner + project for cost tracking. When absent
         (CLI, unauthenticated) the tracker is a no-op.
     description: Short label for the call (e.g. "director", "storyboard") shown on events.
+    timeout_s: Hard per-call timeout in seconds. A stuck Gemini connection used to
+        stall a phase for minutes before the OS killed it; this fails fast so the
+        retry path can run. Set to None to disable.
     """
     desc = description or f"generate_content({model_name})"
     try:
@@ -84,7 +144,9 @@ def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=Fal
 
         # Configure tools if search is requested
         config = None
-        if use_search or temperature is not None or max_output_tokens is not None:
+        needs_config = (use_search or temperature is not None
+                        or max_output_tokens is not None or timeout_s is not None)
+        if needs_config:
             config = types.GenerateContentConfig()
             if use_search:
                 config.tools = [types.Tool(google_search=types.GoogleSearch())]
@@ -92,6 +154,8 @@ def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=Fal
                 config.temperature = temperature
             if max_output_tokens is not None:
                 config.max_output_tokens = max_output_tokens
+            if timeout_s is not None:
+                config.http_options = types.HttpOptions(timeout=int(timeout_s * 1000))
 
         def _call():
             return client.models.generate_content(

@@ -2080,27 +2080,31 @@ _register({
     "output": {"kind": "video", "count_max": 1, "format": "mp4"},
     "cost": {"note": "See Kie credits dashboard"},
 })
-# I2V shape confirmed via https://docs.kie.ai/market/grok-imagine/image-to-video:
-#   - input is `image_urls` (array, max 7) — not singular `image_url`
-#   - duration is a string-typed range of 6–30 seconds; previous [5, 10] enum
-#     would be rejected for "5" and never reach the higher values
-#   - resolution enum is required to opt out of the 480p default
+# I2V shape per https://docs.kie.ai/market/grok-imagine/image-to-video :
+#   - `image_urls` accepts exactly ONE external image (docs: "only one image
+#     is supported"); previous max_n=7 misled callers into shipping multiple
+#     refs that Kie then rejected.
+#   - `duration` is a numeric range 6–30 (step 1), NOT a string enum. The
+#     prior _enum(["6","10",...]) sent the value as a JSON string and failed
+#     validation on the Kie side.
+#   - Defaults follow the docs: aspect_ratio "2:3", resolution "480p".
 _register({
     "id": "grok-imagine/image-to-video", "display_name": "Grok Imagine I2V",
     "provider": "xAI", "backend": B_KIE_GENERIC, "kind": KIND_I2V,
     "inputs": [
         _text("prompt", required=True, max_chars=5000),
-        _images("image_urls", min_n=1, max_n=7, required=True, max_mb=10,
-                label="Image URLs"),
+        _images("image_urls", min_n=1, max_n=1, required=True, max_mb=10,
+                label="Image URL",
+                help="Exactly one image. Reference it in the prompt as @image1."),
     ],
     "params": [
         _enum("aspect_ratio", ["2:3", "3:2", "1:1", "16:9", "9:16"],
-              default="16:9"),
-        _enum("duration", ["6", "10", "15", "20", "30"], default="6",
-              unit="sec"),
-        _enum("resolution", ["480p", "720p"], default="720p"),
-        _enum("mode", ["fun", "normal", "spicy"], default="normal"),
-        _bool("nsfw_checker"),
+              default="2:3"),
+        _int("duration", 6, 30, default=6, unit="sec"),
+        _enum("resolution", ["480p", "720p"], default="480p"),
+        _enum("mode", ["fun", "normal", "spicy"], default="normal",
+              help="Spicy is forced to Normal when using external image_urls."),
+        _bool("nsfw_checker", default=True),
     ],
     "output": {"kind": "video", "count_max": 1, "format": "mp4"},
     "cost": {"note": "See Kie credits dashboard"},

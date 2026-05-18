@@ -68,7 +68,20 @@ gcloud run deploy $SERVICE_NAME \
     --memory 2Gi \
     --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},ENVIRONMENT=staging,ENCRYPTION_KEY=${ENCRYPTION_KEY}"
 
+# ── Auto-set MCP_ISSUER_URL to the real Cloud Run URL ──
+# Cloud Run assigns a hash-based URL that we can't predict before the first
+# deploy, so we read it back and patch the env var. Respects a manually
+# exported MCP_ISSUER_URL (e.g. custom domain) if you set one.
+ACTUAL_URL=$(gcloud run services describe $SERVICE_NAME --region=$REGION --format='value(status.url)')
+URL_TO_SET="${MCP_ISSUER_URL:-$ACTUAL_URL}"
+echo "Setting MCP_ISSUER_URL=$URL_TO_SET"
+gcloud run services update $SERVICE_NAME \
+    --region=$REGION \
+    --update-env-vars "MCP_ISSUER_URL=$URL_TO_SET" \
+    --quiet
+
 echo "========================================================"
 echo "Staging Deployment Complete!"
-echo "You can now test your changes at the URL provided above."
+echo "Service URL: $ACTUAL_URL"
+echo "MCP endpoint: $URL_TO_SET/mcp"
 echo "========================================================"

@@ -33,20 +33,20 @@ def test_sequential_shot_numbering():
         match = re.search(r'"shot_number": "(\d+)"', prompt)
         start_num = int(match.group(1)) if match else 1
         
-        # Return 2 shots per batch
+        # Return 2 shots per batch. script_beat must echo the input beat text
+        # so the coverage check (which scans shot text for beat fingerprints) passes.
+        beat_text = "This is a sentence with about ten words to make it long."
         shots = [
             {
                 "shot_number": str(start_num),
-                "script_beat": "Sample text",
+                "script_beat": beat_text,
                 "first_frame_prompt": "Prompt A",
-                "last_frame_prompt": "Prompt A",
                 "veo_prompt": "Veo A"
             },
             {
                 "shot_number": str(start_num + 1),
-                "script_beat": "Sample text 2",
+                "script_beat": beat_text,
                 "first_frame_prompt": "Prompt B",
-                "last_frame_prompt": "Prompt B",
                 "veo_prompt": "Veo B"
             }
         ]
@@ -101,7 +101,7 @@ def test_frenetic_pacing():
         match = re.search(r'"shot_number": "(\d+)"', prompt)
         start_num = int(match.group(1)) if match else 1
         return json.dumps({
-            "shots": [{"shot_number": str(start_num), "script_beat": "x", "first_frame_prompt": "x", "last_frame_prompt": "y", "veo_prompt": "z"}],
+            "shots": [{"shot_number": str(start_num), "script_beat": "short word", "first_frame_prompt": "x", "veo_prompt": "z"}],
             "continuity_notes": []
         })
 
@@ -122,7 +122,7 @@ def test_meditative_pacing():
         match = re.search(r'"shot_number": "(\d+)"', prompt)
         start_num = int(match.group(1)) if match else 1
         return json.dumps({
-            "shots": [{"shot_number": str(start_num), "script_beat": "x", "first_frame_prompt": "x", "last_frame_prompt": "y", "veo_prompt": "z"}],
+            "shots": [{"shot_number": str(start_num), "script_beat": "short word", "first_frame_prompt": "x", "veo_prompt": "z"}],
             "continuity_notes": []
         })
 

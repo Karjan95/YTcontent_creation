@@ -83,12 +83,16 @@ except Exception:
 
 bucket_name = f"{_project_id}.firebasestorage.app"
 
-if os.path.exists(SERVICE_ACCOUNT_PATH):
-    cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
-    firebase_admin.initialize_app(cred, {'storageBucket': bucket_name})
-else:
-    # Fall back to default credentials (e.g., on Cloud Run with GOOGLE_APPLICATION_CREDENTIALS)
-    firebase_admin.initialize_app(options={'storageBucket': bucket_name})
+# Guard against double-init: if a lazy import elsewhere re-imports this module
+# under a different name (e.g. `server` vs `execution.server`), we'd otherwise
+# crash with "default Firebase app already exists" inside the second load.
+if not firebase_admin._apps:
+    if os.path.exists(SERVICE_ACCOUNT_PATH):
+        cred = credentials.Certificate(SERVICE_ACCOUNT_PATH)
+        firebase_admin.initialize_app(cred, {'storageBucket': bucket_name})
+    else:
+        # Fall back to default credentials (e.g., on Cloud Run with GOOGLE_APPLICATION_CREDENTIALS)
+        firebase_admin.initialize_app(options={'storageBucket': bucket_name})
 
 db = firestore.client()
 
@@ -124,8 +128,12 @@ else:
     print("[Storage] WARNING: No signing method available. Signed URLs will fail.")
 
 
-def _generate_signed_url(blob, expiration=timedelta(hours=4)):
-    """Generate a signed URL for a blob, with IAM-based fallback for Cloud Run."""
+def _generate_signed_url(blob, expiration=timedelta(days=7)):
+    """Generate a signed URL for a blob, with IAM-based fallback for Cloud Run.
+
+    Default 7 days (Firebase/GCS signed URL max). The MCP App viewer holds onto
+    these URLs in chat history; a 4h TTL caused "ExpiredToken" the next day.
+    """
     try:
         return blob.generate_signed_url(
             version="v4",
@@ -149,6 +157,54 @@ def _generate_signed_url(blob, expiration=timedelta(hours=4)):
                 print(f"[Storage] IAM signing failed for {blob.name}: {iam_err}")
                 return None
         return None
+
+
+def create_signed_put_url(blob_path: str, content_type: str,
+                          expiration_seconds: int = 900):
+    """Generate a v4-signed PUT URL plus a read-only GET URL for the same blob.
+
+    Lets clients (Claude's sandbox, the user's browser, etc.) upload bytes
+    directly to Firebase Storage without going through the API. Returns
+    (put_url, get_url) or (None, None) on failure. The PUT URL expires in
+    `expiration_seconds` (default 15 min); the GET URL uses the usual 4-hour
+    lifetime from `_generate_signed_url`.
+
+    The client MUST send a `Content-Type` header matching `content_type`
+    exactly, or the signed-URL verification will reject the PUT.
+    """
+    if not bucket:
+        return (None, None)
+    try:
+        blob = bucket.blob(blob_path)
+        try:
+            put_url = blob.generate_signed_url(
+                version="v4",
+                expiration=timedelta(seconds=expiration_seconds),
+                method="PUT",
+                content_type=content_type,
+            )
+        except Exception:
+            if _signing_email and _signing_credentials:
+                import google.auth.transport.requests
+                auth_request = google.auth.transport.requests.Request()
+                _signing_credentials.refresh(auth_request)
+                put_url = blob.generate_signed_url(
+                    version="v4",
+                    expiration=timedelta(seconds=expiration_seconds),
+                    method="PUT",
+                    content_type=content_type,
+                    service_account_email=_signing_email,
+                    access_token=_signing_credentials.token,
+                )
+            else:
+                return (None, None)
+        # Generate the GET URL the client will use to reference the blob in
+        # studio_generate after the upload completes.
+        get_url = _generate_signed_url(blob)
+        return (put_url, get_url)
+    except Exception as e:
+        print(f"[Storage] create_signed_put_url failed for {blob_path}: {e}")
+        return (None, None)
 
 
 def upload_to_storage(local_path, remote_folder, project_id=None, return_path=False):
@@ -415,6 +471,19 @@ def require_auth(f):
 
 register_seedance_routes(app, limiter, require_auth, upload_to_storage)
 
+# ── MCP server (Studio tab over OAuth 2.1 + Firebase) ──
+from mcp_studio import register_routes as register_mcp_routes
+register_mcp_routes(
+    app, limiter, require_auth,
+    db=db,
+    decrypt_api_key=decrypt_api_key,
+    upload_to_storage=upload_to_storage,
+    create_signed_put_url=create_signed_put_url,
+    encryption_key=_ENCRYPTION_KEY,
+    firestore_module=firestore,
+    encrypt_api_key=encrypt_api_key,
+)
+
 
 @app.route('/')
 def index():
@@ -637,49 +706,123 @@ def kie_generate():
     return jsonify(result)
 
 
+def _rehost_kie_results(result_urls, task_id, project_id, scene_id=None, kind=None):
+    """Download Kie tempfile URLs and re-host them to Firebase Storage.
+
+    Critical invariant: never return a kie tempfile URL as if it were durable.
+    Kie URLs expire in ~24h; the user's project would die overnight. If every
+    retry fails, return ([], failed_kie_urls) so the caller can surface a
+    retryable error instead of silently storing a ticking time bomb.
+
+    When scene_id is provided, files land in `images/{pid}/scene_{id}_{ts}.ext`
+    (or `videos/{pid}/scene_{id}_{ts}.ext`) so the existing scene-image-history
+    scanner finds them — same shape as legacy Gemini uploads.
+    """
+    firebase_urls = []
+    failed = []
+    for kie_url in result_urls:
+        local_path = None
+        # 3 attempts with exponential backoff. Kie's tempfile CDN is sometimes
+        # transiently slow, not permanently broken.
+        for attempt in range(3):
+            local_path = kie_download_result(kie_url, task_id)
+            if local_path:
+                break
+            wait_s = (3 ** attempt)
+            print(f"[Kie Rehost] download attempt {attempt + 1} failed for "
+                  f"{kie_url[:80]}, retrying in {wait_s}s...")
+            time.sleep(wait_s)
+
+        if not local_path:
+            print(f"[Kie Rehost] download exhausted retries for {kie_url[:120]}")
+            failed.append(kie_url)
+            continue
+
+        try:
+            is_video = local_path.endswith('.mp4')
+            inferred_kind = kind or ('video' if is_video else 'image')
+            folder = 'videos' if inferred_kind == 'video' else 'images'
+            ext = os.path.splitext(local_path)[1] or ('.mp4' if is_video else '.jpg')
+
+            # Scene-aware filename so /api/visuals/scene-{image,video}-history
+            # picks the file up (it scans for `scene_{id}_{ts}.ext` in
+            # `{folder}/{project_id}/`). Falls back to legacy `kie_{folder}/`
+            # path with random naming when scene_id isn't supplied.
+            if scene_id:
+                safe_id = str(scene_id).replace('/', '_').replace(' ', '_')
+                ts = int(time.time())
+                target_name = f"scene_{safe_id}_{ts}{ext}"
+                target_path = os.path.join(os.path.dirname(local_path), target_name)
+                try:
+                    os.rename(local_path, target_path)
+                    local_path = target_path
+                except OSError as e:
+                    print(f"[Kie Rehost] rename failed ({e}); uploading with original name")
+            else:
+                folder = 'kie_videos' if is_video else 'kie_images'
+
+            firebase_url = None
+            for attempt in range(3):
+                firebase_url = upload_to_storage(local_path, folder, project_id=project_id)
+                if firebase_url:
+                    break
+                wait_s = (3 ** attempt)
+                print(f"[Kie Rehost] upload attempt {attempt + 1} returned None, "
+                      f"retrying in {wait_s}s...")
+                time.sleep(wait_s)
+
+            if firebase_url:
+                firebase_urls.append(firebase_url)
+                print(f"[Kie Rehost] persisted: {firebase_url[:120]}")
+            else:
+                print(f"[Kie Rehost] upload exhausted retries for {kie_url[:80]}")
+                failed.append(kie_url)
+        finally:
+            try:
+                os.unlink(local_path)
+                os.rmdir(os.path.dirname(local_path))
+            except OSError:
+                pass
+
+    return firebase_urls, failed
+
+
 @app.route('/api/kie/poll/<task_id>', methods=['GET'])
 @require_auth
 @limiter.limit("600/hour")
 def kie_poll(task_id):
     """Poll a Kie.ai task for completion.
-    On success, downloads result and uploads to Firebase Storage for persistence."""
+    On success, downloads result and uploads to Firebase Storage for persistence.
+
+    Optional query params:
+      project_id — for project-scoped storage path
+      scene_id   — when set, file is named scene_{id}_{ts} so the history
+                   scanner picks it up (parity with legacy Gemini path)
+      kind       — 'image' or 'video' (otherwise inferred from extension)
+    """
     if not g.kie_api_key:
         return jsonify({'error': 'No Kie.ai API key configured'}), 400
 
     result = kie_poll_task(task_id, g.kie_api_key)
     print(f"[Kie Poll] task={task_id} status={result.get('status')} urls={len(result.get('result_urls') or [])}")
 
-    # If completed, download from Kie.ai (24hr expiry) and persist to Firebase Storage
     if result.get('status') == 'completed' and result.get('result_urls'):
         project_id = request.args.get('project_id')
-        firebase_urls = []
-
-        for kie_url in result['result_urls']:
-            print(f"[Kie Poll] Downloading: {kie_url[:120]}...")
-            local_path = kie_download_result(kie_url, task_id)
-            if local_path:
-                try:
-                    is_video = local_path.endswith('.mp4')
-                    folder = 'kie_videos' if is_video else 'kie_images'
-                    firebase_url = upload_to_storage(local_path, folder, project_id=project_id)
-                    if firebase_url:
-                        firebase_urls.append(firebase_url)
-                        print(f"[Kie Poll] Uploaded to Firebase: {firebase_url[:120]}")
-                    else:
-                        print(f"[Kie Poll] Firebase upload returned None for {kie_url[:80]}")
-                finally:
-                    try:
-                        os.unlink(local_path)
-                        os.rmdir(os.path.dirname(local_path))
-                    except OSError:
-                        pass
-            else:
-                print(f"[Kie Poll] Download failed for: {kie_url[:120]}")
-                # If download fails, still pass through the Kie URL (temporary 24hr)
-                firebase_urls.append(kie_url)
-
+        scene_id = request.args.get('scene_id')
+        kind = request.args.get('kind')
+        firebase_urls, failed = _rehost_kie_results(
+            result['result_urls'], task_id, project_id,
+            scene_id=scene_id, kind=kind,
+        )
         if firebase_urls:
             result['firebase_urls'] = firebase_urls
+        # If anything failed to persist, flag it so the client can show a
+        # retryable error instead of silently storing the expiring kie URL.
+        if failed and not firebase_urls:
+            result['status'] = 'rehost_failed'
+            result['rehost_failed_urls'] = failed
+        elif failed:
+            result['rehost_partial_failed_urls'] = failed
     elif result.get('status') == 'completed' and not result.get('result_urls'):
         print(f"[Kie Poll] Task completed but NO result_urls found!")
 
@@ -698,36 +841,21 @@ def kie_mj_poll(task_id):
     result = kie_mj_poll_task(task_id, g.kie_api_key)
     print(f"[Kie/MJ Poll] task={task_id} status={result.get('status')} urls={len(result.get('result_urls') or [])}")
 
-    # If completed, download from Kie.ai (24hr expiry) and persist to Firebase Storage
     if result.get('status') == 'completed' and result.get('result_urls'):
         project_id = request.args.get('project_id')
-        firebase_urls = []
-
-        for kie_url in result['result_urls']:
-            print(f"[Kie/MJ Poll] Downloading: {kie_url[:120]}...")
-            local_path = kie_download_result(kie_url, task_id)
-            if local_path:
-                try:
-                    is_video = local_path.endswith('.mp4')
-                    folder = 'kie_videos' if is_video else 'kie_images'
-                    firebase_url = upload_to_storage(local_path, folder, project_id=project_id)
-                    if firebase_url:
-                        firebase_urls.append(firebase_url)
-                        print(f"[Kie/MJ Poll] Uploaded to Firebase: {firebase_url[:120]}")
-                    else:
-                        print(f"[Kie/MJ Poll] Firebase upload returned None for {kie_url[:80]}")
-                finally:
-                    try:
-                        os.unlink(local_path)
-                        os.rmdir(os.path.dirname(local_path))
-                    except OSError:
-                        pass
-            else:
-                print(f"[Kie/MJ Poll] Download failed for: {kie_url[:120]}")
-                firebase_urls.append(kie_url)
-
+        scene_id = request.args.get('scene_id')
+        kind = request.args.get('kind')
+        firebase_urls, failed = _rehost_kie_results(
+            result['result_urls'], task_id, project_id,
+            scene_id=scene_id, kind=kind,
+        )
         if firebase_urls:
             result['firebase_urls'] = firebase_urls
+        if failed and not firebase_urls:
+            result['status'] = 'rehost_failed'
+            result['rehost_failed_urls'] = failed
+        elif failed:
+            result['rehost_partial_failed_urls'] = failed
     elif result.get('status') == 'completed' and not result.get('result_urls'):
         print(f"[Kie/MJ Poll] Task completed but NO result_urls found!")
 
@@ -806,13 +934,17 @@ def studio_generate():
     inputs = data.get('inputs') or {}
     params = data.get('params') or {}
     project_id = data.get('project_id')
+    # When the Visuals tab drives Studio Engine for a scene, scene_id lets
+    # sync (Google) results land at images/{pid}/scene_{id}_{ts}.png so the
+    # history strip picks them up. Async (Kie) flows pass it again in the poll.
+    scene_id = data.get('scene_id')
 
     schema = studio_get_schema(model_id)
     if not schema:
         return jsonify({'error': f'Unknown model: {model_id}'}), 400
 
     backend = schema['backend']
-    print(f"[Studio] model={model_id} backend={backend} kind={schema['kind']}")
+    print(f"[Studio] model={model_id} backend={backend} kind={schema['kind']} scene={scene_id}")
 
     try:
         if backend == 'kie_generic':
@@ -823,10 +955,10 @@ def studio_generate():
             return _studio_dispatch_kie_runway(schema, inputs, params, project_id)
         if backend == 'google_gemini_image':
             return _studio_dispatch_google_image(schema, inputs, params, project_id,
-                                                 native=True)
+                                                 native=True, scene_id=scene_id)
         if backend == 'google_imagen':
             return _studio_dispatch_google_image(schema, inputs, params, project_id,
-                                                 native=False)
+                                                 native=False, scene_id=scene_id)
         if backend == 'google_veo':
             return _studio_dispatch_google_veo(schema, inputs, params, project_id)
         if backend == 'google_tts':
@@ -954,12 +1086,17 @@ def _studio_dispatch_kie_runway(schema, inputs, params, project_id):
     }), 501
 
 
-def _studio_dispatch_google_image(schema, inputs, params, project_id, native):
+def _studio_dispatch_google_image(schema, inputs, params, project_id, native, scene_id=None):
     """Google's image models — Gemini-native (Nano Banana family) or Imagen.
 
     Plumbs reference images, count (num_images), and @-mention `prompt_parts`
     through to gemini_client. Returns a list of public URLs in `image_urls`
-    plus a back-compat `image_url` for the first result."""
+    plus a back-compat `image_url` for the first result.
+
+    When scene_id is provided, output filenames are renamed to
+    `scene_{id}_{ts}.ext` before upload so the scene-image-history endpoint
+    discovers them — same behavior as the legacy /api/visuals/generate-image
+    path."""
     prompt = (inputs.get('prompt') or '').strip()
     prompt_parts = inputs.get('prompt_parts') or None
     if not prompt and not prompt_parts:
@@ -1003,8 +1140,19 @@ def _studio_dispatch_google_image(schema, inputs, params, project_id, native):
 
     image_urls = []
     for p in paths:
-        public_url = upload_to_storage(p, 'images', project_id=project_id)
-        image_urls.append(public_url or f'/generated/{os.path.basename(p)}')
+        upload_path = p
+        if scene_id:
+            safe_id = str(scene_id).replace('/', '_').replace(' ', '_')
+            ts = int(time.time())
+            ext = os.path.splitext(p)[1] or '.png'
+            renamed = os.path.join(os.path.dirname(p), f"scene_{safe_id}_{ts}{ext}")
+            try:
+                os.rename(p, renamed)
+                upload_path = renamed
+            except OSError as e:
+                print(f"[Studio/Google] rename failed ({e}); uploading with original name")
+        public_url = upload_to_storage(upload_path, 'images', project_id=project_id)
+        image_urls.append(public_url or f'/generated/{os.path.basename(upload_path)}')
     return jsonify({
         'success': True,
         'image_urls': image_urls,
@@ -1418,11 +1566,21 @@ def analyze_style_text_route():
 @require_auth
 @limiter.limit("60/hour")
 def structure_script_route():
+    """Structure a pasted plain-text script into acts/beats without losing words.
+
+    Architecture: the LLM never re-emits user text. We deterministically split
+    the paste into chunks, ask the LLM only for act/beat labels keyed by chunk
+    index, then reconstruct the narration by zipping verbatim chunks back to
+    those labels. A whitespace-normalized equality check guarantees zero loss;
+    any failure falls back to deterministic labeling so the user is never
+    blocked.
+
+    Accepts: { raw_text, duration_minutes }
+    Returns: { success, narration, structuring_mode: "llm" | "fallback" }
     """
-    Take raw plain-text script and structure it into acts/beats.
-    Accepts: { raw_text: "...", duration_minutes: 10 }
-    Returns: { success, narration: { title, duration_minutes, narration: [...] } }
-    """
+    import json as _json
+    import re as _re
+
     try:
         data = request.json
         raw_text = data.get('raw_text', '').strip()
@@ -1432,47 +1590,127 @@ def structure_script_route():
             return jsonify({'error': 'No script text provided'}), 400
 
         from research_templates import build_script_structuring_prompt
+        from research_scriptwriter import split_script_into_chunks
 
-        print(f"[Script Structure] Structuring {len(raw_text.split())} words into acts/beats...")
-        prompt = build_script_structuring_prompt(
-            raw_text=raw_text,
-            duration_minutes=duration_minutes,
-        )
+        def _normalize(s):
+            return _re.sub(r'\s+', ' ', s or '').strip()
 
+        def _default_title(text):
+            words = text.strip().split()
+            return ' '.join(words[:8]) if words else 'Imported Script'
+
+        def _deterministic_narration(chunks, reason):
+            print(f"[Script Structure] fell back to deterministic labeling: {reason}")
+            beats = [
+                {'act': 'ACT 1', 'beat': f'Beat {i + 1}', 'text': chunk}
+                for i, chunk in enumerate(chunks)
+            ]
+            return {
+                'title': _default_title(chunks[0]) if chunks else 'Imported Script',
+                'duration_minutes': duration_minutes,
+                'narration': beats,
+            }
+
+        chunks = split_script_into_chunks(raw_text)
+        if not chunks:
+            return jsonify({'error': 'Script appears to be empty after parsing'}), 400
+
+        print(f"[Script Structure] Split {len(raw_text.split())} words into {len(chunks)} chunks")
+
+        # Single-chunk paste → no need to consult the LLM.
+        if len(chunks) <= 1:
+            narration = {
+                'title': _default_title(chunks[0]),
+                'duration_minutes': duration_minutes,
+                'narration': [{'act': 'ACT 1', 'beat': 'Full Script', 'text': chunks[0]}],
+            }
+            return jsonify({
+                'success': True,
+                'narration': narration,
+                'structuring_mode': 'llm',  # trivial path is still authoritative
+            })
+
+        # Too many chunks for a single labeler call — go deterministic to keep
+        # the LLM response bounded and avoid token-limit truncation.
+        MAX_CHUNKS_FOR_LLM = 200
+        if len(chunks) > MAX_CHUNKS_FOR_LLM:
+            narration = _deterministic_narration(chunks, f'{len(chunks)} chunks exceeds LLM cap')
+            return jsonify({'success': True, 'narration': narration, 'structuring_mode': 'fallback'})
+
+        prompt = build_script_structuring_prompt(chunks=chunks, duration_minutes=duration_minutes)
         raw_response = generate_content(
-            prompt, model_name="gemini-3-flash-preview",
+            prompt, model_name="gemini-3.1-flash-lite",
             temperature=0.2, api_key=g.api_key,
             uid=g.uid, project_id=data.get('project_id'),
             description="structure_script",
         )
 
+        labels_by_index = {}
+        title = None
+        llm_ok = True
+
         if not raw_response or (isinstance(raw_response, str) and raw_response.startswith("Error")):
-            return jsonify({'error': raw_response or 'Script structuring returned no result'}), 500
+            llm_ok = False
+        else:
+            cleaned = raw_response.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+            if cleaned.lower().startswith("json"):
+                cleaned = cleaned[4:].strip()
+            try:
+                parsed = _json.loads(cleaned)
+                title = parsed.get('title') if isinstance(parsed.get('title'), str) else None
+                for lab in parsed.get('labels', []) or []:
+                    if not isinstance(lab, dict):
+                        continue
+                    idx = lab.get('index')
+                    act = lab.get('act')
+                    beat = lab.get('beat')
+                    if (isinstance(idx, int) and 0 <= idx < len(chunks)
+                            and isinstance(act, str) and act.strip()
+                            and isinstance(beat, str) and beat.strip()):
+                        labels_by_index[idx] = (act.strip(), beat.strip())
+            except (_json.JSONDecodeError, ValueError, TypeError) as parse_err:
+                print(f"[Script Structure] LLM JSON parse error: {parse_err}")
+                llm_ok = False
 
-        # Parse JSON response
-        import json
-        cleaned = raw_response.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
-        if cleaned.startswith("json"):
-            cleaned = cleaned[4:].strip()
+        # If LLM produced nothing usable, deterministic fallback.
+        if not llm_ok or not labels_by_index:
+            narration = _deterministic_narration(chunks, 'LLM returned no usable labels')
+            return jsonify({'success': True, 'narration': narration, 'structuring_mode': 'fallback'})
 
-        narration = json.loads(cleaned)
-        beats = narration.get('narration', [])
-        act_count = len(set(b.get('act', '') for b in beats))
-        print(f"[Script Structure] Complete: {act_count} acts, {len(beats)} beats")
+        # Reconstruct: verbatim chunk text + per-index labels (default-filling any gaps).
+        reconstructed = []
+        for i, chunk in enumerate(chunks):
+            act, beat = labels_by_index.get(i, ('ACT 1', f'Beat {i + 1}'))
+            reconstructed.append({'act': act, 'beat': beat, 'text': chunk})
 
-        return jsonify({
-            'success': True,
-            'narration': narration
-        })
+        # Merge consecutive entries sharing (act, beat).
+        merged = []
+        for entry in reconstructed:
+            if merged and merged[-1]['act'] == entry['act'] and merged[-1]['beat'] == entry['beat']:
+                merged[-1]['text'] = merged[-1]['text'] + '\n\n' + entry['text']
+            else:
+                merged.append(dict(entry))
 
-    except json.JSONDecodeError as e:
-        print(f"[Script Structure] JSON parse error: {e}")
-        return jsonify({'error': f'Failed to parse structured script: {e}'}), 500
+        # Equality assertion: joined beat text == input (whitespace-normalized).
+        joined = '\n\n'.join(b['text'] for b in merged)
+        if _normalize(joined) != _normalize(raw_text):
+            narration = _deterministic_narration(chunks, 'equality check failed after reconstruction')
+            return jsonify({'success': True, 'narration': narration, 'structuring_mode': 'fallback'})
+
+        narration = {
+            'title': title or _default_title(chunks[0]),
+            'duration_minutes': duration_minutes,
+            'narration': merged,
+        }
+        act_count = len({b['act'] for b in merged})
+        print(f"[Script Structure] Complete: {act_count} acts, {len(merged)} beats (mode=llm)")
+        return jsonify({'success': True, 'narration': narration, 'structuring_mode': 'llm'})
+
     except Exception as e:
         return safe_error_response(e)
 
@@ -2288,9 +2526,11 @@ def delete_project(project_id):
 # ────────────────────────────────────────────────────────────────
 
 # Fields the client is allowed to set/update on an asset doc.
+# `scene_id` tags assets that came from a specific Visuals scene so a future
+# filter ("show only assets from scene 3") can group them.
 _ASSET_WRITE_FIELDS = {
     'kind', 'url', 'thumbnail_url', 'prompt', 'model_id', 'provider',
-    'refs', 'params', 'favorite',
+    'refs', 'params', 'favorite', 'scene_id',
 }
 # Fields the client is allowed to PATCH after creation.
 _ASSET_PATCH_FIELDS = {'favorite', 'prompt'}
@@ -3139,20 +3379,24 @@ def generate_production_table_route():
     PHASE 3: Generate production-ready prompts from narration.
     Accepts: narration (narration JSON with acts/beats), duration_minutes,
              plus optional style config fields or style_analysis.
-    Returns: production table with split shots, first-frame, last-frame, and Veo prompts.
+             If body contains streaming: true, returns {task_id} immediately and
+             writes per-batch progress to Firestore. Poll via
+             /api/production-task/<task_id>.
+    Returns: production table with split shots, first-frame, and Veo prompts.
     """
     try:
         data = request.json
         narration = data.get('narration')
         duration_minutes = int(data.get('duration_minutes', 10))
         project_id = data.get('project_id')
+        streaming = bool(data.get('streaming', False))
 
         if not narration:
             return jsonify({'error': 'Narration is required. Generate narration first.'}), 400
 
         beats = narration.get('narration', [])
         print(f"[Production] Received narration: '{narration.get('title', 'Untitled')}' "
-              f"({len(beats)} beats, {duration_minutes}min)")
+              f"({len(beats)} beats, {duration_minutes}min, streaming={streaming})")
 
         # Check for structured style analysis (from images or text)
         style_analysis = data.get('style_analysis')
@@ -3178,6 +3422,137 @@ def generate_production_table_route():
         if cast and cast.get('has_characters') and cast.get('cast'):
             print(f"[Production] Using cast: {len(cast['cast'])} characters")
 
+        # ── Streaming path: spawn worker, return task_id immediately ──
+        if streaming:
+            import uuid as _uuid
+            import threading as _threading
+            task_id = _uuid.uuid4().hex
+            captured_uid = g.uid
+            captured_api_key = g.api_key
+            spine_data = _load_project_spine(project_id)
+            task_ref = (db.collection('users').document(captured_uid)
+                          .collection('production_tasks').document(task_id))
+            # Root doc stays small (metadata only). Per-batch shot payloads live
+            # in a subcollection so cumulative writes never approach Firestore's
+            # 1 MiB doc size limit. final_table is written to the project doc,
+            # not here.
+            task_ref.set({
+                'status': 'running',
+                'project_id': project_id,
+                'title': narration.get('title', 'Untitled'),
+                'total_batches': None,
+                'failed_batches': [],
+                'created_at': firestore.SERVER_TIMESTAMP,
+                'updated_at': firestore.SERVER_TIMESTAMP,
+            })
+
+            def _progress_cb(event):
+                try:
+                    if event.get('type') == 'stage' and event.get('total_batches'):
+                        task_ref.update({
+                            'total_batches': event['total_batches'],
+                            'updated_at': firestore.SERVER_TIMESTAMP,
+                        })
+                    elif event.get('type') == 'batch':
+                        # Each batch is its own doc (~30-60 KB max), keeping the
+                        # root doc bounded even for very long scripts.
+                        batch_idx = event['batch_idx']
+                        task_ref.collection('batches').document(str(batch_idx)).set({
+                            'batch_idx': batch_idx,
+                            'shots': event['shots'],
+                            'created_at': firestore.SERVER_TIMESTAMP,
+                        })
+                        update_fields = {'updated_at': firestore.SERVER_TIMESTAMP}
+                        if event.get('total_batches'):
+                            update_fields['total_batches'] = event['total_batches']
+                        task_ref.update(update_fields)
+                    elif event.get('type') == 'batch_failed':
+                        task_ref.update({
+                            'failed_batches': firestore.ArrayUnion([{
+                                'batch_idx': event['batch_idx'],
+                                'error': event['error'],
+                            }]),
+                            'updated_at': firestore.SERVER_TIMESTAMP,
+                        })
+                except Exception as cb_err:
+                    print(f"[Production stream] progress write failed: {cb_err}")
+
+            def _worker():
+                try:
+                    worker_result = generate_production_table(
+                        narration_json=narration,
+                        duration_minutes=duration_minutes,
+                        style_analysis=style_analysis,
+                        aspect_ratio=aspect_ratio,
+                        api_key=captured_api_key,
+                        pacing_tier=pacing_tier,
+                        quality_mode=quality_mode,
+                        creative_direction=creative_direction,
+                        cast=cast,
+                        format_preset=format_preset,
+                        spine=spine_data,
+                        uid=captured_uid, project_id=project_id,
+                        progress_callback=_progress_cb,
+                    )
+                    final_table = worker_result.get('production_table')
+                    if final_table:
+                        tmp_path = os.path.join(TMP_DIR, f"task_prod_{task_id}.json")
+                        try:
+                            with open(tmp_path, "w") as f:
+                                json.dump(final_table, f)
+                        except Exception as e:
+                            print(f"[Production stream] Error writing tmp table: {e}")
+
+                    if worker_result.get('error') == 'coverage_failure':
+                        # Persist partial table on project doc; task doc keeps only
+                        # missing_beats (small) so the poll endpoint can surface them.
+                        if project_id and final_table:
+                            db.collection('users').document(captured_uid).collection('projects').document(project_id).set({
+                                'production_data': final_table,
+                                'last_updated_at': firestore.SERVER_TIMESTAMP,
+                            }, merge=True)
+                        task_ref.update({
+                            'status': 'coverage_failure',
+                            'missing_beats': worker_result.get('missing_beats', []),
+                            'updated_at': firestore.SERVER_TIMESTAMP,
+                        })
+                        return
+                    if 'error' in worker_result:
+                        task_ref.update({
+                            'status': 'failed',
+                            'error': worker_result['error'],
+                            'updated_at': firestore.SERVER_TIMESTAMP,
+                        })
+                        return
+                    
+                    # Write full table to project doc first (source of truth) so
+                    # the poll endpoint can read it back when reporting completion.
+                    if project_id and final_table:
+                        db.collection('users').document(captured_uid).collection('projects').document(project_id).set({
+                            'production_data': final_table,
+                            'last_updated_at': firestore.SERVER_TIMESTAMP,
+                        }, merge=True)
+                    task_ref.update({
+                        'status': 'complete',
+                        'updated_at': firestore.SERVER_TIMESTAMP,
+                    })
+                except Exception as worker_err:
+                    import traceback as _tb
+                    print(f"[Production stream] worker exception: {worker_err}")
+                    _tb.print_exc()
+                    try:
+                        task_ref.update({
+                            'status': 'failed',
+                            'error': str(worker_err),
+                            'updated_at': firestore.SERVER_TIMESTAMP,
+                        })
+                    except Exception:
+                        pass
+
+            _threading.Thread(target=_worker, daemon=True, name=f"prodtable-{task_id[:8]}").start()
+            return jsonify({'task_id': task_id, 'streaming': True})
+
+        # ── Legacy synchronous path (preserved for tests / fallback) ──
         result = generate_production_table(
             narration_json=narration,
             duration_minutes=duration_minutes,
@@ -3192,6 +3567,20 @@ def generate_production_table_route():
             spine=_load_project_spine(project_id),
             uid=g.uid, project_id=project_id,
         )
+
+        # Coverage failure: pass through the partial table + missing beats so the
+        # UI can show a blocking modal with a targeted retry option (200 OK, not 500).
+        if result.get('error') == 'coverage_failure':
+            if project_id and result.get('production_table'):
+                try:
+                    project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
+                    project_ref.set({
+                        'production_data': result['production_table'],
+                        'last_updated_at': firestore.SERVER_TIMESTAMP
+                    }, merge=True)
+                except Exception as e:
+                    print(f"[Production] Warning: Failed to save partial table: {e}")
+            return jsonify(result), 200
 
         if "error" in result:
             return jsonify({'error': result['error']}), 500
@@ -3222,6 +3611,326 @@ def generate_production_table_route():
             print(f"[Production] Saved to {pt_path}")
 
         return jsonify(result)
+
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/production-task/<task_id>', methods=['GET'])
+@require_auth
+def production_task_poll_route(task_id):
+    """Poll a streaming production-table task.
+    Returns: { status, total_batches, batches_completed: [...], failed_batches: [...],
+               missing_beats?, final_table?, error? }
+    Status values: 'running' | 'complete' | 'coverage_failure' | 'failed'.
+    """
+    try:
+        if not task_id or not task_id.replace('-', '').replace('_', '').isalnum():
+            return jsonify({'error': 'Invalid task_id'}), 400
+        task_ref = (db.collection('users').document(g.uid)
+                      .collection('production_tasks').document(task_id))
+        snap = task_ref.get()
+        if not snap.exists:
+            return jsonify({'error': 'Task not found'}), 404
+        doc = snap.to_dict() or {}
+        status = doc.get('status', 'running')
+
+        # Per-batch shot payloads live in a subcollection (one doc per batch) to
+        # keep the root doc under Firestore's 1 MiB size limit.
+        batches_completed = []
+        try:
+            for bs in task_ref.collection('batches').stream():
+                bdata = bs.to_dict() or {}
+                if 'batch_idx' in bdata and 'shots' in bdata:
+                    batches_completed.append({
+                        'batch_idx': bdata['batch_idx'],
+                        'shots': bdata['shots'],
+                    })
+            batches_completed.sort(key=lambda b: b.get('batch_idx', 0))
+        except Exception as sub_err:
+            print(f"[Production poll] batches subcollection read failed: {sub_err}")
+
+        # On terminal states, hydrate final_table from tmp folder, or project doc.
+        # NOTE: the .tmp file is local to the Cloud Run instance that ran the
+        # worker. With multi-instance autoscaling, a poll can land on a
+        # different instance and miss the file — Priority 2 (Firestore) is the
+        # durable source. The tmp file is a fast-path for the same-instance
+        # case and a safety net if project_id is missing from the task doc.
+        final_table = None
+        tmp_path = os.path.join(TMP_DIR, f"task_prod_{task_id}.json")
+        if status in ('complete', 'coverage_failure'):
+            # Priority 1: Check .tmp file saved by worker thread
+            if os.path.exists(tmp_path):
+                try:
+                    with open(tmp_path, "r") as f:
+                        final_table = json.load(f)
+                except Exception as tmp_err:
+                    print(f"[Production poll] tmp table read failed: {tmp_err}")
+
+            # Priority 2: Fallback to project document
+            if not final_table:
+                proj_id = doc.get('project_id')
+                if proj_id:
+                    try:
+                        proj_snap = (db.collection('users').document(g.uid)
+                                       .collection('projects').document(proj_id).get())
+                        if proj_snap.exists:
+                            final_table = (proj_snap.to_dict() or {}).get('production_data')
+                    except Exception as proj_err:
+                        print(f"[Production poll] project doc read failed: {proj_err}")
+
+            # Best-effort cleanup: once we've hydrated final_table and the
+            # task is terminal, the project doc is the source of truth.
+            # The tmp file is no longer needed — delete it so files don't
+            # accumulate on long-lived instances. Future polls (e.g. the
+            # Download JSON button) still work via Priority 2.
+            if final_table and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception as rm_err:
+                    print(f"[Production poll] tmp cleanup failed: {rm_err}")
+
+        return jsonify({
+            'task_id': task_id,
+            'status': status,
+            'total_batches': doc.get('total_batches'),
+            'batches_completed': batches_completed,
+            'failed_batches': doc.get('failed_batches', []),
+            'missing_beats': doc.get('missing_beats'),
+            'final_table': final_table,
+            'error': doc.get('error'),
+            'project_id': doc.get('project_id'),
+            'title': doc.get('title'),
+        })
+    except Exception as e:
+        return safe_error_response(e)
+
+
+def _run_retry_beats(missing_beats, existing_table, project_id, api_key, uid,
+                     duration_minutes, style_analysis, aspect_ratio, pacing_tier,
+                     creative_direction, cast, format_preset, visual_brief, spine):
+    """Core retry-beats logic, shared between the sync and streaming paths.
+
+    Returns one of:
+      { 'kind': 'success', 'production_table': {...} }
+      { 'kind': 'coverage_failure', 'production_table': {...}, 'missing_beats': [...] }
+      { 'kind': 'error', 'error': '...' }
+    """
+    from research_scriptwriter import (
+        _generate_single_batch_6phase, _check_beat_coverage,
+    )
+
+    existing_shots = existing_table.get('shots', [])
+    next_shot_num = len(existing_shots) + 1
+
+    retry_narration = {
+        'title': existing_table.get('title', 'Untitled'),
+        'narration': [
+            {'act': b.get('act', 'ACT 1'),
+             'beat': b.get('beat', 'Beat'),
+             'text': b.get('text', '')}
+            for b in missing_beats
+        ],
+    }
+
+    result = _generate_single_batch_6phase(
+        retry_narration,
+        duration_minutes=duration_minutes,
+        style_analysis=style_analysis,
+        aspect_ratio=aspect_ratio,
+        api_key=api_key,
+        shot_start_number=next_shot_num,
+        batch_label="manual retry",
+        pacing_tier=pacing_tier,
+        creative_direction=creative_direction,
+        cast=cast,
+        format_preset=format_preset,
+        visual_brief=visual_brief,
+        spine=spine,
+        uid=uid, project_id=project_id,
+    )
+
+    if 'error' in result:
+        return {'kind': 'error', 'error': result['error']}
+
+    new_shots = result.get('production_table', {}).get('shots', [])
+    for s in new_shots:
+        s['shot_number'] = str(next_shot_num)
+        next_shot_num += 1
+
+    merged_shots = existing_shots + new_shots
+    still_missing = _check_beat_coverage(retry_narration['narration'], merged_shots)
+
+    merged_table = {
+        **existing_table,
+        'shots': merged_shots,
+        'total_shots': len(merged_shots),
+    }
+    merged_table.pop('batch_warning', None)
+    merged_table.pop('failed_batches', None)
+
+    if still_missing:
+        return {'kind': 'coverage_failure',
+                'production_table': merged_table,
+                'missing_beats': still_missing}
+    return {'kind': 'success', 'production_table': merged_table}
+
+
+@app.route('/api/generate-production-table/retry-beats', methods=['POST'])
+@require_auth
+@limiter.limit("30/hour")
+def retry_missing_beats_route():
+    """
+    Targeted retry for beats that the main production-table run failed to cover.
+    Accepts: { project_id, missing_beats: [{act, beat, text}, ...],
+               existing_table, style_analysis?, aspect_ratio?, pacing_tier?,
+               creative_direction?, cast?, format_preset?, streaming? }
+    If streaming=true, returns { task_id } immediately and writes progress to
+    Firestore (poll via /api/production-task/<task_id>). Otherwise runs
+    synchronously and returns the merged table directly.
+    """
+    try:
+        data = request.json
+        missing_beats = data.get('missing_beats') or []
+        existing_table = data.get('existing_table') or {}
+        project_id = data.get('project_id')
+        streaming = bool(data.get('streaming', False))
+
+        if not missing_beats:
+            return jsonify({'error': 'No missing beats supplied'}), 400
+            
+        if not existing_table.get('shots') and project_id:
+            try:
+                proj_snap = db.collection('users').document(g.uid).collection('projects').document(project_id).get()
+                if proj_snap.exists:
+                    existing_table = (proj_snap.to_dict() or {}).get('production_data') or {}
+            except Exception as e:
+                print(f"[Retry] Error fetching existing table from project: {e}")
+                
+        if not existing_table or not existing_table.get('shots'):
+            return jsonify({'error': 'No existing production table to extend. Please regenerate the full table.'}), 400
+
+        common_kwargs = dict(
+            missing_beats=missing_beats,
+            existing_table=existing_table,
+            project_id=project_id,
+            duration_minutes=int(data.get('duration_minutes', 10)),
+            style_analysis=data.get('style_analysis'),
+            aspect_ratio=data.get('aspect_ratio', '16:9'),
+            pacing_tier=data.get('pacing_tier', 'Standard'),
+            creative_direction=data.get('creative_direction'),
+            cast=data.get('cast'),
+            format_preset=data.get('format_preset', ''),
+            visual_brief=data.get('visual_brief'),
+            spine=_load_project_spine(project_id),
+        )
+
+        # ── Streaming path: spawn worker, return task_id immediately ──
+        # Previously this endpoint ran synchronously and we observed 654-759s
+        # POST latencies. A refresh during that window orphaned the retry. Now
+        # the worker runs in the background and the UI polls the same task
+        # endpoint as the main production-table flow.
+        if streaming:
+            import uuid as _uuid
+            import threading as _threading
+            task_id = _uuid.uuid4().hex
+            captured_uid = g.uid
+            captured_api_key = g.api_key
+            task_ref = (db.collection('users').document(captured_uid)
+                          .collection('production_tasks').document(task_id))
+            task_ref.set({
+                'status': 'running',
+                'project_id': project_id,
+                'title': existing_table.get('title', 'Untitled'),
+                'action': 'retry_beats',
+                'missing_beats_count': len(missing_beats),
+                'total_batches': 1,
+                'failed_batches': [],
+                'created_at': firestore.SERVER_TIMESTAMP,
+                'updated_at': firestore.SERVER_TIMESTAMP,
+            })
+
+            def _retry_worker():
+                try:
+                    res = _run_retry_beats(
+                        api_key=captured_api_key, uid=captured_uid,
+                        **common_kwargs,
+                    )
+                    merged_table = res.get('production_table')
+                    
+                    if merged_table:
+                        tmp_path = os.path.join(TMP_DIR, f"task_prod_{task_id}.json")
+                        try:
+                            with open(tmp_path, "w") as f:
+                                json.dump(merged_table, f)
+                        except Exception as e:
+                            print(f"[Production retry] Error writing tmp table: {e}")
+
+                    # Persist the merged table to the project doc (source of
+                    # truth that the poll endpoint reads back as final_table).
+                    if project_id and merged_table:
+                        db.collection('users').document(captured_uid).collection('projects').document(project_id).set({
+                            'production_data': merged_table,
+                            'last_updated_at': firestore.SERVER_TIMESTAMP,
+                        }, merge=True)
+                        
+                    if res['kind'] == 'success':
+                        task_ref.update({
+                            'status': 'complete',
+                            'updated_at': firestore.SERVER_TIMESTAMP,
+                        })
+                    elif res['kind'] == 'coverage_failure':
+                        task_ref.update({
+                            'status': 'coverage_failure',
+                            'missing_beats': res.get('missing_beats', []),
+                            'updated_at': firestore.SERVER_TIMESTAMP,
+                        })
+                    else:
+                        task_ref.update({
+                            'status': 'failed',
+                            'error': res.get('error', 'Retry failed'),
+                            'updated_at': firestore.SERVER_TIMESTAMP,
+                        })
+                except Exception as worker_err:
+                    import traceback as _tb
+                    print(f"[retry-beats stream] worker exception: {worker_err}")
+                    _tb.print_exc()
+                    try:
+                        task_ref.update({
+                            'status': 'failed',
+                            'error': str(worker_err),
+                            'updated_at': firestore.SERVER_TIMESTAMP,
+                        })
+                    except Exception:
+                        pass
+
+            _threading.Thread(target=_retry_worker, daemon=True,
+                              name=f"retry-{task_id[:8]}").start()
+            return jsonify({'task_id': task_id, 'streaming': True})
+
+        # ── Legacy synchronous path (preserved for compatibility) ──
+        res = _run_retry_beats(api_key=g.api_key, uid=g.uid, **common_kwargs)
+        merged_table = res.get('production_table')
+
+        if project_id and merged_table:
+            try:
+                project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
+                project_ref.set({
+                    'production_data': merged_table,
+                    'last_updated_at': firestore.SERVER_TIMESTAMP,
+                }, merge=True)
+            except Exception as e:
+                print(f"[Production] retry-beats save warning: {e}")
+
+        if res['kind'] == 'error':
+            return jsonify({'error': res['error'], 'missing_beats': missing_beats}), 500
+        if res['kind'] == 'coverage_failure':
+            return jsonify({
+                'error': 'coverage_failure',
+                'missing_beats': res['missing_beats'],
+                'production_table': merged_table,
+            }), 200
+        return jsonify({'success': True, 'production_table': merged_table})
 
     except Exception as e:
         return safe_error_response(e)
@@ -3397,6 +4106,51 @@ def visuals_sync_storage_images():
         return safe_error_response(e)
 
 
+def _build_scene_history(folder, scene_ids, project_id):
+    """Shared scanner for scene-image-history and scene-video-history.
+
+    Looks for blobs at `{folder}/{project_id}/scene_{id}_{ts}.ext` (or legacy
+    `{folder}/scene_*` when no project_id), groups by scene_id, returns
+    {sid: [{url, timestamp, filename}, ...]} sorted newest-first.
+    """
+    history = {}
+    all_blobs = (list(bucket.list_blobs(prefix=f"{folder}/{project_id}/scene_"))
+                 if project_id
+                 else list(bucket.list_blobs(prefix=f"{folder}/scene_")))
+
+    def _entries(blobs, prefix):
+        blobs.sort(key=lambda b: b.name, reverse=True)
+        out = []
+        for blob in blobs:
+            filename = blob.name.split('/')[-1]
+            ts_part = filename.replace(prefix, "").rsplit(".", 1)[0]
+            try:
+                timestamp = int(ts_part)
+            except ValueError:
+                timestamp = 0
+            signed_url = _generate_signed_url(blob)
+            if signed_url:
+                out.append({
+                    'url': signed_url,
+                    'timestamp': timestamp,
+                    'filename': filename,
+                })
+        return out
+
+    for sid in scene_ids:
+        safe_id = str(sid).replace("/", "_").replace(" ", "_")
+        prefix = f"{safe_id}_" if safe_id.startswith("scene_") else f"scene_{safe_id}_"
+        scene_blobs = [b for b in all_blobs if b.name.split('/')[-1].startswith(prefix)]
+        if scene_blobs:
+            seen = {}
+            for b in scene_blobs:
+                fn = b.name.split('/')[-1]
+                if fn not in seen:
+                    seen[fn] = b
+            history[str(sid)] = _entries(list(seen.values()), prefix)
+    return history
+
+
 @app.route('/api/visuals/scene-image-history', methods=['POST'])
 @require_auth
 @limiter.limit("200/hour")
@@ -3413,58 +4167,46 @@ def visuals_scene_image_history():
         if not bucket:
             return jsonify({'error': 'Firebase Storage not configured'}), 500
 
-        data = request.json
+        data = request.json or {}
         scene_ids = data.get('scene_ids', [])
         project_id = data.get('project_id')
 
         if not scene_ids:
             return jsonify({'history': {}})
 
-        history = {}
+        history = _build_scene_history('images', scene_ids, project_id)
+        total = sum(len(v) for v in history.values())
+        print(f"[History] Returned image history for {len(history)} scenes ({total} total images)")
+        return jsonify({'history': history})
 
-        # Fetch from project-scoped path
-        all_blobs = list(bucket.list_blobs(prefix=f"images/{project_id}/scene_")) if project_id else []
-        # Only fall back to legacy root path when no project_id is provided
-        if not project_id:
-            all_blobs = list(bucket.list_blobs(prefix="images/scene_"))
+    except Exception as e:
+        return safe_error_response(e)
 
-        def _make_entries(blobs_for_scene, prefix):
-            blobs_for_scene.sort(key=lambda b: b.name, reverse=True)
-            entries = []
-            for blob in blobs_for_scene:
-                filename = blob.name.split('/')[-1]
-                ts_part = filename.replace(prefix, "").rsplit(".", 1)[0]
-                try:
-                    timestamp = int(ts_part)
-                except ValueError:
-                    timestamp = 0
-                signed_url = _generate_signed_url(blob)
-                if signed_url:
-                    entries.append({
-                        'url': signed_url,
-                        'timestamp': timestamp,
-                        'filename': filename,
-                    })
-            return entries
 
-        for sid in scene_ids:
-            safe_id = str(sid).replace("/", "_").replace(" ", "_")
-            prefix = f"{safe_id}_" if safe_id.startswith("scene_") else f"scene_{safe_id}_"
+@app.route('/api/visuals/scene-video-history', methods=['POST'])
+@require_auth
+@limiter.limit("200/hour")
+def visuals_scene_video_history():
+    """Return ALL generated videos per scene from Firebase Storage.
 
-            scene_blobs = [b for b in all_blobs if b.name.split('/')[-1].startswith(prefix)]
+    Mirror of scene-image-history but for videos. Same filename pattern:
+    `videos/{project_id}/scene_{id}_{ts}.mp4` — populated by _rehost_kie_results
+    when the scene generates via Studio Engine video models.
+    """
+    try:
+        if not bucket:
+            return jsonify({'error': 'Firebase Storage not configured'}), 500
 
-            if scene_blobs:
-                # De-duplicate by filename (same image may appear in both paths)
-                seen = {}
-                for b in scene_blobs:
-                    fn = b.name.split('/')[-1]
-                    if fn not in seen:
-                        seen[fn] = b
-                unique_blobs = list(seen.values())
-                history[str(sid)] = _make_entries(unique_blobs, prefix)
+        data = request.json or {}
+        scene_ids = data.get('scene_ids', [])
+        project_id = data.get('project_id')
 
-        total_images = sum(len(v) for v in history.values())
-        print(f"[History] Returned image history for {len(history)} scenes ({total_images} total images)")
+        if not scene_ids:
+            return jsonify({'history': {}})
+
+        history = _build_scene_history('videos', scene_ids, project_id)
+        total = sum(len(v) for v in history.values())
+        print(f"[History] Returned video history for {len(history)} scenes ({total} total videos)")
         return jsonify({'history': history})
 
     except Exception as e:

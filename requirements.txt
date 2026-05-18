@@ -6,3 +6,6 @@ gunicorn==23.0.0
 firebase-admin==7.1.0
 cryptography==46.0.5
 flask-limiter==4.1.1
+PyJWT==2.10.1
+flask-cors==5.0.0
+jsonschema==4.23.0

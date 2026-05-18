@@ -2634,11 +2634,6 @@ FIRST FRAME PROMPT format (for image generation):
 {first_frame_template}
 ```
 
-LAST FRAME PROMPT format (must preserve identity — same subject, wardrobe, environment):
-```
-{last_frame_template}
-```
-
 VEO 3.1 VIDEO PROMPT format:
 ```
 {veo_template}
@@ -2965,7 +2960,6 @@ Return a JSON object with this EXACT structure:
       "directors_intent": "What the audience should feel",
       "cutting_rationale": "Why the cut happens here (narrative shift, emotion change, visual logic, etc.)",
       "first_frame_prompt": "Full structured first frame prompt using the approved schema fields",
-      "last_frame_prompt": "Full structured last frame prompt using the approved schema fields",
       "veo_prompt": "Full Veo 3.1 video prompt"{prod_claim_field}
     }}}}
   ],
@@ -3482,6 +3476,86 @@ Return a JSON object:
 ⚠️ Return ONLY valid JSON. No commentary. Begin."""
 
     return prompt
+
+
+def build_boundary_stitcher_prompt(boundary_pairs: list, visual_brief: dict = None) -> str:
+    """
+    Boundary Stitcher: patches cross-act transitions after the parallel 6-phase
+    pipeline merges. Sees only the joint shots (last of prev act + first of next act).
+    Emits DELTAS — never rewrites shots.
+
+    Args:
+        boundary_pairs: list of {prev: shot, next: shot, prev_act, next_act}
+        visual_brief: optional global motifs from Script Doctor
+    """
+    import json as _json
+
+    visual_brief_section = ""
+    if visual_brief:
+        motifs = visual_brief.get("global_motifs", {}) if isinstance(visual_brief, dict) else {}
+        visual_brief_section = (
+            "═══════ GLOBAL VISUAL ARC ═══════\n"
+            f"Color Arc: {motifs.get('color_arc', 'Not specified')}\n"
+            f"Emotional Throughline: {motifs.get('emotional_throughline', 'Not specified')}\n"
+            f"Recurring Symbols: {motifs.get('recurring_symbols', [])}\n"
+        )
+
+    pairs_text = []
+    for i, pair in enumerate(boundary_pairs):
+        prev = pair.get('prev', {})
+        nxt = pair.get('next', {})
+        pairs_text.append(
+            f"BOUNDARY {i + 1}: {pair.get('prev_act', '?')} → {pair.get('next_act', '?')}\n"
+            f"PREV shot {prev.get('shot_number', '?')}:\n{_json.dumps(prev, indent=2, ensure_ascii=False)}\n"
+            f"NEXT shot {nxt.get('shot_number', '?')}:\n{_json.dumps(nxt, indent=2, ensure_ascii=False)}\n"
+        )
+    pairs_block = "\n──────\n".join(pairs_text)
+
+    return f"""You are THE BOUNDARY STITCHER. Five different agents wrote different acts of this
+video in parallel. They didn't see each other's work. Your job: fix ONLY the joints
+between acts so the camera, lighting, and visual blocking flow naturally from one
+act to the next. Do NOT smooth everything — viewers expect cut energy. Only patch
+genuine breaks.
+
+{visual_brief_section}
+═══════ ACT BOUNDARIES (PREV act's last shot → NEXT act's first shot) ═══════
+
+{pairs_block}
+
+═══════ YOUR TASK ═══════
+
+For each boundary, ask: does the PREV shot's ending state hand off cleanly to the
+NEXT shot's opening state? Specifically check:
+- CAMERA: does prev's camera_movement land somewhere that next's framing can pick up?
+- LIGHTING: is lighting_mood consistent across the cut (intentional shift is fine —
+  contradiction is not)?
+- VISUAL: does the first_frame_prompt's establishing shot ignore the prev shot's
+  closing geography?
+
+If the joint is fine, emit NO patch for it. If a real break exists, emit MINIMAL
+deltas on ONE OR TWO fields per side — usually just on the NEXT shot to bridge
+into prev's ending state. Never modify: script_beat, narration, shot_number, act,
+beat, veo_prompt, duration.
+
+PATCHABLE FIELDS: camera_movement, camera_angle, lighting_mood, visual,
+first_frame_prompt.
+
+═══════ OUTPUT (STRICT JSON) ═══════
+
+Return ONLY valid JSON. No commentary. Empty patches list is valid if nothing needs fixing.
+
+{{
+  "patches": [
+    {{
+      "shot_number": "<the shot to patch>",
+      "field": "<one of: camera_movement, camera_angle, lighting_mood, visual, first_frame_prompt>",
+      "new_value": "<the new value, preserving the rest of the shot>",
+      "reason": "<one short sentence: why this bridge is needed>"
+    }}
+  ]
+}}
+
+Begin."""
 
 
 def build_director_prompt(narration_json: dict, duration_minutes: int = 10,
@@ -4060,60 +4134,57 @@ CRITICAL: You MUST generate VALID JSON with correct syntax:
     return prompt
 
 
-def build_script_structuring_prompt(raw_text: str, duration_minutes: int = 10) -> str:
+def build_script_structuring_prompt(chunks: list, duration_minutes: int = 10) -> str:
     """
-    Script Structurer — takes raw plain-text narration and breaks it into
-    proper acts and beats, matching the narration JSON format used throughout the pipeline.
+    Script Labeler — receives pre-split narration chunks and returns ONLY
+    act/beat labels keyed by chunk index. The LLM never re-emits user text,
+    which makes content loss structurally impossible. The backend zips the
+    labels back onto the verbatim chunks.
     """
-    prompt = f"""You are a Script Structure Editor. You receive a raw, unstructured narration script
-and your job is to break it into clean acts and beats — the same format a professional scriptwriter would produce.
+    # Render chunks with a short preview only — the backend already holds
+    # the verbatim text, so the labeler doesn't need the full body.
+    preview_lines = []
+    for i, chunk in enumerate(chunks):
+        preview = chunk.strip().replace("\n", " ")
+        if len(preview) > 200:
+            preview = preview[:200].rstrip() + "…"
+        preview_lines.append(f"[{i}] {preview}")
+    chunk_block = "\n".join(preview_lines)
+    last_index = len(chunks) - 1
 
-═══════ RAW SCRIPT ═══════
-{raw_text}
+    prompt = f"""You are a Script Labeler. The user's narration script has already been
+split into {len(chunks)} numbered chunks. Your ONLY job is to assign each chunk an
+ACT name and a BEAT name. You must NOT rewrite, summarize, paraphrase, or echo any
+chunk text. The chunk text below is shown ONLY for context — the backend already
+holds the verbatim words.
+
+═══════ CHUNKS (previews only, truncated) ═══════
+{chunk_block}
 
 ═══════ YOUR TASK ═══════
-Analyze the full text above and split it into logical ACTS and BEATS.
+For every chunk index from 0 to {last_index} inclusive, return one label with:
+- "act": the act this chunk belongs to (e.g. "ACT 1: HOOK", "ACT 2: SETUP", "ACT 3: PAYOFF")
+- "beat": a short descriptive beat name within that act (e.g. "Cold Open", "The Question", "The Reveal")
 
-RULES:
-1. Read the ENTIRE script first to understand the narrative arc
-2. Identify natural topic shifts, emotional turns, and structural transitions
-3. Group related paragraphs/sentences into BEATS (each beat = one distinct narrative moment or topic)
-4. Group beats into ACTS (each act = a major phase of the story — setup, development, climax, resolution, etc.)
-5. The narration text within each beat must be the EXACT words from the original script — do NOT rewrite, summarize, or paraphrase. Copy word-for-word.
-6. Every single word from the original script must appear in exactly one beat — nothing dropped, nothing duplicated
-7. Give each act a clear name (e.g., "ACT 1: THE SETUP", "ACT 2: THE CONFLICT")
-8. Give each beat a specific, descriptive name that reflects its content (e.g., "The Discovery", "Rising Stakes", "The Paradox Revealed")
-9. Aim for 3-5 acts with 2-5 beats each, depending on script length
-10. Target duration: approximately {duration_minutes} minutes
+Guidelines:
+- Read all chunk previews first to understand the arc.
+- Group consecutive chunks under the same act + beat when they belong to the same narrative moment — the backend will merge them.
+- Aim for 3–5 distinct acts overall (depending on script length and ~{duration_minutes} min target).
+- Use the SAME act string for every chunk in that act (case + punctuation must match exactly).
+- Every index from 0 to {last_index} must appear exactly once.
 
 ═══════ OUTPUT FORMAT ═══════
-Return a JSON object with this EXACT structure:
+Return ONLY valid JSON — no commentary, no markdown fences — with this exact shape:
 {{
-  "title": "Best-guess title based on the script content",
-  "duration_minutes": {duration_minutes},
-  "narration": [
-    {{
-      "act": "ACT 1: THE SETUP",
-      "beat": "The Hook",
-      "text": "Exact narration text for this beat, copied verbatim from the original."
-    }},
-    {{
-      "act": "ACT 1: THE SETUP",
-      "beat": "Setting the Stage",
-      "text": "Exact narration text for this beat..."
-    }},
-    {{
-      "act": "ACT 2: THE CONFLICT",
-      "beat": "The Turning Point",
-      "text": "Exact narration text for this beat..."
-    }}
+  "title": "Short best-guess title for the script",
+  "labels": [
+    {{ "index": 0, "act": "ACT 1: HOOK", "beat": "Cold Open" }},
+    {{ "index": 1, "act": "ACT 1: HOOK", "beat": "The Question" }},
+    {{ "index": 2, "act": "ACT 2: SETUP", "beat": "Context" }}
   ]
 }}
 
-CRITICAL:
-- The text fields must contain the EXACT original words — you are STRUCTURING, not rewriting
-- Every word from the input must appear in the output — no content may be dropped
-- Return ONLY valid JSON. No commentary. Begin."""
+Do NOT include a "text" field anywhere. Do NOT echo the chunk text. Begin."""
 
     return prompt
 
@@ -4312,7 +4383,8 @@ def build_dp_prompt(storyboard_shots: list, style_analysis: dict = None,
     Phase 5 of 6: THE DIRECTOR OF PHOTOGRAPHY — Final Prompt Writer.
 
     Takes the continuity-reviewed shots (with full visual + camera direction) and writes
-    the final first_frame_prompt, last_frame_prompt, and veo_prompt for each shot.
+    the final first_frame_prompt and veo_prompt for each shot.
+    last_frame_prompt deprecated 2026-05-17 — modern video models infer end frame from motion.
 
     Upgraded with creative authority over lighting design, atmosphere, and texture.
     Uses the Visual Brief for mood-informed lighting and atmospheric choices.
@@ -4434,7 +4506,7 @@ Reference the mood_atmosphere and color_palette_shift for each beat when decidin
     prompt = f"""You are THE DIRECTOR OF PHOTOGRAPHY for a video production. The Director chose cuts and
 camera intent. The Cinematographer specified camera technique. The Storyboard Artist designed
 visual compositions. The Continuity Supervisor verified quality. Your job is to write the
-final generation prompts: first_frame_prompt, last_frame_prompt, and veo_prompt.
+final generation prompts: first_frame_prompt and veo_prompt.
 
 You are NOT a mechanical transcriber. You bring CREATIVE AUTHORITY over:
 - LIGHTING DESIGN: Specify light source, direction, quality, color temperature, and how
@@ -4499,18 +4571,15 @@ Use "shot_size" for framing.
 
 ═══════ YOUR TASK ═══════
 
-For EACH shot above, write these three fields using the prompt schema templates above:
+For EACH shot above, write these two fields using the prompt schema templates above:
 
 1. "first_frame_prompt": Full structured first frame prompt using the active schema fields.
    Describe the SCENE from the "visual" field using the exact bracket format specified above.
    This is the starting state of the shot.
 
-2. "last_frame_prompt": Full structured last frame prompt. SAME subject, wardrobe, and
-   environment as first frame, but with END pose and END expression.
-   Use [SAME AS FIRST FRAME] for unchanging fields.
-
-3. "veo_prompt": Full Veo 3.1 video prompt describing the MOTION/TRANSITION between
-   first and last frame. Include camera movement, audio, and action.
+2. "veo_prompt": Full Veo 3.1 video prompt describing the MOTION the shot performs.
+   Include camera movement, audio, and action. The model infers the end state from
+   the motion description — do NOT specify a separate last frame.
 
 Also generate a "timestamp" field with sequential timestamps based on duration.
 
@@ -4572,7 +4641,6 @@ Return a JSON object with this EXACT structure:
       "character_expression": "<from input>",
       "visual_continuity_notes": "<from input>",
       "first_frame_prompt": "Full structured first frame prompt using approved schema",
-      "last_frame_prompt": "Full structured last frame prompt using approved schema",
       "veo_prompt": "Full Veo 3.1 video prompt with motion and audio"
     }}
   ],

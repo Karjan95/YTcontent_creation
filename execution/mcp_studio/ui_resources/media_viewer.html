@@ -1,0 +1,1115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Studio Viewer</title>
+<style>
+  :root { color-scheme: dark light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 16px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: transparent;
+    color: #e8eaed;
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  .card {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 20px;
+    border-radius: 20px;
+    background: #1a1a1d;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #c8c9cc;
+    font-size: 15px;
+  }
+  .card-tool {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 500;
+  }
+  .card-tool .dot {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: linear-gradient(135deg, #b8f560, #6dd400);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #000;
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .card-tool .tool-name { color: #9aa0a6; font-weight: 400; }
+  .prompt {
+    color: #e8eaed;
+    font-size: 15px;
+    white-space: pre-wrap;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    cursor: pointer;
+  }
+  .prompt.expanded { -webkit-line-clamp: unset; display: block; }
+  .badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.05);
+    color: #c8c9cc;
+    font-size: 13.5px;
+    font-weight: 500;
+  }
+  .badge svg { width: 16px; height: 16px; opacity: 0.85; }
+  .media-frame {
+    border-radius: 16px;
+    background: #0e0f12;
+    overflow: hidden;
+    min-height: 320px;
+  }
+  .media-frame.grid { display: grid; gap: 10px; padding: 10px; }
+  .media-frame.grid.cols-2 { grid-template-columns: 1fr 1fr; }
+  .media {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    border-radius: 12px;
+    background: #0e0f12;
+    width: 100%;
+  }
+  video.media, audio.media { width: 100%; }
+  audio.media { height: 56px; border-radius: 10px; }
+  .placeholder {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 22px;
+    min-height: 360px;
+    border-radius: 16px;
+    background: radial-gradient(120% 80% at 0% 0%, rgba(110,210,80,0.18), transparent 60%),
+                #0e0f12;
+    overflow: hidden;
+  }
+  .placeholder::before {
+    content: "";
+    position: absolute; inset: 0;
+    background: linear-gradient(110deg, transparent 25%, rgba(255,255,255,0.04) 50%, transparent 75%);
+    background-size: 200% 100%;
+    animation: shimmer 2.4s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+  .placeholder-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    border-radius: 999px;
+    background: rgba(0,0,0,0.45);
+    color: #e8eaed;
+    font-size: 15px;
+    font-weight: 500;
+    z-index: 1;
+  }
+  .spinner {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2.5px solid rgba(255,255,255,0.18);
+    border-top-color: #b8f560;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .placeholder .meta {
+    z-index: 1;
+    color: #9aa0a6;
+    font-size: 13.5px;
+  }
+  .actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 20px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.06);
+    color: #e8eaed;
+    border: none;
+    font-size: 14.5px;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: none;
+    font-family: inherit;
+    position: relative;
+  }
+  .btn:hover { background: rgba(255,255,255,0.10); }
+  .btn-primary { background: #b8f560; color: #0d0d0d; }
+  .btn-primary:hover { background: #c9ff78; }
+  .btn svg { width: 17px; height: 17px; }
+  .btn .tip {
+    position: absolute;
+    transform: translate(-50%, -130%);
+    background: #0e0f12;
+    color: #e8eaed;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    border: 1px solid rgba(255,255,255,0.1);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    white-space: nowrap;
+  }
+  .btn.show-tip .tip { opacity: 1; }
+  .caption {
+    color: #9aa0a6;
+    font-size: 11.5px;
+  }
+  a.link {
+    color: #8ab4f8;
+    text-decoration: none;
+    word-break: break-all;
+  }
+  a.link:hover { text-decoration: underline; }
+  .err {
+    color: #f28b82;
+    background: rgba(242,139,130,.08);
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: 12.5px;
+  }
+  .loading { color: #9aa0a6; font-style: italic; padding: 10px; }
+  /* Per-image tile overlay (batch grid) */
+  .tile { position: relative; border-radius: 12px; overflow: hidden; cursor: zoom-in; background: #0e0f12; }
+  .tile img { display: block; width: 100%; height: auto; }
+  .tile-actions {
+    position: absolute;
+    top: 8px; right: 8px;
+    display: flex; gap: 6px;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .tile:hover .tile-actions, .tile:focus-within .tile-actions { opacity: 1; }
+  .tile-btn {
+    width: 32px; height: 32px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: none;
+    border-radius: 999px;
+    background: rgba(0,0,0,0.65);
+    color: #fff;
+    cursor: pointer;
+    padding: 0;
+  }
+  .tile-btn:hover { background: rgba(0,0,0,0.85); }
+  .tile-btn svg { width: 16px; height: 16px; }
+  /* Lightbox modal */
+  .lightbox {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.92);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 9999;
+    padding: 24px;
+    cursor: zoom-out;
+  }
+  .lightbox img, .lightbox video {
+    max-width: 95vw; max-height: 92vh;
+    border-radius: 8px;
+    display: block;
+    cursor: default;
+  }
+  .lightbox .close {
+    position: absolute; top: 16px; right: 16px;
+    width: 40px; height: 40px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.12);
+    color: #fff;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    border: none;
+    font-size: 22px;
+    font-family: inherit;
+  }
+  .lightbox .close:hover { background: rgba(255,255,255,0.2); }
+  /* Recreate modal — selectable text fallback when clipboard is denied */
+  .modal {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 9998;
+    padding: 24px;
+  }
+  .modal-body {
+    background: #1a1a1d;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px;
+    padding: 20px;
+    max-width: min(520px, 90vw);
+    width: 100%;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .modal-body h3 { margin: 0; font-size: 16px; font-weight: 600; }
+  .modal-body p { margin: 0; color: #9aa0a6; font-size: 13px; }
+  .modal-body textarea {
+    width: 100%;
+    min-height: 140px;
+    background: #0e0f12;
+    color: #e8eaed;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+    resize: vertical;
+  }
+  .modal-body .row { display: flex; gap: 8px; justify-content: flex-end; }
+</style>
+</head>
+<body>
+<div id="root"><div class="loading">Loading…</div></div>
+
+<script type="module">
+const root = document.getElementById("root");
+let elapsedTimer = null;
+
+function clear() {
+  if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+  while (root.firstChild) root.removeChild(root.firstChild);
+}
+
+function el(tag, attrs = {}, children = []) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v;
+    else if (k === "html") node.innerHTML = v;
+    else if (k === "onclick") node.onclick = v;
+    else if (k === "text") node.textContent = v;
+    else node.setAttribute(k, v);
+  }
+  for (const c of [].concat(children)) {
+    if (c == null) continue;
+    if (typeof c === "string") node.appendChild(document.createTextNode(c));
+    else node.appendChild(c);
+  }
+  return node;
+}
+
+// ── Icons (inline SVG so no external load) ──
+const ICONS = {
+  code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+  model: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
+  video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>',
+  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
+  audio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>',
+  ar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="12" rx="2"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+  recreate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
+  expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>',
+};
+
+function icon(name) {
+  const span = document.createElement("span");
+  span.style.display = "inline-flex";
+  span.style.alignItems = "center";
+  span.innerHTML = ICONS[name] || "";
+  return span;
+}
+
+// ── Header ──
+function buildHeader(sc) {
+  const dot = el("span", { class: "dot", text: "S" });
+  const tool = sc?.tool_label || "studio";
+  const left = el("div", { class: "card-tool" }, [
+    dot,
+    el("span", { text: "Studio" }),
+    el("span", { class: "tool-name", text: tool }),
+  ]);
+  const right = el("span", { html: ICONS.code });
+  right.style.color = "#9aa0a6";
+  right.style.marginLeft = "auto";
+  right.style.display = "inline-flex";
+  const header = el("div", { class: "card-header" }, [left, right]);
+  return header;
+}
+
+// ── Prompt caption ──
+function buildPrompt(sc) {
+  const text = (sc?.prompt || "").trim();
+  if (!text) return null;
+  const p = el("div", { class: "prompt", text });
+  p.title = "Click to expand";
+  p.addEventListener("click", () => p.classList.toggle("expanded"));
+  return p;
+}
+
+// ── Badges ──
+// Keys we either render explicitly above (model/AR/duration/audio) or that
+// duplicate things already visible (the count chip, the prompt caption).
+const _SKIP_PARAM_KEYS = new Set([
+  "aspect_ratio", "duration_seconds", "duration", "generate_audio",
+  "audio_enabled", "num_images", "model_id", "prompt", "text",
+]);
+
+function formatParamValue(v) {
+  if (v == null) return null;
+  if (typeof v === "string") return v.length > 80 ? v.slice(0, 77) + "…" : v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (Array.isArray(v)) {
+    if (v.length === 0) return null;
+    if (v.every(x => typeof x !== "object")) return v.join(", ");
+    return `[${v.length} items]`;
+  }
+  if (typeof v === "object") {
+    const keys = Object.keys(v);
+    if (keys.length === 0) return null;
+    return `{${keys.length} fields}`;
+  }
+  return String(v);
+}
+
+function prettyKey(k) {
+  return k.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function buildBadges(sc) {
+  if (!sc) return null;
+  const chips = [];
+  if (sc.model_id) chips.push({ icon: "model", text: sc.model_id });
+  if (sc.kind === "video") chips.push({ icon: "video", text: null });
+  else if (sc.kind === "image" && (sc.image_urls?.length || 0) > 1)
+    chips.push({ icon: "image", text: `x${sc.image_urls.length}` });
+  if (sc.aspect_ratio) chips.push({ icon: "ar", text: sc.aspect_ratio });
+  if (sc.duration_seconds) chips.push({ icon: "clock", text: `${sc.duration_seconds}s` });
+  if (sc.audio_enabled === true) chips.push({ icon: "audio", text: "Audio" });
+
+  // Surface every other param the call carried so users see resolution,
+  // negative_prompt, seed, guidance, etc.
+  const extras = { ...(sc.params_echo || {}) };
+  // Pick a few useful input fields too.
+  const inputs = sc.inputs_echo || {};
+  if (inputs.negative_prompt) extras.negative_prompt = inputs.negative_prompt;
+  if (inputs.seed != null) extras.seed = inputs.seed;
+  for (const [k, v] of Object.entries(extras)) {
+    if (_SKIP_PARAM_KEYS.has(k) || k.startsWith("_")) continue;
+    const formatted = formatParamValue(v);
+    if (!formatted) continue;
+    chips.push({ icon: null, text: `${prettyKey(k)}: ${formatted}` });
+  }
+
+  if (chips.length === 0) return null;
+  const row = el("div", { class: "badges" });
+  for (const c of chips) {
+    const badge = el("span", { class: "badge" }, [
+      c.icon ? icon(c.icon) : null,
+      c.text ? document.createTextNode(c.text) : null,
+    ]);
+    row.appendChild(badge);
+  }
+  return row;
+}
+
+// ── Pending placeholder with live elapsed time ──
+// Stale-cutoff: any pending message that's been "generating" for more than
+// max(2x the ETA upper bound, 30 min) is almost certainly history view of a
+// task that already completed or failed. We stop the timer and show a hint
+// so users aren't misled by a counter ticking forever.
+const STALE_FLOOR_SEC = 30 * 60; // 30 min minimum
+function buildPending(sc) {
+  const frame = el("div", { class: "placeholder" });
+  const row = el("div", { class: "placeholder-row" }, [
+    el("span", { class: "spinner" }),
+    document.createTextNode("Generating"),
+  ]);
+  const meta = el("div", { class: "meta" });
+  const staleHint = el("div", {
+    class: "meta",
+    style: "color:#f8c674;display:none;",
+  });
+  staleHint.textContent = "This status check is stale — ask Claude to refresh.";
+  frame.appendChild(row);
+  frame.appendChild(meta);
+  frame.appendChild(staleHint);
+
+  const startedAt = sc?.started_at ? new Date(sc.started_at).getTime() : Date.now();
+  const lo = Number(sc?.est_seconds_min) || null;
+  const hi = Number(sc?.est_seconds_max) || null;
+  const retry = Number(sc?.retry_after_seconds) || null;
+  const receivedAt = Date.now();
+  const staleAfterSec = Math.max(STALE_FLOOR_SEC, (hi || 60) * 2);
+
+  function fmt(s) {
+    s = Math.max(0, Math.floor(s));
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
+  }
+  function tick() {
+    const elapsed = (Date.now() - startedAt) / 1000;
+    if (elapsed > staleAfterSec) {
+      meta.textContent = `${fmt(staleAfterSec)}+ elapsed${lo && hi ? `  ·  expected ~${lo}-${hi}s` : ""}`;
+      staleHint.style.display = "block";
+      row.querySelector(".spinner")?.style?.setProperty("animation", "none");
+      if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+      return;
+    }
+    const parts = [`${fmt(elapsed)} elapsed`];
+    if (lo && hi) parts.push(`~${lo}-${hi}s`);
+    if (retry) {
+      const next = Math.max(0, retry - (Date.now() - receivedAt) / 1000);
+      if (next > 0) parts.push(`next check ~${Math.ceil(next)}s`);
+    }
+    meta.textContent = parts.join("  ·  ");
+  }
+  tick();
+  if (elapsedTimer) clearInterval(elapsedTimer);
+  elapsedTimer = setInterval(tick, 1000);
+  return frame;
+}
+
+// Build an image tile with hover overlay (download + expand) and click-to-zoom.
+// `inlineBlock` carries base64 data (preferred for download). `url` is the
+// HTTPS fallback used for src when no inline data is present.
+function buildImageTile(opts) {
+  const { inlineBlock, url, index, total, baseName } = opts;
+  const tile = el("div", { class: "tile", tabindex: "0" });
+  const src = inlineBlock?.data
+    ? `data:${inlineBlock.mimeType || "image/png"};base64,${inlineBlock.data}`
+    : url;
+  const img = el("img", { src, alt: total > 1 ? `image ${index+1} of ${total}` : "image" });
+  img.onerror = () => {
+    // If the data-URI path somehow fails, fall through to URL.
+    if (img.src !== url && url) img.src = url;
+  };
+  tile.appendChild(img);
+
+  const actions = el("div", { class: "tile-actions" });
+  // Tile download icon. Claude.ai's iframe sandbox lacks `allow-downloads`,
+  // so `<a download href=data:...>` is silently blocked. The only reliable
+  // path is ui/open-link to ask the host to open the URL externally; the
+  // user saves from the new tab.
+  if (url) {
+    const dl = el("button", { class: "tile-btn", title: "Open / Download" });
+    dl.innerHTML = ICONS.download;
+    dl.onclick = (e) => { e.stopPropagation(); tryOpenLink(url, "image"); };
+    actions.appendChild(dl);
+  }
+
+  const exp = el("button", { class: "tile-btn", title: "Open full size" });
+  exp.innerHTML = ICONS.expand;
+  exp.onclick = (e) => { e.stopPropagation(); openLightbox(src); };
+  actions.appendChild(exp);
+  tile.appendChild(actions);
+
+  tile.addEventListener("click", () => openLightbox(src));
+  tile.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openLightbox(src); }
+  });
+  return tile;
+}
+
+// ── Media (completed) ──
+function buildMedia(result, sc) {
+  const blocks = Array.isArray(result?.content) ? result.content : [];
+  const frame = el("div", { class: "media-frame" });
+
+  const inlineImages = blocks.filter(b => b && b.type === "image" && b.data);
+  const inlineAudio = blocks.filter(b => b && b.type === "audio" && b.data);
+
+  // Determine how many images to render and pair each with its inline block + URL.
+  const imageUrls = Array.isArray(sc?.image_urls) ? sc.image_urls.slice() : [];
+  if (!imageUrls.length && sc?.image_url) imageUrls.push(sc.image_url);
+  const imageCount = Math.max(inlineImages.length, imageUrls.length);
+
+  if (imageCount > 0) {
+    if (imageCount > 1) frame.classList.add("grid", "cols-2");
+    for (let i = 0; i < imageCount; i++) {
+      const tile = buildImageTile({
+        inlineBlock: inlineImages[i] || null,
+        url: imageUrls[i] || null,
+        index: i,
+        total: imageCount,
+        baseName: sc?.kind === "image" ? "image" : (sc?.kind || "asset"),
+      });
+      frame.appendChild(tile);
+    }
+    return frame;
+  }
+
+  // Single video via structuredContent.video_url
+  if (sc?.video_url) {
+    // Claude.ai's iframe CSP is `media-src 'self' blob: data: ...` — it
+    // ignores our _meta.csp and blocks Firebase Storage URLs unconditionally.
+    // Fetch is also blocked (connect-src 'self'). The only working path is
+    // to ask the host to open the URL in a new tab via ui/open-link.
+    // Try inline render first (in case the host CSP relaxes someday); on
+    // error fall back to the open-link button.
+    const v = el("video", { class: "media", controls: "", preload: "metadata", src: sc.video_url });
+    v.addEventListener("error", () => {
+      v.replaceWith(buildOpenLinkButton(sc.video_url, "video"));
+    }, { once: true });
+    frame.appendChild(v);
+    return frame;
+  }
+
+  // Single audio: prefer inline base64
+  if (inlineAudio.length === 1) {
+    const node = renderBlock(inlineAudio[0]);
+    if (node) { frame.appendChild(node); return frame; }
+  }
+
+  // Other inline content blocks (resource_link images/audio/video)
+  let appended = false;
+  for (const b of blocks) {
+    if (b?.type === "text") continue;
+    const node = renderBlock(b);
+    if (node) { frame.appendChild(node); appended = true; }
+  }
+  if (appended) return frame;
+
+  if (sc?.audio_url) {
+    const a = el("audio", { class: "media", controls: "", src: sc.audio_url });
+    frame.appendChild(a);
+    return frame;
+  }
+  return null;
+}
+
+function renderBlock(b) {
+  if (!b || typeof b !== "object") return null;
+  const type = b.type;
+  if (type === "image" && b.data) {
+    const img = el("img", { class: "media", alt: "Generated image" });
+    img.src = `data:${b.mimeType || "image/png"};base64,${b.data}`;
+    img.onerror = () => img.replaceWith(linkFallback(img.src.slice(0, 80) + "…", "image failed to load"));
+    return img;
+  }
+  if (type === "audio" && b.data) {
+    const a = el("audio", { class: "media", controls: "" });
+    a.src = `data:${b.mimeType || "audio/mpeg"};base64,${b.data}`;
+    return a;
+  }
+  if (type === "resource_link" && b.uri) {
+    const mime = (b.mimeType || "").toLowerCase();
+    if (mime.startsWith("video/")) {
+      const v = el("video", { class: "media", controls: "", preload: "metadata", src: b.uri });
+      v.onerror = () => v.replaceWith(linkFallback(b.uri, b.name || "video"));
+      return v;
+    }
+    if (mime.startsWith("image/")) {
+      const img = el("img", { class: "media", src: b.uri, alt: b.name || "image" });
+      img.onerror = () => img.replaceWith(linkFallback(b.uri, b.name || "image"));
+      return img;
+    }
+    if (mime.startsWith("audio/")) {
+      return el("audio", { class: "media", controls: "", src: b.uri });
+    }
+    return linkFallback(b.uri, b.name || b.uri);
+  }
+  return null;
+}
+
+function linkFallback(href, label) {
+  const a = document.createElement("a");
+  a.className = "link";
+  a.href = href;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.textContent = label;
+  return a;
+}
+
+// Ask the host to open a URL externally. Falls back to copying the URL to
+// the clipboard (with a modal if even clipboard is denied) when the host
+// doesn't implement ui/open-link.
+async function tryOpenLink(url, label = "media") {
+  if (!url) return;
+  if (mcpApp) {
+    try {
+      await mcpApp.openLink(url, "_blank");
+      return true;
+    } catch (e) {
+      console.warn("[viewer] ui/open-link rejected:", e?.message || e);
+    }
+  }
+  // Last resort: copy URL so user can paste it into a browser tab.
+  const ok = await copyTextRobust(url);
+  if (!ok) openRecreateModal(url);
+  return false;
+}
+
+// Big "open externally" panel for media we can't render inline (videos).
+function buildOpenLinkButton(href, label) {
+  const wrap = el("div", {
+    style: "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:48px 24px;min-height:280px;text-align:center;"
+  });
+  const title = el("div", { style: "color:#9aa0a6;font-size:13.5px;" });
+  title.textContent = `Inline ${label || "media"} preview blocked by host`;
+  wrap.appendChild(title);
+  const btn = el("button", { class: "btn btn-primary" });
+  btn.innerHTML = ICONS.expand;
+  btn.appendChild(document.createTextNode(` Open ${label || "media"} in new tab`));
+  btn.onclick = () => {
+    tryOpenLink(href, label).then(ok => {
+      if (!ok) showTip(btn, "Copied URL — paste in browser");
+    });
+  };
+  wrap.appendChild(btn);
+  // Also show the URL for manual copy if the host blocks open-link AND clipboard.
+  const small = el("div", { style: "color:#666;font-size:11px;word-break:break-all;max-width:480px;" });
+  small.textContent = href;
+  wrap.appendChild(small);
+  return wrap;
+}
+
+// ── Lightbox: click an image to view full-size ──
+function openLightbox(srcOrNode) {
+  closeLightbox();
+  const box = el("div", { class: "lightbox" });
+  let inner;
+  if (typeof srcOrNode === "string") {
+    inner = el("img", { src: srcOrNode, alt: "preview" });
+  } else if (srcOrNode instanceof HTMLImageElement) {
+    inner = el("img", { src: srcOrNode.src, alt: "preview" });
+  } else if (srcOrNode instanceof HTMLVideoElement) {
+    inner = el("video", { src: srcOrNode.src, controls: "", autoplay: "" });
+  } else {
+    inner = srcOrNode;
+  }
+  // Prevent click on the media from closing.
+  inner.addEventListener("click", (e) => e.stopPropagation());
+  box.appendChild(inner);
+  const closeBtn = el("button", { class: "close", "aria-label": "Close" });
+  closeBtn.textContent = "×";
+  closeBtn.onclick = (e) => { e.stopPropagation(); closeLightbox(); };
+  box.appendChild(closeBtn);
+  box.addEventListener("click", closeLightbox);
+  document.body.appendChild(box);
+  document.addEventListener("keydown", _lightboxEsc);
+}
+function closeLightbox() {
+  document.querySelectorAll(".lightbox").forEach(n => n.remove());
+  document.removeEventListener("keydown", _lightboxEsc);
+}
+function _lightboxEsc(e) { if (e.key === "Escape") closeLightbox(); }
+
+// ── Recreate-payload modal (clipboard fallback) ──
+function openRecreateModal(payloadText) {
+  closeModal();
+  const body = el("div", { class: "modal-body" });
+  body.appendChild(el("h3", { text: "Recreate payload" }));
+  body.appendChild(el("p", { text: "Clipboard access was blocked. Select and copy this payload, then paste it back into chat." }));
+  const ta = el("textarea");
+  ta.value = payloadText;
+  ta.readOnly = true;
+  body.appendChild(ta);
+  const row = el("div", { class: "row" });
+  const close = el("button", { class: "btn" });
+  close.textContent = "Close";
+  close.onclick = closeModal;
+  row.appendChild(close);
+  const tryCopy = el("button", { class: "btn btn-primary" });
+  tryCopy.textContent = "Try copy again";
+  tryCopy.onclick = async () => {
+    ta.focus(); ta.select();
+    const ok = await copyTextRobust(payloadText);
+    if (ok) closeModal();
+    else showTip(tryCopy, "Still blocked — select manually");
+  };
+  row.appendChild(tryCopy);
+  body.appendChild(row);
+  const modal = el("div", { class: "modal" }, [body]);
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+  body.addEventListener("click", (e) => e.stopPropagation());
+  document.body.appendChild(modal);
+  // Auto-select so Cmd+C works immediately.
+  setTimeout(() => { ta.focus(); ta.select(); }, 50);
+  document.addEventListener("keydown", _modalEsc);
+}
+function closeModal() {
+  document.querySelectorAll(".modal").forEach(n => n.remove());
+  document.removeEventListener("keydown", _modalEsc);
+}
+function _modalEsc(e) { if (e.key === "Escape") closeModal(); }
+
+// ── Blob-based download from inline base64 (no popup permission needed) ──
+function base64ToBlob(b64, mime) {
+  const bin = atob(b64);
+  const len = bin.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime || "application/octet-stream" });
+}
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename || "download";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 500);
+}
+function downloadInlineBlock(block, filename) {
+  if (!block || !block.data) return false;
+  try {
+    const blob = base64ToBlob(block.data, block.mimeType || "application/octet-stream");
+    downloadBlob(blob, filename);
+    return true;
+  } catch (e) {
+    console.warn("[viewer] downloadInlineBlock failed:", e);
+    return false;
+  }
+}
+function extFromMime(mime) {
+  if (!mime) return "bin";
+  if (mime.startsWith("image/jpeg")) return "jpg";
+  if (mime.startsWith("image/")) return mime.split("/")[1].split(";")[0];
+  if (mime.startsWith("audio/mpeg")) return "mp3";
+  if (mime.startsWith("audio/")) return mime.split("/")[1].split(";")[0];
+  if (mime.startsWith("video/")) return mime.split("/")[1].split(";")[0];
+  return "bin";
+}
+
+// ── Clipboard helper with sandbox fallback ──
+async function copyTextRobust(text) {
+  // Try the modern API first.
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* fall through */ }
+  // Fallback: hidden textarea + execCommand("copy"). Works in older sandboxes
+  // and when the Clipboard API permission is denied.
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-9999px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+function showTip(btn, text, ms = 1400) {
+  let tip = btn.querySelector(".tip");
+  if (!tip) {
+    tip = el("span", { class: "tip" });
+    btn.appendChild(tip);
+  }
+  tip.textContent = text;
+  btn.classList.add("show-tip");
+  setTimeout(() => btn.classList.remove("show-tip"), ms);
+}
+
+// Collect every URL we have for the current result (for batch Copy URL).
+function collectAllUrls(result, sc) {
+  const out = [];
+  if (Array.isArray(sc?.urls)) for (const u of sc.urls) if (u) out.push(u);
+  if (Array.isArray(sc?.image_urls)) for (const u of sc.image_urls) if (u && !out.includes(u)) out.push(u);
+  if (sc?.video_url && !out.includes(sc.video_url)) out.push(sc.video_url);
+  if (sc?.audio_url && !out.includes(sc.audio_url)) out.push(sc.audio_url);
+  if (sc?.primary_url && !out.includes(sc.primary_url)) out.unshift(sc.primary_url);
+  return out;
+}
+
+// ── Action row (Download, Copy URL, Recreate) ──
+let mcpApp = null;
+let lastResult = null;
+function buildActions(result, sc) {
+  if (!sc || sc.status === "pending") return null;
+  const allUrls = collectAllUrls(result, sc);
+  if (allUrls.length === 0) return null;
+  const inlineImages = (result?.content || []).filter(b => b?.type === "image" && b.data);
+  const inlineAudio = (result?.content || []).filter(b => b?.type === "audio" && b.data);
+
+  const row = el("div", { class: "actions" });
+
+  // Download / Open in new tab.
+  // Claude.ai's iframe sandbox lacks `allow-downloads`, so `<a download href=data:...>`
+  // is silently blocked even with inline base64 data. The only working path
+  // is ui/open-link: ask the host to open the URL in a new tab outside the
+  // sandbox; user saves from the resulting page (right-click → Save as).
+  const primaryUrl = sc.primary_url || allUrls[0];
+  const dl = el("button", { class: "btn btn-primary" });
+  dl.innerHTML = ICONS.download;
+  dl.appendChild(document.createTextNode(" Open / Download"));
+  if (allUrls.length > 1) {
+    const hint = el("span", { style: "opacity:0.7;font-size:12px;margin-left:6px;" });
+    hint.textContent = "(hover each tile to grab the rest)";
+    dl.appendChild(hint);
+  }
+  dl.onclick = () => {
+    tryOpenLink(primaryUrl, sc.kind || "media").then(ok => {
+      showTip(dl, ok ? "Opened in new tab" : "Copied URL — paste in browser");
+    });
+  };
+  row.appendChild(dl);
+
+  // Copy URL — single URL if 1, all URLs newline-separated if many.
+  const copy = el("button", { class: "btn" });
+  copy.innerHTML = ICONS.copy;
+  copy.appendChild(document.createTextNode(allUrls.length > 1 ? ` Copy URLs (${allUrls.length})` : " Copy URL"));
+  copy.onclick = async () => {
+    const text = allUrls.join("\n");
+    const ok = await copyTextRobust(text);
+    showTip(copy, ok ? (allUrls.length > 1 ? `Copied ${allUrls.length} URLs` : "Copied") : "Copy failed");
+  };
+  row.appendChild(copy);
+
+  // Recreate — try host callTool, fall back to clipboard, fall back again
+  // to a modal so the user can always select+copy manually.
+  const rec = el("button", { class: "btn" });
+  rec.innerHTML = ICONS.recreate;
+  rec.appendChild(document.createTextNode(" Recreate"));
+  rec.onclick = async () => {
+    const payload = {
+      model_id: sc.model_id,
+      inputs: sc.inputs_echo || { prompt: sc.prompt || "" },
+      params: sc.params_echo || {},
+      project_id: sc.project_id,
+      n: sc.image_urls?.length || sc.urls?.length || 1,
+    };
+    let hostHandled = false;
+    try {
+      if (mcpApp && typeof mcpApp.callTool === "function") {
+        await mcpApp.callTool("studio_generate", payload);
+        hostHandled = true;
+      }
+    } catch (e) { /* fall through */ }
+    if (hostHandled) { showTip(rec, "Recreating…"); return; }
+    const text =
+      `Recreate via studio_generate with model_id=${JSON.stringify(payload.model_id)}, ` +
+      `inputs=${JSON.stringify(payload.inputs)}, ` +
+      `params=${JSON.stringify(payload.params)}, ` +
+      `project_id=${JSON.stringify(payload.project_id)}, n=${payload.n}.`;
+    const ok = await copyTextRobust(text);
+    if (ok) {
+      showTip(rec, "Copied — paste in chat");
+    } else {
+      openRecreateModal(text);
+    }
+  };
+  row.appendChild(rec);
+  return row;
+}
+
+// ── Size reporting: tell the host how tall to make the iframe ──
+let lastReportedHeight = 0;
+function reportSize() {
+  if (!mcpApp || !mcpApp.connected) return;
+  // Use the card's outer height + body padding so the host frame fits snugly.
+  const card = root.firstElementChild;
+  const h = Math.ceil((card ? card.getBoundingClientRect().height : root.getBoundingClientRect().height) + 24);
+  if (h && Math.abs(h - lastReportedHeight) >= 4) {
+    lastReportedHeight = h;
+    mcpApp.notify(M_SIZE_CHANGED, { height: h });
+  }
+}
+let resizeObserver = null;
+function startResizeWatch() {
+  if (resizeObserver) return;
+  if (typeof ResizeObserver === "function") {
+    resizeObserver = new ResizeObserver(() => reportSize());
+    resizeObserver.observe(root);
+  } else {
+    window.addEventListener("resize", reportSize);
+    setInterval(reportSize, 500);
+  }
+}
+
+// ── Top-level render ──
+function buildCard(result) {
+  clear();
+  const sc = result?.structuredContent || {};
+  const card = el("div", { class: "card" });
+  card.appendChild(buildHeader(sc));
+
+  const prompt = buildPrompt(sc);
+  if (prompt) card.appendChild(prompt);
+
+  const badges = buildBadges(sc);
+  if (badges) card.appendChild(badges);
+
+  if (result?.isError) {
+    const blocks = Array.isArray(result?.content) ? result.content : [];
+    const msg = (blocks.find(b => b.type === "text") || {}).text || sc?.error || "Tool returned an error.";
+    card.appendChild(el("div", { class: "err", text: msg }));
+    root.appendChild(card);
+    return;
+  }
+
+  if (sc.status === "pending") {
+    card.appendChild(buildPending(sc));
+    root.appendChild(card);
+    return;
+  }
+
+  lastResult = result;
+  const media = buildMedia(result, sc);
+  if (media) card.appendChild(media);
+
+  const actions = buildActions(result, sc);
+  if (actions) card.appendChild(actions);
+
+  if (!media && !actions) {
+    card.appendChild(el("div", { class: "caption", text: "(no content returned)" }));
+  }
+
+  root.appendChild(card);
+
+  // Resize the host iframe to fit the rendered card. Media nodes load async,
+  // so we also resize on each image/video metadata load.
+  startResizeWatch();
+  requestAnimationFrame(reportSize);
+  root.querySelectorAll("img").forEach(img => {
+    if (img.complete) return;
+    img.addEventListener("load", reportSize, { once: true });
+    img.addEventListener("error", reportSize, { once: true });
+  });
+  root.querySelectorAll("video").forEach(v => {
+    v.addEventListener("loadedmetadata", reportSize, { once: true });
+  });
+}
+
+// ── Minimal MCP-Apps client (JSON-RPC 2.0 over postMessage) ──
+// Implements the spec from @modelcontextprotocol/ext-apps without an external
+// import, so the iframe works under any host CSP.
+// Method strings come from the spec: see https://github.com/modelcontextprotocol/ext-apps
+const PROTOCOL_VERSION = "2026-01-26";
+const M_INITIALIZE = "ui/initialize";
+const M_INITIALIZED = "ui/notifications/initialized";
+const M_TOOL_RESULT = "ui/notifications/tool-result";
+const M_TOOL_INPUT = "ui/notifications/tool-input";
+const M_HOST_CONTEXT_CHANGED = "ui/notifications/host-context-changed";
+const M_SIZE_CHANGED = "ui/notifications/size-changed";
+const M_OPEN_LINK = "ui/open-link";
+
+class MCPAppClient {
+  constructor(appInfo) {
+    this.appInfo = appInfo;
+    this.handlers = {};
+    this.pending = new Map();
+    this.nextId = 1;
+    this.connected = false;
+    window.addEventListener("message", (ev) => this._onMessage(ev));
+  }
+  on(method, handler) { this.handlers[method] = handler; }
+  _send(msg) { window.parent.postMessage(msg, "*"); }
+  notify(method, params) { this._send({ jsonrpc: "2.0", method, params: params || {} }); }
+  request(method, params) {
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this._send({ jsonrpc: "2.0", id, method, params: params || {} });
+    });
+  }
+  _onMessage(ev) {
+    const m = ev.data;
+    if (!m || typeof m !== "object" || m.jsonrpc !== "2.0") {
+      // Permissive fallback: some hosts may send a raw tool result envelope.
+      if (m && (m.method === "toolResult" || m.type === "tool/result")) {
+        const h = this.handlers[M_TOOL_RESULT];
+        if (h) h(m.params || m.result || m);
+      }
+      return;
+    }
+    if (typeof m.method === "string") {
+      const h = this.handlers[m.method];
+      let result = {};
+      try { if (h) result = h(m.params) || {}; }
+      catch (e) { console.error("[viewer] handler error", m.method, e); }
+      if (m.id != null) {
+        this._send({ jsonrpc: "2.0", id: m.id, result });
+      }
+    } else if (m.id != null) {
+      const p = this.pending.get(m.id);
+      if (p) {
+        this.pending.delete(m.id);
+        m.error ? p.reject(m.error) : p.resolve(m.result);
+      }
+    }
+  }
+  // Ask the host (parent window outside the iframe) to open a URL. This is
+  // the ONLY way to escape Claude.ai's sandbox CSP (no allow-popups,
+  // connect-src 'self', media-src 'self' blob: data:). Returns whatever the
+  // host responds; rejects on host error.
+  async openLink(url, target = "_blank") {
+    return this.request(M_OPEN_LINK, { url, target });
+  }
+  async connect() {
+    try {
+      const res = await Promise.race([
+        this.request(M_INITIALIZE, {
+          protocolVersion: PROTOCOL_VERSION,
+          capabilities: {},
+          clientInfo: this.appInfo,
+        }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("init timeout")), 4000)),
+      ]);
+      this.host = res;
+    } catch (e) {
+      console.debug("[viewer] initialize handshake skipped:", e?.message || e);
+    }
+    this.notify(M_INITIALIZED, {});
+    this.connected = true;
+  }
+}
+
+async function init() {
+  const app = new MCPAppClient({ name: "Gemini Studio Viewer", version: "0.4.0" });
+  mcpApp = app;
+  app.on(M_TOOL_RESULT, (params) => buildCard(params));
+  app.on(M_TOOL_INPUT, () => {});            // partial tool args — ignore
+  app.on(M_HOST_CONTEXT_CHANGED, () => {});  // theme/locale changes — ignore for now
+  // Some hosts inject the tool result synchronously before the iframe script
+  // runs; pick it up if present.
+  if (window.__toolResult) {
+    try { buildCard(window.__toolResult); } catch (e) { console.error(e); }
+  }
+  try {
+    await app.connect();
+  } catch (e) {
+    console.warn("[viewer] connect failed:", e);
+  }
+  // Once connected, report the current iframe size so the host can frame the
+  // loading state correctly until the first tool-result arrives.
+  startResizeWatch();
+  requestAnimationFrame(reportSize);
+}
+
+init();
+</script>
+</body>
+</html>

@@ -164,12 +164,29 @@ pytest tests/
 
 ```
 GEMINI_API_KEY=         # Fallback server key
-ENCRYPTION_KEY=         # Fernet key for API key encryption
+ENCRYPTION_KEY=         # Fernet key for API key encryption (also seeds MCP JWT secret via HKDF)
 GOOGLE_CLOUD_PROJECT=   # GCP project ID (gen-lang-client-0854991687)
 ENVIRONMENT=            # staging | production
+MCP_ISSUER_URL=         # Canonical public URL for the MCP OAuth issuer (e.g. https://content-creation-app-xxx.us-central1.run.app). Required in prod — JWT iss/aud are pinned to this.
+MCP_DISABLED=           # Set to "1" to skip MCP route registration entirely (escape hatch)
 ```
 
 Never commit `.env`, service account JSON, or plaintext secrets.
+
+## MCP Server (Studio tab)
+
+Cloud Run hosts a remote MCP server at `/mcp` that exposes Studio capabilities
+(image/video/audio generation, asset library, Seedance sequences) to Claude.ai
+custom connectors. Authentication is OAuth 2.1 + PKCE + Dynamic Client
+Registration, backed by Firebase Auth — every MCP user maps to the same
+`users/{uid}` Firestore doc as the web UI, so per-user Gemini/Kie API keys and
+asset libraries are unified.
+
+Discovery: `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`.
+DCR: `POST /oauth/register`. Authorize/consent/token/revoke under `/oauth/*`.
+Implementation lives in `execution/mcp_studio/` (mirrors the `seedance_studio/`
+blueprint pattern). Long-running ops (Veo, Kie, Seedance) return a `task_id`
+that Claude polls via `studio_get_generation_status` — `/mcp` never blocks.
 
 ## Coding Conventions
 
