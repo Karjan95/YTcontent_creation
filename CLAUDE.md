@@ -19,7 +19,7 @@ See @deploy.sh and @deploy_staging.sh for Cloud Run deployment.
 - @directives/fix_parallel_projects.md — Parallel project handling
 
 ### Changelogs & Docs
-- @docs/ — All changelogs and session summaries (17 files)
+- @docs/ — All changelogs and session summaries (35 files; see `docs/changelog_6phase_pipeline_2026_03_22.md` for the current production pipeline)
 - @QA_Test_Plan.md — QA test plan
 
 ## Tech Stack
@@ -44,10 +44,18 @@ See @deploy.sh and @deploy_staging.sh for Cloud Run deployment.
 ├── SKILL_SkillCreator.md     # Skill creation template
 │
 ├── execution/                # ── Backend Python modules ──
-│   ├── server.py             # Flask app — 42 API routes, @require_auth middleware (2,246 lines)
-│   ├── gemini_client.py      # Gemini API wrapper — image/TTS/video generation (1,299 lines)
-│   ├── research_scriptwriter.py  # Script generation pipeline (765 lines)
-│   ├── research_templates.py # All prompts, templates, audience/tone definitions (3,005 lines)
+│   ├── server.py             # Flask app — @require_auth middleware, all API routes (4,356 lines)
+│   ├── gemini_client.py      # Gemini API wrapper — text/image/TTS/video, retry+backoff (1,708 lines)
+│   ├── research_scriptwriter.py  # Research + script + 6-phase production pipeline (1,907 lines)
+│   ├── research_templates.py # All prompts, templates, audience/tone definitions (4,617 lines)
+│   ├── model_schemas.py      # Structured-output JSON schemas for Gemini (1,660 lines)
+│   ├── kie_client.py         # KIE.AI integration (Midjourney, Kling, etc.) (1,025 lines)
+│   ├── cost_tracker.py       # Per-call cost tracking → Firestore (343 lines)
+│   ├── pricing.py            # Gemini/Imagen/Veo rate sheet (209 lines)
+│   ├── seedance_studio/      # Seedance video generation routes + storage
+│   │   ├── routes.py
+│   │   ├── schemas.py
+│   │   └── storage.py
 │   ├── youtube_utils.py      # YouTube transcript analysis
 │   ├── debug_items.py        # Debug utilities
 │   ├── debug_youtube.py      # YouTube debug scripts
@@ -56,8 +64,8 @@ See @deploy.sh and @deploy_staging.sh for Cloud Run deployment.
 │   └── test_server_logic.py  # Server logic unit tests
 │
 ├── ui/                       # ── Frontend ──
-│   ├── index.html            # Entire SPA — all tabs, modals, JS logic (~7,001 lines)
-│   └── style.css             # CSS variables, animations, Space Grotesk font
+│   ├── index.html            # Entire SPA — all tabs, modals, JS logic (~13,023 lines)
+│   └── style.css             # CSS variables, animations, Space Grotesk font (~7,437 lines)
 │
 ├── tests/                    # ── Test suite (pytest) ──
 │   ├── conftest.py           # Shared fixtures (mock Firebase, Firestore, Gemini)
@@ -134,10 +142,20 @@ See @deploy.sh and @deploy_staging.sh for Cloud Run deployment.
 
 **Auth flow:** Firebase ID token → `@require_auth` decorator → decrypt user API key from Firestore → Gemini calls
 
-**3-Phase Production Pipeline (Max Quality mode):**
-1. **Director** — scene cuts, duration, emotion
-2. **Storyboard Artist** — visual descriptions, shot composition
-3. **Director of Photography** — final image/video generation prompts
+**6-Phase Production Pipeline** (always-on; the old "Fast"/"Max Quality" modes are deprecated — `quality_mode` is ignored). Implemented in `execution/research_scriptwriter.py:638` (`generate_production_table`) → `:1128` (`_generate_single_batch_6phase`):
+
+0. **Script Doctor** — runs **once** on the full narration before batching; produces a shared Visual Brief (gemini-2.5-flash, `research_scriptwriter.py:724`)
+1. **Director** — editorial cuts, camera intent, emotional arc
+2. **Cinematographer** — camera technique from the 62-technique library
+3. **Storyboard Artist** — layered visual compositions
+4. **Continuity Supervisor** — review + auto-fix (non-critical; falls through on failure)
+5. **Director of Photography** — final image/video prompts with lighting vocabulary
+
+Phases 1–5 run **sequentially per batch**, all on `gemini-2.5-flash`. Batching is per act with `BEATS_PER_BATCH` driven by pacing tier (Standard=8, Frenetic=3, …, `research_scriptwriter.py:711-717`). Batches run in parallel up to `MAX_CONCURRENT_BATCHES = 3` (`:763`).
+
+**Retries on the production table are stacked**: every Gemini call retries 3× with exponential backoff on 503/429 (`gemini_client.py:36-58`), and the *whole 5-phase batch* retries up to 3× on top of that (`research_scriptwriter.py:817-840`). One stuck phase can compound into many minutes of wall time.
+
+**Production table is a synchronous endpoint.** `POST /api/generate-production-table` (`server.py:3109`) runs the entire pipeline inline and only writes `production_data` to Firestore after the whole job finishes — there is no per-batch save, no `/poll` endpoint, and no job queue. The UI calls it with a single `fetch` (`ui/index.html:4795`) with no client-side timeout, and shows hardcoded status messages that stop updating after 110s (`ui/index.html:4748-4754`). This is the leading cause of "looks frozen" / "only Act 1 visible" reports — any Act 1 the user sees during a long generation is leftover data from a *previous* save.
 
 **State:** Auto-save with 2s debounce to Firestore. Projects include all tabs, settings, and media references.
 
@@ -185,9 +203,11 @@ Never commit `.env`, service account JSON, or plaintext secrets.
 - User API keys are Fernet-encrypted in Firestore, decrypted per-request
 - Firebase Storage uses signed URLs with 4-hour expiration
 - Image generation supports 6 models with different cost/quality tradeoffs
-- Production table generation has Fast mode (1 call) and Max Quality (3 sequential calls)
+- Production table generation uses the 6-phase pipeline (Script Doctor + 5 per-batch phases on `gemini-2.5-flash`); see the "Key Architecture" section
 - Character Intelligence System manages cast identity, wardrobe (locked vs story-driven), and expressions (dynamic vs neutral)
 - Visual Style system uses 1-4 reference images with style lock modes (full, art_only, loose)
+- Narrative Spine: per-project list of factual claims (`claim_id`s) that flow through script → beat regen → production prompts (see `docs/changelog_narrative_spine_2026_04_26.md`)
+- Cost tracking: every Gemini/Imagen/Veo call is logged via `cost_tracker.py` for the per-project cost dashboard
 
 ## Cloud Run Deployment
 
@@ -207,7 +227,7 @@ Never commit `.env`, service account JSON, or plaintext secrets.
 
 1. **Research** — Select template (10+ types) → enter topic → AI does deep web research → structured dossier
 2. **Script** — AI suggests titles → select audience (12 profiles) & tone (15+ tones) → generate narration (acts/beats) → edit/regenerate
-3. **Production** — Define visual style → configure cast → generate production table (3-phase) → shot-by-shot prompts
+3. **Production** — Define visual style → configure cast → generate production table (6-phase: Script Doctor + Director + Cinematographer + Storyboard + Continuity + DP) → shot-by-shot prompts
 4. **Visuals** — Generate images (batch/individual) → edit with prompts → animate with Veo → download all as zip
 
 ## Key API Route Groups
@@ -219,4 +239,7 @@ Never commit `.env`, service account JSON, or plaintext secrets.
 | Scripting | `/api/` | `generate-script`, `regenerate-beat`, `suggest-titles` |
 | Style | `/api/` | `analyze-style-images`, `suggest-cast`, `expand-creative-direction` |
 | Visuals | `/api/visuals/` | `generate-image`, `edit-image`, `start-animation`, `download-all` |
+| Production | `/api/` | `generate-production-table` (synchronous; see Key Architecture for caveats) |
+| KIE / Seedance | `/api/kie/`, `/api/seedance/` | Third-party generation integrations |
+| Cost | `/api/cost/` | Per-project + workspace cost dashboard |
 | Projects | `/api/projects` | CRUD + `dossiers` |
