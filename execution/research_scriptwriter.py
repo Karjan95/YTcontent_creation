@@ -37,6 +37,164 @@ from research_templates import (
 )
 from gemini_client import generate_content
 
+# ─────────────────────────────────────────────────────────────────────────
+# Pydantic schemas for the 6-phase production pipeline.
+# These are passed as `response_schema` to Gemini's structured-output mode
+# so the sampler is constrained at inference time to emit only tokens that
+# keep the JSON valid against the schema. The strongest guarantee available
+# that the output parses cleanly — prevents the raw-newline-in-strings bug
+# that killed every Phase 5 batch in the Wasp project (2026-05-24).
+#
+# Design notes:
+#   • Every field is Optional so the model can omit fields it doesn't use.
+#     Gemini's constrained decoder requires all emitted fields to be in
+#     the schema, so we list every field each prompt might ask for.
+#   • We do NOT use `extra='allow'`. Pydantic generates `additionalProperties: true`
+#     for that mode, which **Gemini's structured-output API rejects** with
+#     "additionalProperties is not supported in the Gemini API" (verified on
+#     staging 2026-05-25). Tier 1's parser ladder (json_repair + strict=False)
+#     is our safety net for any model output drift.
+#   • One model per phase since the field shapes differ across phases.
+# ─────────────────────────────────────────────────────────────────────────
+try:
+    from pydantic import BaseModel
+    from typing import Optional
+
+    class _Phase1Shot(BaseModel):
+        """Director (Phase 1): editorial cuts + emotional arc + camera intent."""
+        shot_number: Optional[str] = None
+        script_beat: Optional[str] = None
+        duration: Optional[str] = None
+        act: Optional[str] = None
+        beat: Optional[str] = None
+        emotion: Optional[str] = None
+        directors_intent: Optional[str] = None
+        camera_intent: Optional[str] = None
+        cutting_rationale: Optional[str] = None
+        emotional_arc_position: Optional[str] = None
+
+    class _EmotionalArcAnalysis(BaseModel):
+        shape: Optional[str] = None
+        tension_peaks: Optional[list[str]] = None
+        breathing_points: Optional[list[str]] = None
+        transitions: Optional[list[str]] = None
+
+    class Phase1DirectorOutput(BaseModel):
+        emotional_arc_analysis: Optional[_EmotionalArcAnalysis] = None
+        shots: list[_Phase1Shot] = []
+
+    class _Phase2Shot(_Phase1Shot):
+        """Cinematographer (Phase 2): adds camera technique fields."""
+        camera_movement: Optional[str] = None
+        camera_angle: Optional[str] = None
+        lens_feel: Optional[str] = None
+        composition: Optional[str] = None
+        lighting_mood: Optional[str] = None
+        depth_focus: Optional[str] = None
+        visual_storytelling_technique: Optional[str] = None
+
+    class Phase2CinematographerOutput(BaseModel):
+        shots: list[_Phase2Shot] = []
+
+    class _FgMgBgLayers(BaseModel):
+        fg: Optional[str] = None
+        mg: Optional[str] = None
+        bg: Optional[str] = None
+
+    class _Phase3Shot(_Phase2Shot):
+        """Storyboard Artist (Phase 3): adds layered visual composition."""
+        visual: Optional[str] = None
+        shot_size: Optional[str] = None
+        fg_mg_bg_layers: Optional[_FgMgBgLayers] = None
+        visual_metaphor_execution: Optional[str] = None
+        character_outfit: Optional[str] = None
+        character_expression: Optional[str] = None
+        visual_continuity_notes: Optional[str] = None
+
+    class _Location(BaseModel):
+        name: Optional[str] = None
+        shots: Optional[str] = None
+        description: Optional[str] = None
+
+    class _Subject(BaseModel):
+        name: Optional[str] = None
+        type: Optional[str] = None
+        appears_in_shots: Optional[str] = None
+        base_look: Optional[str] = None
+
+    class _VisualTransition(BaseModel):
+        at_shot: Optional[str] = None
+        reason: Optional[str] = None
+        change: Optional[str] = None
+
+    class _StoryAnalysis(BaseModel):
+        locations: Optional[list[_Location]] = None
+        subjects: Optional[list[_Subject]] = None
+        tonal_arc: Optional[str] = None
+        visual_transitions: Optional[list[_VisualTransition]] = None
+
+    class Phase3StoryboardOutput(BaseModel):
+        story_analysis: Optional[_StoryAnalysis] = None
+        shots: list[_Phase3Shot] = []
+
+    class _Phase4Shot(_Phase3Shot):
+        """Continuity Supervisor (Phase 4): adds fix annotations."""
+        continuity_fix: Optional[str] = None
+        continuity_grade: Optional[str] = None
+
+    class _Phase4ReviewSummary(BaseModel):
+        total_shots: Optional[int] = None
+        shots_modified: Optional[int] = None
+        variety_fixes: Optional[int] = None
+        flow_fixes: Optional[int] = None
+        color_fixes: Optional[int] = None
+        continuity_fixes: Optional[int] = None
+        overall_grade: Optional[str] = None
+
+    class Phase4ContinuityOutput(BaseModel):
+        review_summary: Optional[_Phase4ReviewSummary] = None
+        shots: list[_Phase4Shot] = []
+
+    class _Phase5Shot(_Phase4Shot):
+        """DP (Phase 5): adds final generation prompts + timestamps."""
+        timestamp: Optional[str] = None
+        first_frame_prompt: Optional[str] = None
+        veo_prompt: Optional[str] = None
+
+    class _ContinuityNote(BaseModel):
+        from_shot: Optional[str] = None
+        to_shot: Optional[str] = None
+        visual_bridge: Optional[str] = None
+        audio_bridge: Optional[str] = None
+        potential_issue: Optional[str] = None
+
+    class _ProductionNotes(BaseModel):
+        challenging_shots: Optional[list[str]] = None
+        recommended_workflow: Optional[str] = None
+        post_production: Optional[str] = None
+
+    class Phase5DPOutput(BaseModel):
+        title: Optional[str] = None
+        aspect_ratio: Optional[str] = None
+        style_summary: Optional[str] = None
+        total_shots: Optional[int] = None
+        shots: list[_Phase5Shot] = []
+        continuity_notes: Optional[list[_ContinuityNote]] = None
+        production_notes: Optional[_ProductionNotes] = None
+
+    _PYDANTIC_SCHEMAS_AVAILABLE = True
+except Exception as _schema_err:
+    # Older Python or missing pydantic — degrade gracefully. The parser
+    # ladder (strict=False + json_repair) is still in place as a safety net.
+    print(f"[research_scriptwriter] Pydantic schemas unavailable ({_schema_err}); "
+          f"phase calls will use response_mime_type only.")
+    Phase1DirectorOutput = None
+    Phase2CinematographerOutput = None
+    Phase3StoryboardOutput = None
+    Phase4ContinuityOutput = None
+    Phase5DPOutput = None
+    _PYDANTIC_SCHEMAS_AVAILABLE = False
+
 
 def build_research_dossier(topic: str, template_id: str,
                            notebook_query_results: list) -> str:
@@ -416,9 +574,24 @@ def _salvage_truncated_shots(text: str):
 
 
 def _parse_json_response(raw_response: str) -> dict:
-    """Parse JSON from a Gemini response, handling markdown code fences and
-    salvaging truncated `{"shots": [...]}` payloads (huge phase outputs that
-    hit the model's output token cap mid-object)."""
+    """Parse JSON from a Gemini response with a layered fallback ladder.
+
+    Gemini's `response_mime_type=application/json` mode guarantees bracket
+    structure but does NOT prevent literal control characters (raw `\\n`/`\\t`)
+    inside long string values. Python's `json.loads` rejects them by default.
+    Plus, the model occasionally truncates mid-object or wraps the JSON in
+    prose. The ladder below handles all three cases:
+
+      1. Direct strict parse.
+      2. Direct parse with strict=False (allows raw control chars in strings).
+      3. Outer-brace extraction + strict, then strict=False.
+      4. Truncation salvager (recovers N-1 complete shots from a cut-off array).
+      5. json_repair last resort (handles trailing commas, missing quotes,
+         stray prose, half-closed brackets — used in production by LangChain
+         and LlamaIndex for the same problem).
+
+    Only raises after all five strategies fail.
+    """
     if not raw_response:
         raise ValueError("Empty response from Gemini")
     text = raw_response.strip()
@@ -436,13 +609,20 @@ def _parse_json_response(raw_response: str) -> dict:
             lines.pop()
         text = "\n".join(lines).strip()
 
-    # Try direct parse first
+    # 1. Strict parse first
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # Fallback: find the outermost { ... } in the text
+    # 2. strict=False — allow raw \n / \t / control chars inside strings.
+    # This is the specific fix for Gemini's pretty-printed prose-in-JSON.
+    try:
+        return json.loads(text, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    # 3. Outermost { ... } extraction (catches stray prose around JSON).
     first_brace = text.find("{")
     last_brace = text.rfind("}")
     if first_brace != -1 and last_brace > first_brace:
@@ -451,15 +631,41 @@ def _parse_json_response(raw_response: str) -> dict:
             return json.loads(candidate)
         except json.JSONDecodeError:
             pass
+        try:
+            return json.loads(candidate, strict=False)
+        except json.JSONDecodeError:
+            pass
 
-    # Last resort: salvage as many complete shot objects as possible from a
-    # truncated array. Better N-1 valid shots than zero — the coverage check
-    # downstream will detect any missing beats and trigger a targeted retry.
+    # 4. Truncation salvager: recover N-1 complete shot objects from a
+    # cut-off `{"shots":[...]}` array. Coverage check downstream will request
+    # the missing beats via retry-beats.
     salvaged = _salvage_truncated_shots(text)
     if salvaged is not None:
         print(f"[parse] Salvaged truncated JSON: recovered {len(salvaged.get('shots') or [])} shots")
         return salvaged
 
+    # 5. json_repair last resort — handles trailing commas, missing quotes,
+    # stray prose, half-closed brackets. Drop-in fallback used by LangChain
+    # and LlamaIndex for the same Gemini/LLM-output problem.
+    try:
+        from json_repair import loads as _repair_loads
+        repaired = _repair_loads(text)
+        if isinstance(repaired, dict) and repaired:
+            print(f"[parse] json_repair recovered structure "
+                  f"(keys={list(repaired.keys())[:6]})")
+            return repaired
+    except Exception as repair_err:
+        print(f"[parse] json_repair failed: {repair_err}")
+
+    # All recovery paths failed — surface what the model actually returned so
+    # we can tell prose / refusal / truncation apart. Log both head and tail
+    # so we can see the truncation boundary (the salvager's blind spot).
+    head = (text[:300] or "").replace("\n", " ⏎ ")
+    tail = (text[-300:] or "").replace("\n", " ⏎ ") if len(text) > 300 else ""
+    print(f"[parse] FAILED — no parseable JSON. Length={len(text)}. "
+          f"Head: {head!r}")
+    if tail:
+        print(f"[parse] Tail: {tail!r}")
     raise json.JSONDecodeError("No JSON object found", text, 0)
 
 
@@ -839,10 +1045,13 @@ def _stitch_act_boundaries(final_shots: list, visual_brief: dict = None,
 
     try:
         prompt = build_boundary_stitcher_prompt(boundary_pairs, visual_brief)
+        # Boundary stitcher: short JSON patch task → Flash-Lite is plenty.
         raw = generate_content(
-            prompt, model_name="gemini-2.5-flash",
-            temperature=0.1, api_key=api_key,
+            prompt, model_name="gemini-3.5-flash-lite",
+            api_key=api_key,
             uid=uid, project_id=project_id, description="boundary_stitcher",
+            thinking_level="minimal",
+            max_output_tokens=16384,
         )
         if not raw or raw.startswith("Error:"):
             print(f"[Production] Boundary stitcher skipped: {raw or 'empty response'}")
@@ -893,6 +1102,7 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                               cast: dict = None,
                               format_preset: str = "",
                               spine: dict = None,
+                              locations: dict = None,
                               uid: str = None, project_id: str = None,
                               progress_callback=None) -> dict:
     """
@@ -973,10 +1183,14 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
     print(f"[Production] Phase 0: Script Doctor analyzing full narration...")
     try:
         script_doctor_prompt = build_script_doctor_prompt(narration_json, style_analysis, creative_direction)
+        # Script Doctor: brief one-shot summary task → cheap Flash-Lite is plenty.
+        # Use 'minimal' thinking to keep latency down; output is compact JSON.
         raw_brief = generate_content(
-            script_doctor_prompt, model_name="gemini-2.5-flash",
-            temperature=0.3, api_key=api_key,
+            script_doctor_prompt, model_name="gemini-3.5-flash-lite",
+            api_key=api_key,
             uid=uid, project_id=project_id, description="script_doctor",
+            thinking_level="minimal",
+            max_output_tokens=16384,
         )
         if raw_brief and not raw_brief.startswith("Error:"):
             visual_brief = _parse_json_response(raw_brief)
@@ -1009,6 +1223,7 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                         format_preset=format_preset,
                         visual_brief=visual_brief,
                         spine=spine,
+                        locations=locations,
                         skip_continuity=skip_continuity,
                         uid=uid, project_id=project_id)
         # Emit a single-batch progress event so streaming UI works uniformly.
@@ -1088,6 +1303,7 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
                               format_preset=format_preset,
                               visual_brief=visual_brief,
                               spine=spine,
+                              locations=locations,
                               skip_continuity=skip_continuity,
                               uid=uid, project_id=project_id)
 
@@ -1246,6 +1462,7 @@ def generate_production_table(narration_json: dict, duration_minutes: int = 10,
             format_preset=format_preset,
             visual_brief=visual_brief,
             spine=spine,
+            locations=locations,
             uid=uid, project_id=project_id,
         )
         if "error" not in retry_result:
@@ -1377,6 +1594,8 @@ def _generate_single_batch_3phase(narration_json: dict, duration_minutes: int = 
                                    format_preset: str = "",
                                    visual_brief: dict = None,
                                    spine: dict = None,
+                                   locations: dict = None,
+                                   skip_continuity: bool = False,
                                    uid: str = None, project_id: str = None) -> dict:
     """
     Generate production table using the 3-phase pipeline (Max Quality mode).
@@ -1425,6 +1644,7 @@ def _generate_single_batch_3phase(narration_json: dict, duration_minutes: int = 
         style_intent=style_intent,
         creative_direction=creative_direction,
         cast=cast,
+        locations=locations,
     )
     raw_storyboard = generate_content(
         storyboard_prompt, model_name="gemini-3.1-pro-preview",
@@ -1452,6 +1672,7 @@ def _generate_single_batch_3phase(narration_json: dict, duration_minutes: int = 
         cast=cast,
         title=title,
         creative_direction=creative_direction,
+        locations=locations,
     )
     raw_dp = generate_content(
         dp_prompt, model_name="gemini-3.1-pro-preview",
@@ -1489,6 +1710,7 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
                                    format_preset: str = "",
                                    visual_brief: dict = None,
                                    spine: dict = None,
+                                   locations: dict = None,
                                    skip_continuity: bool = False,
                                    uid: str = None, project_id: str = None) -> dict:
     """
@@ -1506,13 +1728,34 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
     style_intent = style_analysis.get("style_intent", {}) if style_analysis else {}
 
     def _call_phase(phase_name: str, prompt: str, temperature: float,
-                    description: str, prev_count: int = 0) -> tuple:
+                    description: str, prev_count: int = 0,
+                    response_schema=None) -> tuple:
         """Run a phase, parse shots, retry once if shot count drops >10% vs prev_count.
-        Returns (shots_list, error_str or None)."""
+        Returns (shots_list, error_str or None).
+
+        Model + config rationale: gemini-3.5-flash with thinking_level='low' and
+        max_output_tokens=65536. Phases produce structured JSON; we want most of
+        the token budget going to that JSON, not to thinking. The 64K output cap
+        is critical — 32K caused mid-array truncation on Phase 5 for 25-shot
+        batches because the JSON exceeded that cap (~100KB chars ≈ 30K+ tokens
+        with whitespace, since response_mime_type=application/json still emits
+        pretty-printed output). 64K is the documented Gemini 3.x flash ceiling.
+        Temperature is ignored on Gemini 3.x models (no longer recommended per
+        docs); we leave it None.
+
+        response_schema: A Pydantic model that constrains the output at the
+        sampler level. When set, the model can ONLY emit tokens that keep the
+        JSON valid against this schema — preventing the raw-newline-in-strings
+        bug observed in the Wasp project (2026-05-24).
+        """
         raw = generate_content(
-            prompt, model_name="gemini-2.5-flash",
-            temperature=temperature, api_key=api_key,
+            prompt, model_name="gemini-3.5-flash",
+            api_key=api_key,
             uid=uid, project_id=project_id, description=description,
+            thinking_level="low",
+            max_output_tokens=65536,
+            response_mime_type="application/json",
+            response_schema=response_schema,
         )
         if not raw or raw.startswith("Error:"):
             return None, f"{phase_name} failed{label}: {raw or 'empty response'}"
@@ -1526,9 +1769,13 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
             print(f"[Production 6-Phase] {phase_name} dropped shots "
                   f"({len(shots)}/{prev_count}). Retrying once...")
             raw_retry = generate_content(
-                prompt, model_name="gemini-2.5-flash",
-                temperature=temperature, api_key=api_key,
+                prompt, model_name="gemini-3.5-flash",
+                api_key=api_key,
                 uid=uid, project_id=project_id, description=f"{description}_retry",
+                thinking_level="low",
+                max_output_tokens=65536,
+                response_mime_type="application/json",
+                response_schema=response_schema,
             )
             if raw_retry and not raw_retry.startswith("Error:"):
                 try:
@@ -1553,7 +1800,8 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
         visual_brief=visual_brief,
         spine=spine,
     )
-    phase1, err = _call_phase("Phase 1 (Director)", director_prompt, 0.1, "director_6phase")
+    phase1, err = _call_phase("Phase 1 (Director)", director_prompt, 0.1, "director_6phase",
+                              response_schema=Phase1DirectorOutput)
     if err:
         return {"error": err}
     director_shots, _ = phase1
@@ -1567,7 +1815,8 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
     )
     phase2, err = _call_phase("Phase 2 (Cinematographer)", cinematographer_prompt,
                               0.2, "cinematographer_6phase",
-                              prev_count=len(director_shots))
+                              prev_count=len(director_shots),
+                              response_schema=Phase2CinematographerOutput)
     if err:
         return {"error": err}
     cinematographer_shots, _ = phase2
@@ -1582,10 +1831,12 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
         creative_direction=creative_direction,
         cast=cast,
         visual_brief=visual_brief,
+        locations=locations,
     )
     phase3, err = _call_phase("Phase 3 (Storyboard)", storyboard_prompt,
                               0.1, "storyboard_6phase",
-                              prev_count=len(cinematographer_shots))
+                              prev_count=len(cinematographer_shots),
+                              response_schema=Phase3StoryboardOutput)
     if err:
         return {"error": err}
     storyboard_shots, _ = phase3
@@ -1606,10 +1857,17 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
             storyboard_shots=storyboard_shots,
             visual_brief=visual_brief,
         )
+        # Phase 4 ingests + rewrites the full shot list — same scale as
+        # Phases 1-3. Needs 3.5-flash + 32K output to avoid the empty-response
+        # truncation trap that hit 2.5-flash.
         raw_continuity = generate_content(
-            continuity_prompt, model_name="gemini-2.5-flash",
-            temperature=0.05, api_key=api_key,
+            continuity_prompt, model_name="gemini-3.5-flash",
+            api_key=api_key,
             uid=uid, project_id=project_id, description="continuity_6phase",
+            thinking_level="low",
+            max_output_tokens=65536,
+            response_mime_type="application/json",
+            response_schema=Phase4ContinuityOutput,
         )
         if not raw_continuity or raw_continuity.startswith("Error:"):
             # Continuity is non-critical — fall through with uncorrected shots
@@ -1631,22 +1889,105 @@ def _generate_single_batch_6phase(narration_json: dict, duration_minutes: int = 
                 print(f"[Production 6-Phase] Phase 4 parse failed{label} — using uncorrected shots")
                 corrected_shots = storyboard_shots
 
-    # ── Phase 5: DP ──
-    print(f"[Production 6-Phase] Phase 5: DP{label}...")
-    dp_prompt = build_dp_prompt(
-        storyboard_shots=corrected_shots,
-        style_analysis=style_analysis,
-        aspect_ratio=aspect_ratio,
-        title=title,
-        creative_direction=creative_direction,
-        cast=cast,
-        visual_brief=visual_brief,
-    )
-    phase5, err = _call_phase("Phase 5 (DP)", dp_prompt, 0.1, "dp_6phase",
-                              prev_count=len(corrected_shots))
-    if err:
-        return {"error": err}
-    dp_shots, production_data = phase5
+    # ── Phase 5: DP (sub-batched to shrink blast radius) ──
+    # Phase 5 has the largest per-shot prose payload (DP prompt + camera +
+    # lighting + mood + post-production notes). On the Wasp project (2026-05-24)
+    # a single 40-shot Phase 5 call produced ~150 KB of JSON that occasionally
+    # failed to parse. Splitting into ~10-shot sub-batches:
+    #   • Limits each call's output to ~30 KB (well under any cap).
+    #   • If a sub-batch fails, we lose 10 shots — not 40.
+    #   • Runs sub-batches concurrently so wall-clock doesn't regress.
+    # Below MAX_PHASE5_SHOTS we fall through to a single call (no overhead).
+    MAX_PHASE5_SHOTS = 10
+    MAX_PHASE5_CONCURRENCY = 4
+
+    def _call_phase5(sub_shots, sub_label):
+        """Wrap a Phase 5 call so it can be invoked from a thread pool.
+        Returns (sub_shots_list, sub_production_dict, error_str_or_None)."""
+        sub_prompt = build_dp_prompt(
+            storyboard_shots=sub_shots,
+            style_analysis=style_analysis,
+            aspect_ratio=aspect_ratio,
+            title=title,
+            creative_direction=creative_direction,
+            cast=cast,
+            visual_brief=visual_brief,
+            locations=locations,
+        )
+        result, sub_err = _call_phase(
+            f"Phase 5 (DP) {sub_label}", sub_prompt, 0.1,
+            f"dp_6phase_{sub_label}",
+            prev_count=len(sub_shots),
+            response_schema=Phase5DPOutput,
+        )
+        if sub_err:
+            return None, None, sub_err
+        sub_dp_shots, sub_production = result
+        return sub_dp_shots, sub_production, None
+
+    if len(corrected_shots) <= MAX_PHASE5_SHOTS:
+        print(f"[Production 6-Phase] Phase 5: DP{label} (single call, "
+              f"{len(corrected_shots)} shots)...")
+        dp_shots, production_data, err = _call_phase5(corrected_shots, "single")
+        if err:
+            return {"error": err}
+    else:
+        chunks = [corrected_shots[i:i + MAX_PHASE5_SHOTS]
+                  for i in range(0, len(corrected_shots), MAX_PHASE5_SHOTS)]
+        print(f"[Production 6-Phase] Phase 5: DP{label} "
+              f"({len(corrected_shots)} shots → {len(chunks)} sub-batches of "
+              f"≤{MAX_PHASE5_SHOTS})...")
+
+        sub_results = [None] * len(chunks)  # preserve order by index
+        sub_errors = []
+
+        with ThreadPoolExecutor(max_workers=MAX_PHASE5_CONCURRENCY) as pool:
+            future_to_idx = {
+                pool.submit(_call_phase5, chunk, f"sub {idx + 1}/{len(chunks)}"): idx
+                for idx, chunk in enumerate(chunks)
+            }
+            for fut in as_completed(future_to_idx):
+                idx = future_to_idx[fut]
+                try:
+                    sub_dp_shots, sub_production, sub_err = fut.result()
+                except Exception as exc:
+                    sub_err = f"Phase 5 sub {idx + 1}/{len(chunks)} crashed: {exc}"
+                    sub_dp_shots, sub_production = None, None
+                if sub_err:
+                    sub_errors.append(sub_err)
+                    print(f"[Production 6-Phase] {sub_err}")
+                else:
+                    sub_results[idx] = (sub_dp_shots, sub_production)
+
+        # Merge: concatenate shots in original chunk order; reuse the first
+        # successful sub-batch's top-level metadata (title/aspect_ratio/etc.)
+        # since those are identical across sub-batches.
+        dp_shots = []
+        first_success_production = None
+        for entry in sub_results:
+            if entry is None:
+                continue
+            sub_dp_shots, sub_production = entry
+            dp_shots.extend(sub_dp_shots)
+            if first_success_production is None:
+                first_success_production = sub_production
+
+        if first_success_production is None:
+            # Every sub-batch failed — propagate the first error.
+            return {"error": sub_errors[0] if sub_errors else
+                    f"Phase 5 (DP) produced no shots{label}"}
+
+        production_data = dict(first_success_production)
+        production_data["shots"] = dp_shots
+        production_data["total_shots"] = len(dp_shots)
+
+        if sub_errors:
+            # Partial success — surface so the coverage check / resume banner
+            # can request the missing shots later.
+            print(f"[Production 6-Phase] Phase 5{label} partial: "
+                  f"{len(sub_errors)}/{len(chunks)} sub-batches failed. "
+                  f"{len(dp_shots)}/{len(corrected_shots)} shots have prompts.")
+
     print(f"[Production 6-Phase] Phase 5 complete: {len(dp_shots)} shots with prompts{label}")
     return {"success": True, "production_table": production_data}
 

@@ -205,23 +205,9 @@
         </div>
     </div>
 
-    <!-- Coverage-failure modal: some script beats didn't make it into the production table -->
-    <div id="coverageFailureModal" class="modal-overlay" style="display: none;">
-        <div class="modal-card" style="max-width: 580px;">
-            <h2>⚠️ Some scenes are missing</h2>
-            <p id="coverageFailureSummary" style="margin-bottom: 12px;"></p>
-            <div id="coverageFailureBeats" style="max-height: 240px; overflow-y: auto; background: #fff8e1;
-                 border: 1px solid #ffc107; padding: 10px 12px; border-radius: 6px;
-                 font-size: 13px; line-height: 1.5; margin-bottom: 16px;"></div>
-            <div style="display: flex; gap: 8px;">
-                <button class="btn-primary" style="flex: 2" onclick="retryMissingBeats()">🔁 Retry missing scenes</button>
-                <button class="btn-secondary" style="flex: 1" onclick="closeCoverageFailureModal()">Use partial</button>
-            </div>
-            <p class="modal-hint" style="margin-top: 10px; font-size: 12px;">
-                "Retry" re-runs only the missing beats (cheap). "Use partial" keeps the table as-is — you can always regenerate later.
-            </p>
-        </div>
-    </div>
+    <!-- Coverage-failure modal removed 2026-05-25 — replaced by the unified
+         Resume/Discard banner above the production table and the persistent
+         error-log strip (productionErrorLog). See the 2026-05-25 changelog. -->
 
     <!-- Image Lightbox with Edit Controls -->
     <div id="imageLightboxModal" class="modal-overlay" style="display: none;" onclick="closeImageLightbox(event)">
@@ -954,6 +940,7 @@
                             <i data-lucide="download"></i> Download all assets
                         </button>
                     </div>
+                    <div id="batchStatusLine" class="batch-status" style="display: none;"></div>
                 </div>
 
                 <div id="visualsError" class="error-message" style="display: none;"></div>
@@ -1639,9 +1626,42 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                             </div>
                         </div>
 
+                        <div id="locationsPanel" class="cast-panel" style="display: none; margin-top: 20px;">
+                            <div class="cast-panel-header">
+                                <h3 class="cast-panel-title">Locations</h3>
+                                <span class="info-tooltip-trigger">
+                                    <svg class="info-icon" viewBox="0 0 16 16" width="14" height="14">
+                                        <circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5" fill="none"/>
+                                        <text x="8" y="12" text-anchor="middle" font-size="10" fill="currentColor" font-weight="bold">i</text>
+                                    </svg>
+                                    <div class="info-tooltip">
+                                        <p>Defines each recurring setting in your story. The AI reads your script and suggests locations. You can edit descriptions, mood, or add/remove locations. Locations are passed to the Storyboard Artist and DP for visual consistency across shots set in the same place. Reference grids anchor materials, palette, and geometry.</p>
+                                        <div class="tooltip-example good"><span class="tooltip-label">Tip:</span> Two scenes in "The Lab" should feel like the same lab — the reference grid locks that.</div>
+                                    </div>
+                                </span>
+                                <span id="locationsApprovedBadge" class="approved-badge" style="display: none;">Locations Defined</span>
+                            </div>
+
+                            <div id="locationsNoneMessage" class="cast-no-chars" style="display: none;">
+                                <p>This script has no recurring locations. No location definition needed.</p>
+                                <p class="cast-notes" id="locationsNotesDisplay"></p>
+                            </div>
+
+                            <div id="locationsCardsContainer" class="cast-cards"></div>
+
+                            <div class="cast-actions">
+                                <button class="btn-secondary cast-add-btn" onclick="addLocation()">+ Add Location</button>
+                                <button class="btn-secondary btn-generate-portraits" onclick="generateAllLocationReferences()" id="generateAllLocRefsBtn">
+                                    <span id="generateAllLocRefsBtnText">Generate All Location References</span>
+                                    <div class="spinner" id="generateAllLocRefsSpinner" style="display:none;"></div>
+                                </button>
+                                <button class="btn-primary" onclick="approveLocations()">Approve Locations</button>
+                            </div>
+                        </div>
+
                         <div class="controls" style="margin-top: 12px;">
                             <button id="suggestCastBtn" onclick="suggestCast()" style="display: none;">
-                                <span id="suggestCastBtnText">Suggest Cast from Script</span>
+                                <span id="suggestCastBtnText">Suggest Cast &amp; Locations from Script</span>
                                 <div class="spinner" id="suggestCastSpinner"></div>
                             </button>
                         </div>
@@ -1659,6 +1679,17 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                                     <option value="Frenetic">Frenetic (~1.2s / 3 words per shot) - High Cost</option>
                                 </select>
                             </div>
+                            <div class="review-field" style="margin-top: 12px;">
+                                <label for="maxShotDurationInput">
+                                    Max Shot Duration (seconds)
+                                    <span style="font-weight: normal; color: #888; font-size: 11px;">
+                                        — any shot longer than this is auto-split. Match your video model's generation window (Veo/Kie default: 6s).
+                                    </span>
+                                </label>
+                                <input id="maxShotDurationInput" type="number" min="2" max="15" step="0.5"
+                                    value="6" class="review-input" style="width: 80px;"
+                                    onchange="triggerAutosave && triggerAutosave()">
+                            </div>
                             <div style="margin-top: 8px; font-size: 13px; color: #aaa;">
                                 Estimated Shots: <strong id="estimatedShotsDisplay">--</strong>
                             </div>
@@ -1667,16 +1698,91 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                         <div
                             style="margin-top: 12px; padding: 12px; background: rgba(255,255,255,0.04); border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
                             <div style="font-size: 12px; color: #888;">
-                                6-Phase Pipeline: Script Doctor, Director, Cinematographer, Storyboard, Continuity, DP
+                                <strong>5-Stage Agentic Pipeline:</strong>
+                                Story Treatment · World &amp; Design · Cinematography Plan · Shot List · Continuity + Final Prompts
                             </div>
                         </div>
 
-                        <div class="controls" style="margin-top: 16px;">
-                            <button id="productionBtn" onclick="generateProductionTable()">
-                                <span id="productionBtnText">Generate Production Table</span>
+                        <!-- Top control bar: Start / Pause / Cancel + run status -->
+                        <div id="productionPipelineControls" class="controls" style="margin-top: 16px; flex-wrap: wrap; align-items: center; gap: 10px;">
+                            <button id="productionBtn" onclick="startProductionPipeline()">
+                                <span id="productionBtnText">▶ Start Pipeline</span>
                                 <div class="spinner" id="productionSpinner"></div>
                             </button>
-                            <span class="cost-badge" id="productionCostBadge">~$0.20–0.50</span>
+                            <button id="productionCancelBtn" class="btn-secondary" style="display:none;" onclick="cancelPipeline()">✖ Cancel</button>
+                            <span class="cost-badge" id="productionCostBadge">~$0.30–0.80</span>
+                            <span id="productionFlowStatus" style="margin-left:auto; font-size: 13px; color: #aaa;"></span>
+                        </div>
+
+                        <!-- Error log: persistent list of phase/stage failures. Mirrors the
+                             image-history-tile pattern — tiles are clickable to expand
+                             full error details. -->
+                        <div id="productionErrorLog" class="production-error-log" style="display:none;">
+                            <div class="production-error-log-header" onclick="toggleProductionErrorLog()">
+                                <span><span id="productionErrorLogLabel">Errors (0)</span></span>
+                                <span id="productionErrorLogToggle" style="font-size: 0.7rem;">&#9650;</span>
+                            </div>
+                            <div id="productionErrorLogBody" class="production-error-log-body"></div>
+                        </div>
+
+                        <!-- 5 stage panels: each shows its own status + output + actions.
+                             Hidden until the user starts a pipeline (or until existing
+                             state loads on project switch). -->
+                        <div id="productionStagePanels" style="margin-top: 16px; display: none;">
+                            <div class="stage-panel" id="stagePanel1" data-stage="1">
+                                <div class="stage-panel-header" onclick="toggleStagePanel(1)">
+                                    <span class="stage-panel-title">Stage 1 · Story Treatment</span>
+                                    <span class="stage-panel-meta">Director</span>
+                                    <span class="stage-status-badge stage-status-pending" id="stage1Status">waiting</span>
+                                    <span class="stage-panel-toggle" id="stage1Toggle">▼</span>
+                                </div>
+                                <div class="stage-panel-body" id="stage1Body"></div>
+                            </div>
+                            <div class="stage-panel" id="stagePanel2" data-stage="2">
+                                <div class="stage-panel-header" onclick="toggleStagePanel(2)">
+                                    <span class="stage-panel-title">Stage 2 · World &amp; Design</span>
+                                    <span class="stage-panel-meta">Production Designer</span>
+                                    <span class="stage-status-badge stage-status-pending" id="stage2Status">waiting</span>
+                                    <span class="stage-panel-toggle" id="stage2Toggle">▼</span>
+                                </div>
+                                <div class="stage-panel-body" id="stage2Body"></div>
+                            </div>
+                            <div class="stage-panel" id="stagePanel3" data-stage="3">
+                                <div class="stage-panel-header" onclick="toggleStagePanel(3)">
+                                    <span class="stage-panel-title">Stage 3 · Cinematography Plan</span>
+                                    <span class="stage-panel-meta">Director of Photography</span>
+                                    <span class="stage-status-badge stage-status-pending" id="stage3Status">waiting</span>
+                                    <span class="stage-panel-toggle" id="stage3Toggle">▼</span>
+                                </div>
+                                <div class="stage-panel-body" id="stage3Body"></div>
+                            </div>
+                            <div class="stage-panel" id="stagePanel4" data-stage="4">
+                                <div class="stage-panel-header" onclick="toggleStagePanel(4)">
+                                    <span class="stage-panel-title">Stage 4 · Shot List</span>
+                                    <span class="stage-panel-meta">Director + Storyboard</span>
+                                    <span class="stage-status-badge stage-status-pending" id="stage4Status">waiting</span>
+                                    <span class="stage-panel-toggle" id="stage4Toggle">▼</span>
+                                </div>
+                                <div class="stage-panel-body" id="stage4Body"></div>
+                            </div>
+                            <div class="stage-panel" id="stagePanel5" data-stage="5">
+                                <div class="stage-panel-header" onclick="toggleStagePanel(5)">
+                                    <span class="stage-panel-title">Stage 5 · Continuity Brief</span>
+                                    <span class="stage-panel-meta">Script Supervisor</span>
+                                    <span class="stage-status-badge stage-status-pending" id="stage5Status">waiting</span>
+                                    <span class="stage-panel-toggle" id="stage5Toggle">▼</span>
+                                </div>
+                                <div class="stage-panel-body" id="stage5Body"></div>
+                            </div>
+                            <div class="stage-panel" id="stagePanel6" data-stage="6">
+                                <div class="stage-panel-header" onclick="toggleStagePanel(6)">
+                                    <span class="stage-panel-title">Stage 6 · Final Prompts</span>
+                                    <span class="stage-panel-meta">Director of Photography</span>
+                                    <span class="stage-status-badge stage-status-pending" id="stage6Status">waiting</span>
+                                    <span class="stage-panel-toggle" id="stage6Toggle">▼</span>
+                                </div>
+                                <div class="stage-panel-body" id="stage6Body"></div>
+                            </div>
                         </div>
 
                         <!-- Production Table Results -->
@@ -1724,7 +1830,6 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                         </div>
                     </div>
 
-                    <div id="phase3Error" class="error-message" style="display: none;"></div>
                 </div>
 
             </main>
@@ -2208,7 +2313,8 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
         let currentCreativeDirection = null; // Expanded creative direction object
         let lastAutoSuggestedStyle = null; // Snapshot of style fields auto-suggested by creative direction
         let lastTitleSuggestions = null; // Array of {title, description} for restore
-        let currentCast = null; // Cast data: {has_characters, cast: [{name, role, visual_identity, appears_in_beats, notes}]}
+        let currentCast = null; // Cast data: {has_characters, cast: [{name, role, visual_identity, notes, portrait_prompts, portraits, _identityHash}]}
+        let currentLocations = null; // Locations data: {has_locations, locations: [{name, description, environment_type, mood, notes, reference_sheet_prompt, references: {reference_sheet: {url, blob_path}} | null, _identityHash}], location_notes}
 
         // Master list of all possible prompt fields
         const PROMPT_FIELDS = [
@@ -4719,6 +4825,13 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                     console.log('[Production] Using cast:', currentCast.cast.length, 'characters');
                 }
 
+                // Include locations if defined
+                if (currentLocations && currentLocations.has_locations && currentLocations.locations && currentLocations.locations.length > 0) {
+                    readLocationsFromUI();
+                    requestBody.locations = currentLocations;
+                    console.log('[Production] Using locations:', currentLocations.locations.length, 'settings');
+                }
+
                 // Opt into streaming: server returns {task_id} immediately and writes
                 // per-batch progress to Firestore; we poll until status='complete'.
                 requestBody.streaming = true;
@@ -4762,14 +4875,15 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                 clearProdTimers();
 
                 // Coverage failure: HTTP 200 with error="coverage_failure" — render the
-                // partial table, then open a blocking modal offering targeted retry.
+                // partial table and surface the resume banner + error log. The modal
+                // popup was removed 2026-05-25 (UI cleanup) — banner is single source of truth.
                 if (data.error === 'coverage_failure') {
                     if (currentProjectId === data.project_id || !data.project_id) {
                         currentProductionData = { success: false, production_table: data.production_table };
                         renderProductionTable(data.production_table);
                         const shotCount = data.production_table?.shots?.length || 0;
                         updatePhaseStatus(3, `⚠️ ${shotCount} shots — some scenes missing`, 'error');
-                        openCoverageFailureModal(data.missing_beats || [], data.production_table);
+                        try { checkProductionResumable(currentProjectId); } catch (e) {}
                         triggerAutosave();
                     }
                     setBackgroundOp(targetProjectId, { status: 'coverage_failure', data, type: 'production' });
@@ -4842,6 +4956,9 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                 controls,
                 retainExistingRows: !!options.retainExistingRows,
             };
+            // Expose Cancel — only meaningful while a streaming task is live.
+            const cancelBtn = document.getElementById('productionCancelBtn');
+            if (cancelBtn) { cancelBtn.style.display = 'inline-block'; cancelBtn.disabled = false; }
             // Show the table shell. For retry runs and resumes, keep existing rows
             // visible so the user doesn't see the table flash empty — the worker
             // doesn't stream per-batch progress for those, only a final merged
@@ -4908,11 +5025,18 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                 if (data.status === 'complete') {
                     finalizeStreamedTable(data.final_table, state.projectId, false);
                     stopProductionTaskPolling();
+                    // Re-check resumable state — server has marked partial=false,
+                    // so the banner hides itself.
+                    if (projectMatches) {
+                        try { checkProductionResumable(state.projectId); } catch (e) {}
+                    }
                 } else if (data.status === 'coverage_failure') {
                     finalizeStreamedTable(data.final_table, state.projectId, true);
                     if (projectMatches) {
-                        openCoverageFailureModal(data.missing_beats || [], data.final_table || {});
+                        // Modal popup removed 2026-05-25; the resume banner +
+                        // error log are the single failure-recovery UI.
                         updatePhaseStatus(3, `⚠️ ${data.final_table?.shots?.length || 0} shots — some scenes missing`, 'error');
+                        try { checkProductionResumable(state.projectId); } catch (e) {}
                     }
                     stopProductionTaskPolling();
                 } else if (data.status === 'failed') {
@@ -4921,7 +5045,10 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                         state.controls.errorDiv.innerText = errMsg;
                         state.controls.errorDiv.style.display = 'block';
                     }
-                    if (projectMatches) updatePhaseStatus(3, '❌ Error', 'error');
+                    if (projectMatches) {
+                        updatePhaseStatus(3, '❌ Error', 'error');
+                        try { checkProductionResumable(state.projectId); } catch (e) {}
+                    }
                     // Mark op as failed so a refresh doesn't show a phantom spinner.
                     setBackgroundOp(state.projectId, {
                         status: 'failed',
@@ -4938,7 +5065,12 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
 
         function stopProductionTaskPolling() {
             const state = productionTaskState;
-            if (!state) return;
+            if (!state) {
+                // Still hide the Cancel button — covers cancel-with-no-poll case.
+                const cancelBtn = document.getElementById('productionCancelBtn');
+                if (cancelBtn) cancelBtn.style.display = 'none';
+                return;
+            }
             if (state.intervalId) clearInterval(state.intervalId);
             // Re-enable the Generate button
             if (state.controls?.btn) {
@@ -4946,6 +5078,8 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                 if (state.controls.btnText) state.controls.btnText.style.display = 'inline';
                 if (state.controls.spinner) state.controls.spinner.style.display = 'none';
             }
+            const cancelBtn = document.getElementById('productionCancelBtn');
+            if (cancelBtn) cancelBtn.style.display = 'none';
             productionTaskState = null;
         }
 
@@ -4995,6 +5129,126 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                     }
                 }
                 triggerAutosave();
+            }
+        }
+
+        // ── Resume banner: surfaces partial production runs ──
+        let _resumeState = null;
+
+        async function checkProductionResumable(projectId) {
+            const banner = document.getElementById('productionResumeBanner');
+            _resumeState = null;
+            if (!banner || !projectId) return;
+            try {
+                const res = await authFetch(`/api/projects/${projectId}/resumable`);
+                const data = await res.json();
+                // Always refresh the error log — it can exist independently of a
+                // resumable partial run (e.g. after a successful run that had
+                // transient batch failures during streaming).
+                renderProductionErrorLog(data?.errors || []);
+                if (!data || !data.resumable) {
+                    banner.style.display = 'none';
+                    return;
+                }
+                _resumeState = data;
+                const msg = document.getElementById('productionResumeMsg');
+                const written = data.shots_written || 0;
+                const target = data.total_shots || written;
+                const missing = (data.missing_beats || []).length;
+                const phase = data.last_completed_phase || 'unknown';
+                let parts = [];
+                if (written) parts.push(`<strong>${written}${target && target > written ? ' / ' + target : ''}</strong> shots saved`);
+                if (missing) parts.push(`<strong>${missing}</strong> missing beat${missing === 1 ? '' : 's'}`);
+                if (data.status) parts.push(`status: <code>${escapeHtml(data.status)}</code>`);
+                if (phase && phase !== 'unknown') parts.push(`last phase: <code>${escapeHtml(phase)}</code>`);
+                msg.innerHTML = (parts.join(' · ') || 'A previous run left partial state.')
+                    + '<div style="margin-top:4px; opacity:0.85;">Resume picks up where it stopped. Discard wipes the partial table.</div>';
+                banner.style.display = 'block';
+            } catch (e) {
+                console.warn('[resume] check failed', e);
+                banner.style.display = 'none';
+            }
+        }
+
+        async function resumeProductionTable() {
+            if (!currentProjectId) return;
+            const state = _resumeState || {};
+            const banner = document.getElementById('productionResumeBanner');
+            const resumeBtn = document.getElementById('productionResumeBtn');
+            const discardBtn = document.getElementById('productionDiscardBtn');
+            if (resumeBtn) resumeBtn.disabled = true;
+            if (discardBtn) discardBtn.disabled = true;
+
+            try {
+                const hasShots = (state.shots_written || 0) > 0;
+                const missing = state.missing_beats || [];
+
+                if (hasShots && missing.length > 0) {
+                    // Targeted retry of just the missing beats — existing endpoint.
+                    const existingShots = currentProductionData?.production_table?.shots || [];
+                    const body = {
+                        project_id: currentProjectId,
+                        missing_beats: missing,
+                        existing_table: { shots: existingShots, total_shots: existingShots.length },
+                        streaming: true,
+                    };
+                    const res = await authFetch('/api/generate-production-table/retry-beats', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                    const data = await res.json();
+                    if (data.task_id) {
+                        const btn = document.getElementById('productionBtn');
+                        const btnText = document.getElementById('productionBtnText');
+                        const spinner = document.getElementById('productionSpinner');
+                        const errorDiv = document.getElementById('phase3Error');
+                        if (btn) btn.disabled = true;
+                        if (btnText) btnText.style.display = 'none';
+                        if (spinner) spinner.style.display = 'block';
+                        updatePhaseStatus(3, `Resuming — recovering ${missing.length} missing beat${missing.length === 1 ? '' : 's'}…`, 'running');
+                        startProductionTaskPolling(data.task_id, currentProjectId,
+                            { btn, btnText, spinner, errorDiv },
+                            { retainExistingRows: true });
+                        if (banner) banner.style.display = 'none';
+                    } else {
+                        alert('Resume failed: ' + (data.error || 'unknown error'));
+                    }
+                } else {
+                    // No shots saved (or no missing-beats info) → rerun the full pipeline.
+                    // generateProductionTable() reads current narration + settings from the
+                    // form, so this is "Start Over with current inputs".
+                    if (banner) banner.style.display = 'none';
+                    generateProductionTable();
+                }
+            } catch (e) {
+                console.error('[resume] failed', e);
+                alert('Resume failed: ' + e.message);
+            } finally {
+                if (resumeBtn) resumeBtn.disabled = false;
+                if (discardBtn) discardBtn.disabled = false;
+            }
+        }
+
+        async function discardProductionPartial() {
+            if (!currentProjectId) return;
+            if (!confirm('Discard the partial production table? This deletes the saved shots so far.')) return;
+            const banner = document.getElementById('productionResumeBanner');
+            try {
+                await authFetch(`/api/projects/${currentProjectId}/pipeline_state?clear_shots=1`, {
+                    method: 'DELETE',
+                });
+                currentProductionData = null;
+                _resumeState = null;
+                if (banner) banner.style.display = 'none';
+                const tbody = document.getElementById('productionTableBody');
+                if (tbody) tbody.innerHTML = '';
+                const results = document.getElementById('productionResults');
+                if (results) results.style.display = 'none';
+                updatePhaseStatus(3, 'Cleared partial run. Generate again when ready.', 'pending');
+            } catch (e) {
+                console.error('[discard] failed', e);
+                alert('Discard failed: ' + e.message);
             }
         }
 
@@ -5110,119 +5364,899 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
             URL.revokeObjectURL(url);
         }
 
-        // Coverage-failure modal state — set when the modal opens, consumed by the retry handler.
-        let pendingCoverageRetry = null;
+        // ── Production error log (image-history-tile pattern) ──
+        // Persistent list of phase/batch failures from task_state.errors[].
+        // Refreshed each time checkProductionResumable() pulls /api/projects/<id>/resumable.
+        // The user expanded the requirement to "see what the error is" — this is the
+        // surface for that. Replaces the coverage modal (removed 2026-05-25).
 
-        function openCoverageFailureModal(missingBeats, productionTable) {
-            const summary = document.getElementById('coverageFailureSummary');
-            const beatsEl = document.getElementById('coverageFailureBeats');
-            const total = missingBeats.length;
-            summary.innerText =
-                `${total} script ${total === 1 ? 'beat' : 'beats'} couldn't be turned into shots ` +
-                `(usually a transient Gemini hiccup). The partial table is rendered below — retry to fill the gaps.`;
-            beatsEl.innerHTML = missingBeats.map((b, i) => `
-                <div style="margin-bottom: 8px;">
-                    <strong>${escapeHtml(b.act || 'ACT 1')} · ${escapeHtml(b.beat || `Beat ${i + 1}`)}</strong><br>
-                    <span style="color: #555">${escapeHtml((b.text || '').slice(0, 140))}${(b.text || '').length > 140 ? '…' : ''}</span>
-                </div>
-            `).join('');
-            pendingCoverageRetry = { missingBeats, productionTable };
-            document.getElementById('coverageFailureModal').style.display = 'flex';
+        function renderProductionErrorLog(errors) {
+            const container = document.getElementById('productionErrorLog');
+            const body = document.getElementById('productionErrorLogBody');
+            const label = document.getElementById('productionErrorLogLabel');
+            if (!container || !body) return;
+            const list = Array.isArray(errors) ? errors : [];
+            if (!list.length) {
+                container.style.display = 'none';
+                body.innerHTML = '';
+                return;
+            }
+            label.textContent = `Errors (${list.length})`;
+            container.style.display = 'block';
+            // Most recent first — backend appends chronologically.
+            const ordered = list.slice().reverse();
+            body.innerHTML = ordered.map((e, idx) => {
+                const phase = escapeHtml(e.phase || 'unknown phase');
+                const batch = escapeHtml(e.batch || '');
+                const ts = escapeHtml(formatErrorTimestamp(e.ts));
+                const msg = escapeHtml(e.error || 'error');
+                const taskId = escapeHtml(e.task_id || '');
+                const head = escapeHtml(e.response_head || '');
+                const tail = escapeHtml(e.response_tail || '');
+                const len = e.response_length != null ? Number(e.response_length).toLocaleString() : '';
+                return `
+                    <div class="production-error-tile" onclick="toggleProductionErrorTile(${idx})" id="prod-error-tile-${idx}">
+                        <div class="production-error-tile-summary">
+                            <span class="production-error-tile-phase">${phase}</span>
+                            <span class="production-error-tile-batch">${batch}</span>
+                            <span class="production-error-tile-ts">${ts}</span>
+                            <span class="production-error-tile-msg">${msg}</span>
+                            <span class="production-error-tile-toggle">&#9660;</span>
+                        </div>
+                        <div class="production-error-tile-details">
+                            <div class="production-error-tile-details-label">Error</div>${msg || '(no message)'}
+                            ${len ? `<div class="production-error-tile-details-label">Response length</div>${len} chars` : ''}
+                            ${head ? `<div class="production-error-tile-details-label">Response head</div>${head}` : ''}
+                            ${tail ? `<div class="production-error-tile-details-label">Response tail</div>${tail}` : ''}
+                            ${taskId ? `<div class="production-error-tile-details-label">Task ID</div>${taskId}` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
         }
 
-        function closeCoverageFailureModal() {
-            document.getElementById('coverageFailureModal').style.display = 'none';
-            pendingCoverageRetry = null;
-        }
-
-        async function retryMissingBeats() {
-            const targetProjectId = currentProjectId;
-            if (!pendingCoverageRetry) return closeCoverageFailureModal();
-            const { missingBeats, productionTable } = pendingCoverageRetry;
-            const errorDiv = document.getElementById('phase3Error');
-            const btn = document.getElementById('productionBtn');
-            const btnText = document.getElementById('productionBtnText');
-            const spinner = document.getElementById('productionSpinner');
-            updatePhaseStatus(3, `Retrying ${missingBeats.length} missing ${missingBeats.length === 1 ? 'scene' : 'scenes'}…`, 'running');
-            closeCoverageFailureModal();
-
+        function formatErrorTimestamp(ts) {
+            if (!ts) return '';
+            // Firestore returns timestamps as ISO strings or {_seconds, _nanoseconds}.
             try {
-                const body = {
-                    project_id: currentProjectId,
-                    missing_beats: missingBeats,
-                    existing_table: productionTable,
-                    duration_minutes: currentNarration?.duration_minutes || getSelectedDuration(),
-                    pacing_tier: document.getElementById('pacingTierSelect').value,
-                    format_preset: document.getElementById('formatPresetSelect').value,
-                    // Opt into streaming so a refresh can resume the retry via the
-                    // same poll endpoint as the main flow. Previously this ran as a
-                    // synchronous 10+ minute POST that orphaned on refresh.
-                    streaming: true,
-                };
-                if (approvedStyle) {
-                    body.style_analysis = approvedStyle;
-                    body.aspect_ratio = document.getElementById('reviewAspectRatio').value;
-                } else {
-                    body.aspect_ratio = '16:9';
+                if (typeof ts === 'string') return new Date(ts).toLocaleTimeString();
+                if (typeof ts === 'number') return new Date(ts * 1000).toLocaleTimeString();
+                if (ts && typeof ts === 'object') {
+                    const secs = ts._seconds ?? ts.seconds;
+                    if (secs != null) return new Date(secs * 1000).toLocaleTimeString();
                 }
-                if (currentCreativeDirection) body.creative_direction = currentCreativeDirection;
-                if (currentCast?.has_characters && currentCast?.cast?.length) body.cast = currentCast;
+            } catch (_) {}
+            return String(ts);
+        }
 
-                const response = await authFetch('/api/generate-production-table/retry-beats', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body),
-                });
-                const data = await response.json();
+        function toggleProductionErrorTile(idx) {
+            const tile = document.getElementById(`prod-error-tile-${idx}`);
+            if (tile) tile.classList.toggle('expanded');
+        }
 
-                // Streaming path: hand off to the same poller as the main flow.
-                if (data.task_id) {
-                    setBackgroundOp(targetProjectId, {
-                        status: 'in_progress',
-                        type: 'production',
-                        taskId: data.task_id,
-                        startedAt: Date.now(),
-                        action: 'retry',
-                    });
-                    if (btn) {
-                        btn.disabled = true;
-                        if (btnText) btnText.style.display = 'none';
-                        if (spinner) spinner.style.display = 'block';
-                    }
-                    startProductionTaskPolling(data.task_id, currentProjectId, {
-                        btn, btnText, spinner, errorDiv,
-                    }, { retainExistingRows: true });
-                    return;
-                }
+        function toggleProductionErrorLog() {
+            const body = document.getElementById('productionErrorLogBody');
+            const toggle = document.getElementById('productionErrorLogToggle');
+            if (!body) return;
+            const collapsed = body.style.display === 'none';
+            body.style.display = collapsed ? 'flex' : 'none';
+            if (toggle) toggle.innerHTML = collapsed ? '&#9650;' : '&#9660;';
+        }
 
-                // ── Legacy sync path (only if backend doesn't return a task_id) ──
-                if (data.error === 'coverage_failure') {
-                    currentProductionData = { success: false, production_table: data.production_table };
-                    renderProductionTable(data.production_table);
-                    const shotCount = data.production_table?.shots?.length || 0;
-                    updatePhaseStatus(3, `⚠️ ${shotCount} shots — still missing some`, 'error');
-                    openCoverageFailureModal(data.missing_beats || [], data.production_table);
-                    return;
+        async function cancelProductionTable() {
+            // Cancel = full wipe (matches Discard semantics). User opt-in via the
+            // explicit Cancel button only — never automatic.
+            const taskId = productionTaskState?.taskId;
+            if (!taskId) {
+                // No live task — nothing to cancel. Just hide the spinner state.
+                stopProductionTaskPolling();
+                return;
+            }
+            if (!confirm('Cancel the running production-table generation? Any shots written so far will be discarded.')) return;
+            const cancelBtn = document.getElementById('productionCancelBtn');
+            if (cancelBtn) cancelBtn.disabled = true;
+            try {
+                const res = await authFetch(`/api/production-task/${encodeURIComponent(taskId)}/cancel`, { method: 'POST' });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    throw new Error(data.error || `HTTP ${res.status}`);
                 }
-                if (!response.ok || !data.success) {
-                    throw new Error(data.error || 'Retry failed');
-                }
-
-                currentProductionData = data;
-                renderProductionTable(data.production_table);
-                const shotCount = data.production_table?.total_shots || data.production_table?.shots?.length || '?';
-                updatePhaseStatus(3, `✅ Complete — ${shotCount} shots`, 'complete');
-                if (typeof showToast === 'function') {
-                    showToast(`Recovered ${missingBeats.length} missing ${missingBeats.length === 1 ? 'scene' : 'scenes'}`, 'success');
-                }
-                triggerAutosave();
-            } catch (err) {
-                console.error('[Coverage retry] failed:', err);
-                errorDiv.innerText = `Retry failed: ${err.message || err}. You can try again or regenerate the full table.`;
-                errorDiv.style.display = 'block';
-                updatePhaseStatus(3, '❌ Retry failed', 'error');
+                // Wipe the in-memory state immediately; the server is doing the same.
+                currentProductionData = null;
+                _resumeState = null;
+                const tbody = document.getElementById('productionTableBody');
+                if (tbody) tbody.innerHTML = '';
+                const results = document.getElementById('productionResults');
+                if (results) results.style.display = 'none';
+                const banner = document.getElementById('productionResumeBanner');
+                if (banner) banner.style.display = 'none';
+                renderProductionErrorLog([]);
+                updatePhaseStatus(3, 'Cancelled. Generate again when ready.', 'pending');
+                stopProductionTaskPolling();
+                if (cancelBtn) cancelBtn.style.display = 'none';
+            } catch (e) {
+                console.error('[cancel] failed', e);
+                alert('Cancel failed: ' + e.message);
+            } finally {
+                if (cancelBtn) cancelBtn.disabled = false;
             }
         }
+
+        /* ═══════════════════════════════════════════════════════════════════
+           AGENTIC 5-STAGE PIPELINE — UI behavior
+           See docs/agentic_5stage_pipeline_2026_05_25/plan.md
+           ═══════════════════════════════════════════════════════════════════ */
+
+        let agenticPipelineState = {
+            taskId: null,
+            pollIntervalId: null,
+            lastFlowStatus: null,
+            stages: [],
+            startedAt: null,
+        };
+
+        const STAGE_ROLES = {
+            1: 'Director',
+            2: 'Production Designer',
+            3: 'Director of Photography',
+            4: 'Director + Storyboard',
+            5: 'Script Supervisor',
+            6: 'Director of Photography',
+        };
+
+        const STAGE_LABELS_UI = {
+            1: 'Story Treatment',
+            2: 'World & Design',
+            3: 'Cinematography Plan',
+            4: 'Shot List',
+            5: 'Continuity Brief',
+            6: 'Final Prompts',
+        };
+
+        function _agSetButton(id, opts) {
+            const btn = document.getElementById(id);
+            if (!btn) return;
+            if ('visible' in opts) btn.style.display = opts.visible ? 'inline-flex' : 'none';
+            if ('disabled' in opts) btn.disabled = !!opts.disabled;
+            if ('text' in opts) {
+                const inner = btn.querySelector('span');
+                if (inner) inner.textContent = opts.text;
+                else btn.textContent = opts.text;
+            }
+        }
+
+        function _agSetStatusBadge(stageNumber, status) {
+            const badge = document.getElementById(`stage${stageNumber}Status`);
+            if (!badge) return;
+            const labelMap = {
+                pending: 'waiting',
+                running: 'generating…',
+                complete: 'ready to review',
+                approved: 'approved',
+                stale: 'stale — rerun',
+                error: 'error',
+            };
+            badge.className = `stage-status-badge stage-status-${status || 'pending'}`;
+            badge.textContent = labelMap[status] || (status || 'waiting');
+        }
+
+        function toggleStagePanel(n) {
+            const panel = document.getElementById(`stagePanel${n}`);
+            if (!panel) return;
+            panel.classList.toggle('expanded');
+        }
+
+        function _agExpandPanel(n, force) {
+            const panel = document.getElementById(`stagePanel${n}`);
+            if (!panel) return;
+            if (force === true) panel.classList.add('expanded');
+            else if (force === false) panel.classList.remove('expanded');
+            else panel.classList.toggle('expanded');
+        }
+
+        function _agEscape(s) {
+            if (s === null || s === undefined) return '';
+            return String(s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function _agActionRow(stageNumber, status) {
+            const enabled = (status === 'complete' || status === 'approved');
+            let approveLabel;
+            if (status === 'approved') {
+                approveLabel = '✓ Approved';
+            } else if (stageNumber === 6) {
+                approveLabel = '✓ Approve (finish pipeline)';
+            } else {
+                const nextLabel = STAGE_LABELS_UI[stageNumber + 1] || `Stage ${stageNumber + 1}`;
+                approveLabel = `✓ Approve & Run Stage ${stageNumber + 1}: ${nextLabel}`;
+            }
+            return `
+                <div class="stage-panel-actions">
+                    <button class="btn-primary" ${enabled ? '' : 'disabled'}
+                        onclick="approveStage(${stageNumber})">${approveLabel}</button>
+                    <button class="btn-secondary" ${enabled ? '' : 'disabled'}
+                        onclick="openStageRegenerate(${stageNumber})">↻ Regenerate with feedback…</button>
+                </div>
+                <div id="stage${stageNumber}Feedback" class="stage-feedback-input" style="display:none;">
+                    <label class="input-label" style="font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:#888;">
+                        Tell the ${_agEscape(STAGE_ROLES[stageNumber] || '')} what to change
+                    </label>
+                    <textarea id="stage${stageNumber}FeedbackInput"
+                        placeholder="e.g., make the palette colder, more steel and less amber"></textarea>
+                    <div class="stage-feedback-actions">
+                        <button class="btn-primary" onclick="submitStageRegenerate(${stageNumber})">Submit &amp; Regenerate</button>
+                        <button class="btn-secondary" onclick="cancelStageRegenerate(${stageNumber})">Cancel</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Stage-specific renderers — produce the body HTML from the parsed output.
+        function _agRenderStage1(output) {
+            const arc = (output.emotional_arc || []).map(m =>
+                `<li><strong>${_agEscape(m.act || '')} · ${_agEscape(m.beat_ref || '')}:</strong>
+                 ${_agEscape(m.emotional_state || '')} — ${_agEscape(m.transition_note || '')}</li>`
+            ).join('');
+            const scenes = (output.scene_treatments || []).map(s =>
+                `<div class="stage-output-section">
+                    <div class="stage-output-label">Scene ${_agEscape(s.scene_id || '')}
+                        — beats ${_agEscape((s.beat_refs || []).join(', '))}</div>
+                    <div class="stage-output-text">${_agEscape(s.treatment || '')}</div>
+                    <div style="margin-top:6px; font-size:12px; color:#aaa; font-style:italic;">
+                        Performance: ${_agEscape(s.performance_note || '')}</div>
+                </div>`
+            ).join('');
+            const refs = (output.tonal_references || []).map(r =>
+                `<li>${_agEscape(r)}</li>`).join('');
+            return `
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Logline</div>
+                    <div class="stage-output-text">${_agEscape(output.logline || '')}</div>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Theme</div>
+                    <div class="stage-output-text">${_agEscape(output.theme || '')}</div>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Emotional Arc</div>
+                    <ul class="stage-output-list">${arc || '<li><em>none</em></li>'}</ul>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Scene Treatments</div>
+                    ${scenes || '<em>none</em>'}
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Performance Notes</div>
+                    <div class="stage-output-text">${_agEscape(output.performance_notes || '')}</div>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Tonal References</div>
+                    <ul class="stage-output-list">${refs || '<li><em>none</em></li>'}</ul>
+                </div>
+            `;
+        }
+
+        function _agRenderStage2(output) {
+            const palette = (output.color_palette || []).map(c =>
+                `<li><span style="display:inline-block; width:12px; height:12px; background:${_agEscape(c.hex || '#888')}; border-radius:2px; vertical-align:middle; margin-right:6px;"></span>
+                 <strong>${_agEscape(c.name || '')}</strong> <code>${_agEscape(c.hex || '')}</code>
+                 (${_agEscape(String(c.dominance_pct ?? ''))}%): ${_agEscape(c.when_dominant || '')}</li>`
+            ).join('');
+            return `
+                <div class="stage-output-section" style="background:rgba(255,200,80,0.06); border-left:3px solid #ffc850; padding:10px 12px; border-radius:4px;">
+                    <div class="stage-output-label" style="color:#ffc850;">Rendering Style (canonical aesthetic — echoed verbatim into every final prompt)</div>
+                    <div class="stage-output-text" style="font-weight:500;">${_agEscape(output.rendering_style || '')}</div>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">World Setting</div>
+                    <div class="stage-output-text">${_agEscape(output.world_setting || '')}</div>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Era</div>
+                    <div class="stage-output-text">${_agEscape(output.era || '')}</div>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Color Palette</div>
+                    <ul class="stage-output-list">${palette || '<li><em>none</em></li>'}</ul>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Texture Vocabulary</div>
+                    <div class="stage-output-text">${_agEscape((output.texture_vocabulary || []).join(', '))}</div>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Recurring Motifs</div>
+                    <div class="stage-output-text">${_agEscape((output.recurring_motifs || []).join(', '))}</div>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Props &amp; Environment</div>
+                    <div class="stage-output-text">${_agEscape(output.props_and_environment || '')}</div>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Lighting Rules</div>
+                    <div class="stage-output-text">${_agEscape(output.lighting_rules || '')}</div>
+                </div>
+            `;
+        }
+
+        function _agRenderStage3(output) {
+            const lighting = (output.lighting_per_scene || []).map(L =>
+                `<li><strong>Scene ${_agEscape(L.scene_id || '')}:</strong>
+                 key:fill ${_agEscape(L.key_to_fill || '')},
+                 color ${_agEscape(L.color || '')},
+                 motivation ${_agEscape(L.motivation || '')},
+                 mood ${_agEscape(L.mood || '')}</li>`
+            ).join('');
+            const mood = (output.mood_escalation || []).map(m =>
+                `<li>Beat ${_agEscape(m.beat_ref || '')} · intensity ${_agEscape(String(m.intensity ?? ''))}/10
+                 · ${_agEscape(m.visual_signal || '')}</li>`
+            ).join('');
+            const refs = (output.canonical_references || []).map(r =>
+                `<li>${_agEscape(r)}</li>`).join('');
+            return `
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Lens Vocabulary</div>
+                    <div class="stage-output-text">${_agEscape(output.lens_vocabulary || '')}</div>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Movement Language</div>
+                    <div class="stage-output-text">${_agEscape(output.movement_language || '')}</div>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Lighting Per Scene</div>
+                    <ul class="stage-output-list">${lighting || '<li><em>none</em></li>'}</ul>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Mood Escalation</div>
+                    <ul class="stage-output-list">${mood || '<li><em>none</em></li>'}</ul>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Canonical References</div>
+                    <ul class="stage-output-list">${refs || '<li><em>none</em></li>'}</ul>
+                </div>
+            `;
+        }
+
+        function _agRenderStage4(output) {
+            const shots = output.shots || [];
+            const rows = shots.map(s =>
+                `<tr>
+                    <td>${_agEscape(s.shot_number || '')}</td>
+                    <td>${_agEscape(s.timestamp || '')}</td>
+                    <td>${_agEscape(s.duration || '')}s</td>
+                    <td>${_agEscape(s.act || '')}<br><span style="opacity:.7;">${_agEscape(s.beat || '')}</span></td>
+                    <td><em>${_agEscape(s.script_beat || '')}</em></td>
+                    <td>${_agEscape(s.directors_intent || '')}</td>
+                    <td>${_agEscape(s.character_expression || '')}<br><span style="opacity:.7;">${_agEscape(s.character_outfit || '')}</span></td>
+                    <td>${_agEscape(s.camera_move || '')} · ${_agEscape(s.lens || '')} · ${_agEscape(s.angle || '')}</td>
+                </tr>`
+            ).join('');
+            return `
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Shot Blueprints (${shots.length} shots)</div>
+                    <div style="overflow-x: auto;">
+                        <table class="production-table" style="margin-top:6px; font-size: 12.5px;">
+                            <thead><tr>
+                                <th>#</th><th>Time</th><th>Dur</th><th>Act / Beat</th>
+                                <th>Script Beat</th><th>Intent</th>
+                                <th>Character</th><th>Camera</th>
+                            </tr></thead>
+                            <tbody>${rows || '<tr><td colspan="8"><em>no shots</em></td></tr>'}</tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        function _agRenderStage5(output) {
+            // Continuity Brief: character locks + vocab locks + callbacks + atmospheres
+            const charLocks = (output.character_locks || []).map(c =>
+                `<li><strong>${_agEscape(c.character_name || '')}</strong> →
+                 ${_agEscape(c.locked_descriptor || '')}</li>`
+            ).join('');
+            const vocabLocks = (output.vocabulary_locks || []).map(v =>
+                `<li><strong>${_agEscape(v.concept || '')}</strong> →
+                 <code>${_agEscape(v.canonical_phrase || '')}</code>
+                 ${v.rationale ? `<span style="color:#888;"> — ${_agEscape(v.rationale)}</span>` : ''}</li>`
+            ).join('');
+            const callbacks = (output.callback_map || []).map(c =>
+                `<li>Shot <strong>${_agEscape(c.shot_number || '')}</strong> echoes shot
+                 <strong>${_agEscape(c.callback_to_shot || '')}</strong>:
+                 ${_agEscape(c.note || '')}</li>`
+            ).join('');
+            const atmospheres = (output.act_atmospheres || []).map(a =>
+                `<li><strong>${_agEscape(a.act || '')}</strong>:
+                 ${_agEscape((a.keywords || []).join(', '))}</li>`
+            ).join('');
+            const concerns = output.consistency_concerns || '';
+            return `
+                <div class="stage-output-section" style="background:rgba(255,200,80,0.06); border-left:3px solid #ffc850; padding:10px 12px; border-radius:4px;">
+                    <div class="stage-output-label" style="color:#ffc850;">Character Locks (verbatim across every shot featuring the character)</div>
+                    <ul class="stage-output-list">${charLocks || '<li><em>none</em></li>'}</ul>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Vocabulary Locks (canonical phrasing)</div>
+                    <ul class="stage-output-list">${vocabLocks || '<li><em>none</em></li>'}</ul>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Callback Map</div>
+                    <ul class="stage-output-list">${callbacks || '<li><em>no callbacks</em></li>'}</ul>
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Per-Act Atmosphere Keywords</div>
+                    <ul class="stage-output-list">${atmospheres || '<li><em>none</em></li>'}</ul>
+                </div>
+                ${concerns ? `
+                <div class="stage-output-section" style="background:rgba(255,100,100,0.06); border-left:3px solid #ff6464; padding:10px 12px; border-radius:4px;">
+                    <div class="stage-output-label" style="color:#ff6464;">Consistency Concerns Flagged</div>
+                    <div class="stage-output-text">${_agEscape(concerns)}</div>
+                </div>` : ''}
+            `;
+        }
+
+        function _agRenderStage6(output) {
+            const review = output.continuity_review || {};
+            const revisions = (review.revisions_made || []).map(r =>
+                `<li>${_agEscape(r)}</li>`).join('');
+            const deltas = output.shot_deltas || [];
+            // Show first 3 + last 1 as sample so the panel doesn't bloat.
+            const sample = deltas.length > 4 ? deltas.slice(0, 3).concat([{shot_number: '...'}, deltas[deltas.length - 1]]) : deltas;
+            const sampleHtml = sample.map(d => {
+                if (d.shot_number === '...') return `<tr><td colspan="3" style="text-align:center; opacity:.5;">… ${deltas.length - 4} more shots …</td></tr>`;
+                return `<tr>
+                    <td><strong>${_agEscape(d.shot_number || '')}</strong></td>
+                    <td style="font-size: 12px; max-width: 360px;">${_agEscape(d.first_frame_prompt || '').slice(0, 280)}${(d.first_frame_prompt || '').length > 280 ? '…' : ''}</td>
+                    <td style="font-size: 12px; max-width: 360px;">${_agEscape(d.veo_prompt || '').slice(0, 280)}${(d.veo_prompt || '').length > 280 ? '…' : ''}</td>
+                </tr>`;
+            }).join('');
+            return `
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Continuity Review</div>
+                    <div style="display:grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin-top:6px;">
+                        <div style="font-weight:600;">Variety</div><div>${_agEscape(review.variety_check || '')}</div>
+                        <div style="font-weight:600;">Consistency</div><div>${_agEscape(review.consistency_notes || '')}</div>
+                        <div style="font-weight:600;">Pacing</div><div>${_agEscape(review.pacing_notes || '')}</div>
+                    </div>
+                    ${revisions ? `<div style="margin-top:8px;"><strong>Revisions made:</strong><ul class="stage-output-list">${revisions}</ul></div>` : ''}
+                </div>
+                <div class="stage-output-section">
+                    <div class="stage-output-label">Final Prompts (${deltas.length} shots) — sample</div>
+                    <div style="overflow-x:auto;">
+                        <table class="production-table" style="margin-top:6px; font-size:12.5px;">
+                            <thead><tr><th>Shot</th><th>First Frame Prompt</th><th>Veo Prompt</th></tr></thead>
+                            <tbody>${sampleHtml || '<tr><td colspan="3"><em>no shots</em></td></tr>'}</tbody>
+                        </table>
+                    </div>
+                    <div style="margin-top:8px; font-size:12px; color:#888;">
+                        Full production table is rendered below and saved to the project — feeds the Visuals tab.
+                    </div>
+                </div>
+            `;
+        }
+
+        const _AG_STAGE_RENDERERS = {
+            1: _agRenderStage1,
+            2: _agRenderStage2,
+            3: _agRenderStage3,
+            4: _agRenderStage4,
+            5: _agRenderStage5,
+            6: _agRenderStage6,
+        };
+
+        function _agRenderStageBody(stage) {
+            const body = document.getElementById(`stage${stage.stage_number}Body`);
+            if (!body) return;
+            const status = stage.status || 'pending';
+            let inner = '';
+            if (status === 'pending') {
+                inner = `<div style="color:#888; font-style:italic;">Waiting${stage.stage_number > 1 ? ` for Stage ${stage.stage_number - 1} to complete` : ' for pipeline to start'}.</div>`;
+            } else if (status === 'running') {
+                inner = `<div class="stage-running-indicator">
+                    <div class="stage-running-dot"></div>
+                    <span>${_agEscape(STAGE_ROLES[stage.stage_number] || 'Agent')} is working…</span>
+                </div>`;
+            } else if (status === 'error') {
+                // Stage 6 with checkpointed batches gets a Resume button —
+                // most failures here are Cloud Run timeouts or rate limits
+                // and we can pick up at the next unfinished batch.
+                const hasBatches = stage.stage_number === 6
+                    && Array.isArray(stage.completed_batches)
+                    && stage.completed_batches.length > 0;
+                const resumeBtn = hasBatches
+                    ? `<button class="btn-primary" onclick="resumeStage6()">▶ Resume Stage 6 (continues at next unfinished batch — ${stage.completed_batches.length}/${stage.total_batches || '?'} done)</button>`
+                    : '';
+                // Per-batch breakdown so the user can see which slice failed.
+                let batchBreakdown = '';
+                if (hasBatches && stage.total_batches) {
+                    const done = new Set(stage.completed_batches.map(Number));
+                    const items = [];
+                    for (let i = 0; i < stage.total_batches; i++) {
+                        if (done.has(i)) {
+                            items.push(`<li style="color:#4ade80;">✓ Batch ${i + 1} — completed</li>`);
+                        } else {
+                            items.push(`<li style="color:#f87171;">⚠ Batch ${i + 1} — not completed</li>`);
+                        }
+                    }
+                    batchBreakdown = `<div style="margin-top:8px; padding:8px 10px; background:rgba(255,255,255,0.04); border-radius:6px; font-size:12.5px;">
+                        <div style="opacity:.75; margin-bottom:4px;">Per-batch status:</div>
+                        <ul style="margin:0; padding-left:18px; list-style:none;">${items.join('')}</ul>
+                    </div>`;
+                }
+                inner = `<div class="stage-error-box">
+                    <strong>Error:</strong> ${_agEscape(stage.error || 'unknown')}
+                </div>
+                ${batchBreakdown}
+                <div class="stage-panel-actions">
+                    ${resumeBtn}
+                    <button class="btn-primary" onclick="openStageRegenerate(${stage.stage_number})">↻ Regenerate with feedback…</button>
+                </div>
+                <div id="stage${stage.stage_number}Feedback" class="stage-feedback-input" style="display:none;">
+                    <label class="input-label" style="font-size:11px;">Optional feedback</label>
+                    <textarea id="stage${stage.stage_number}FeedbackInput" placeholder="What went wrong? What should be different?"></textarea>
+                    <div class="stage-feedback-actions">
+                        <button class="btn-primary" onclick="submitStageRegenerate(${stage.stage_number})">Submit &amp; Regenerate</button>
+                        <button class="btn-secondary" onclick="cancelStageRegenerate(${stage.stage_number})">Cancel</button>
+                    </div>
+                </div>`;
+            } else {
+                // complete / approved / stale
+                const renderer = _AG_STAGE_RENDERERS[stage.stage_number];
+                let outBody = '<em>no output</em>';
+                try {
+                    if (renderer && stage.output) outBody = renderer(stage.output);
+                } catch (e) {
+                    outBody = `<div class="stage-error-box">Render error: ${_agEscape(e.message)}</div>`;
+                }
+                inner = outBody + _agActionRow(stage.stage_number, status);
+                if (status === 'stale') {
+                    inner = `<div style="padding:8px 10px; margin-bottom:10px; background:rgba(245,158,11,0.10); border:1px solid rgba(245,158,11,0.25); border-radius:6px; color:#fbbf24; font-size:12.5px;">
+                        ⚠ An earlier stage changed. This output may no longer match. Click Regenerate to refresh.
+                    </div>` + inner;
+                }
+            }
+            body.innerHTML = inner;
+        }
+
+        function _agSetFlowStatus(text) {
+            const el = document.getElementById('productionFlowStatus');
+            if (el) el.textContent = text || '';
+        }
+
+        function renderStagePanels(state) {
+            const wrap = document.getElementById('productionStagePanels');
+            if (wrap) wrap.style.display = '';
+
+            const stages = state.stages || [];
+            agenticPipelineState.stages = stages;
+            const flow = state.flow_state || {};
+            const flowStatus = flow.status || 'idle';
+            agenticPipelineState.lastFlowStatus = flowStatus;
+            agenticPipelineState.taskId = state.task_id || agenticPipelineState.taskId;
+
+            stages.forEach(s => {
+                _agSetStatusBadge(s.stage_number, s.status);
+                _agRenderStageBody(s);
+            });
+
+            // Auto-expand the running stage and the last complete stage; collapse approved.
+            const runningStage = stages.find(s => s.status === 'running');
+            const lastComplete = [...stages].reverse().find(s => s.status === 'complete' || s.status === 'error');
+            stages.forEach(s => {
+                const panel = document.getElementById(`stagePanel${s.stage_number}`);
+                if (!panel) return;
+                // Only auto-toggle if user hasn't manually expanded. We use the
+                // data attribute to track user override.
+                if (panel.dataset.userToggled) return;
+                if (runningStage && runningStage.stage_number === s.stage_number) {
+                    panel.classList.add('expanded');
+                } else if (lastComplete && lastComplete.stage_number === s.stage_number && !runningStage) {
+                    panel.classList.add('expanded');
+                } else if (s.status === 'approved') {
+                    panel.classList.remove('expanded');
+                }
+            });
+
+            // Top-bar controls.
+            const running = flowStatus === 'running';
+            const awaitingApproval = flowStatus === 'awaiting_approval';
+            const complete = flowStatus === 'complete';
+            const errored = flowStatus === 'error';
+            _agSetButton('productionBtn', {
+                visible: !running && !awaitingApproval,
+                disabled: false,
+                text: complete ? '▶ Restart Pipeline' : (errored ? '▶ Restart' : '▶ Start Pipeline'),
+            });
+            _agSetButton('productionCancelBtn', { visible: running || awaitingApproval });
+
+            // Status label.
+            const currentStage = flow.current_stage || 0;
+            const statusText = (
+                running ? `Running Stage ${currentStage} of 5` :
+                awaitingApproval ? `Stage ${currentStage} of 5 ready for review — click Approve to continue` :
+                complete ? `Complete · 5 / 5 stages` :
+                errored ? `Error — see Stage ${currentStage} below` :
+                ''
+            );
+            _agSetFlowStatus(statusText);
+
+            // If the production_data field has merged shots (Stage 5 wrote them),
+            // refresh the legacy productionResults table so the existing copy/
+            // download/Visuals-tab plumbing keeps working unchanged.
+            const stage5 = stages.find(s => s.stage_number === 5);
+            if (stage5 && stage5.status === 'complete' && stage5.output) {
+                // The merged shots live on the project doc, not in stage.output —
+                // we reload via existing helper to keep the source-of-truth single.
+                _agRefreshLegacyTableFromProject().catch(() => {});
+            }
+        }
+
+        async function _agRefreshLegacyTableFromProject() {
+            if (!currentProjectId) return;
+            try {
+                const res = await authFetch(`/api/projects/${encodeURIComponent(currentProjectId)}`);
+                if (!res.ok) return;
+                const data = await res.json();
+                const project = data.project || data;
+                const pd = project.production_data;
+                if (pd && (pd.production_table || pd.shots)) {
+                    currentProductionData = pd;
+                    if (typeof renderProductionTable === 'function') {
+                        renderProductionTable(pd.production_table || pd);
+                    }
+                }
+            } catch (e) {
+                console.warn('[agentic] legacy table refresh failed', e);
+            }
+        }
+
+        async function startProductionPipeline() {
+            if (!currentProjectId) {
+                alert('Save the project first — Phase 2 must be complete.');
+                return;
+            }
+            const narrationOk = (typeof currentNarration !== 'undefined') && currentNarration
+                && (currentNarration.narration || currentNarration.beats);
+            if (!narrationOk) {
+                alert('No narration found. Complete Phase 2 (Script) first.');
+                return;
+            }
+            const btn = document.getElementById('productionBtn');
+            if (btn) btn.disabled = true;
+            try {
+                const res = await authFetch('/api/production/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: currentProjectId }),
+                });
+                const data = await res.json();
+                if (!res.ok || !data.success) {
+                    throw new Error(data.error || `HTTP ${res.status}`);
+                }
+                agenticPipelineState.taskId = data.task_id;
+                agenticPipelineState.startedAt = Date.now();
+                startAgenticPolling();
+            } catch (e) {
+                console.error('[agentic] start failed', e);
+                alert('Could not start pipeline: ' + e.message);
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        function startAgenticPolling(intervalMs) {
+            stopAgenticPolling();
+            const tick = async () => {
+                if (!currentProjectId) { stopAgenticPolling(); return; }
+                try {
+                    const res = await authFetch(`/api/production/state?project_id=${encodeURIComponent(currentProjectId)}`);
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    if (data && data.success) {
+                        renderStagePanels(data);
+                        const status = data.flow_state && data.flow_state.status;
+                        // Stop polling once the worker is idle. awaiting_approval
+                        // is a terminal state from the worker's perspective —
+                        // approveStage() will restart polling for the next stage.
+                        if (status === 'complete' || status === 'error'
+                            || status === 'cancelled' || status === 'awaiting_approval') {
+                            stopAgenticPolling();
+                        }
+                    }
+                    // Also refresh the inline error log (existing pattern).
+                    if (data && data.flow_state && Array.isArray(data.flow_state.errors)) {
+                        renderProductionErrorLog(data.flow_state.errors);
+                    }
+                } catch (e) {
+                    console.warn('[agentic] poll failed', e);
+                }
+            };
+            agenticPipelineState.pollIntervalId = setInterval(tick, intervalMs || 2500);
+            tick();
+        }
+
+        function stopAgenticPolling() {
+            if (agenticPipelineState.pollIntervalId) {
+                clearInterval(agenticPipelineState.pollIntervalId);
+                agenticPipelineState.pollIntervalId = null;
+            }
+        }
+
+        // Pause/Resume removed 2026-05-26: the pipeline is gated stage-by-stage
+        // by Approve. Cancel is the only mid-stage interrupt.
+
+        async function resumeStage6() {
+            if (!currentProjectId) return;
+            try {
+                const res = await authFetch('/api/production/stage/6/resume', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: currentProjectId }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.success) {
+                    throw new Error(data.error || `HTTP ${res.status}`);
+                }
+                agenticPipelineState.taskId = data.task_id;
+                startAgenticPolling();
+            } catch (e) {
+                alert('Resume Stage 6 failed: ' + e.message);
+            }
+        }
+
+        async function cancelPipeline() {
+            if (!currentProjectId) return;
+            if (!confirm('Cancel the running pipeline? All stage outputs and shots will be discarded.')) return;
+            try {
+                const res = await authFetch('/api/production/cancel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: currentProjectId }),
+                });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    throw new Error(data.error || `HTTP ${res.status}`);
+                }
+                stopAgenticPolling();
+                // Reset UI to blank state.
+                for (let n = 1; n <= 5; n++) {
+                    _agSetStatusBadge(n, 'pending');
+                    const body = document.getElementById(`stage${n}Body`);
+                    if (body) body.innerHTML = '';
+                    const panel = document.getElementById(`stagePanel${n}`);
+                    if (panel) { panel.classList.remove('expanded'); delete panel.dataset.userToggled; }
+                }
+                const panels = document.getElementById('productionStagePanels');
+                if (panels) panels.style.display = 'none';
+                _agSetFlowStatus('');
+                _agSetButton('productionBtn', { visible: true, text: '▶ Start Pipeline' });
+                _agSetButton('productionCancelBtn', { visible: false });
+                renderProductionErrorLog([]);
+                // Wipe the legacy production results display too.
+                currentProductionData = null;
+                const tbody = document.getElementById('productionTableBody');
+                if (tbody) tbody.innerHTML = '';
+                const results = document.getElementById('productionResults');
+                if (results) results.style.display = 'none';
+            } catch (e) {
+                alert('Cancel failed: ' + e.message);
+            }
+        }
+
+        async function approveStage(n) {
+            if (!currentProjectId) return;
+            try {
+                const res = await authFetch(`/api/production/stage/${n}/approve`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: currentProjectId }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.success) {
+                    throw new Error(data.error || `HTTP ${res.status}`);
+                }
+                // The /approve endpoint spawned a worker for the next stage —
+                // resume polling so we see it run. If the pipeline is fully
+                // complete, just refresh once.
+                if (data.task_id) {
+                    agenticPipelineState.taskId = data.task_id;
+                    startAgenticPolling();
+                } else {
+                    const stateRes = await authFetch(`/api/production/state?project_id=${encodeURIComponent(currentProjectId)}`);
+                    if (stateRes.ok) {
+                        const stateData = await stateRes.json();
+                        if (stateData.success) renderStagePanels(stateData);
+                    }
+                }
+            } catch (e) {
+                alert('Approve failed: ' + e.message);
+            }
+        }
+
+        function openStageRegenerate(n) {
+            const box = document.getElementById(`stage${n}Feedback`);
+            if (box) box.style.display = 'block';
+            const ta = document.getElementById(`stage${n}FeedbackInput`);
+            if (ta) ta.focus();
+        }
+
+        function cancelStageRegenerate(n) {
+            const box = document.getElementById(`stage${n}Feedback`);
+            if (box) box.style.display = 'none';
+        }
+
+        async function submitStageRegenerate(n) {
+            if (!currentProjectId) return;
+            const ta = document.getElementById(`stage${n}FeedbackInput`);
+            const feedback = ta ? (ta.value || '').trim() : '';
+            const hasDownstream = (agenticPipelineState.stages || []).some(s =>
+                s.stage_number > n && s.status && s.status !== 'pending'
+            );
+            if (hasDownstream) {
+                if (!confirm(`Regenerating Stage ${n} will mark stages ${n + 1}–5 stale. You'll review Stage ${n} and approve to re-run downstream one stage at a time. Continue?`)) return;
+            }
+            const btn = document.querySelector(`#stage${n}Feedback .btn-primary`);
+            if (btn) btn.disabled = true;
+            try {
+                const res = await authFetch(`/api/production/stage/${n}/regenerate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: currentProjectId, feedback }),
+                });
+                const data = await res.json();
+                if (!res.ok || !data.success) {
+                    throw new Error(data.error || `HTTP ${res.status}`);
+                }
+                agenticPipelineState.taskId = data.task_id;
+                cancelStageRegenerate(n);
+                startAgenticPolling();
+            } catch (e) {
+                alert('Regenerate failed: ' + e.message);
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        // Called from restoreProjectState() when switching projects — rehydrates
+        // the 5-panel UI from whatever's in Firestore. Safe to call even on
+        // projects that never ran the new pipeline.
+        async function restoreAgenticPipelineState() {
+            if (!currentProjectId) return;
+            stopAgenticPolling();
+            try {
+                const res = await authFetch(`/api/production/state?project_id=${encodeURIComponent(currentProjectId)}`);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!data || !data.success) return;
+                const stages = data.stages || [];
+                const anyTouched = stages.some(s => s.status && s.status !== 'pending');
+                if (!anyTouched) {
+                    // Fresh project — keep panels hidden until user clicks Start.
+                    const panels = document.getElementById('productionStagePanels');
+                    if (panels) panels.style.display = 'none';
+                    _agSetButton('productionBtn', { visible: true, text: '▶ Start Pipeline' });
+                    _agSetFlowStatus('');
+                    return;
+                }
+                renderStagePanels(data);
+                // If a worker is currently running, kick polling back on.
+                const status = data.flow_state && data.flow_state.status;
+                if (status === 'running') startAgenticPolling();
+            } catch (e) {
+                console.warn('[agentic] restore failed', e);
+            }
+        }
+
+        // Track manual user toggles so auto-expand doesn't fight them.
+        document.addEventListener('click', (e) => {
+            const header = e.target && e.target.closest && e.target.closest('.stage-panel-header');
+            if (!header) return;
+            const panel = header.parentElement;
+            if (panel && panel.classList.contains('stage-panel')) {
+                panel.dataset.userToggled = '1';
+            }
+        });
+
 
         /* ══════════════════════════════════════
            STYLE REFERENCE IMAGES
@@ -5821,6 +6855,12 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
 
                 currentCast = data.cast_data;
                 renderCastPanel(currentCast);
+
+                if (data.locations_data) {
+                    currentLocations = data.locations_data;
+                    renderLocationsPanel(currentLocations);
+                }
+
                 triggerAutosave();
 
             } catch (error) {
@@ -5829,7 +6869,7 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
             } finally {
                 btn.disabled = false;
                 spinner.style.display = 'none';
-                btnText.textContent = 'Suggest Cast from Script';
+                btnText.textContent = 'Suggest Cast & Locations from Script';
             }
         }
 
@@ -5851,7 +6891,11 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
 
             noCharsMsg.style.display = 'none';
             container.innerHTML = castData.cast.map((char, idx) => {
-                const hasPortraits = char.portraits && (char.portraits.reference_sheet?.url || char.portraits.face_closeup?.url || char.portraits.full_body?.url);
+                const generatedUrl = char.portraits?.reference_sheet?.url || char.portraits?.face_closeup?.url || char.portraits?.full_body?.url;
+                const uploadedUrl = char.uploaded_ref?.url;
+                const hasPortraits = !!generatedUrl;
+                const hasUpload = !!uploadedUrl;
+                const activeRef = char.active_ref || (hasUpload && !generatedUrl ? 'uploaded' : 'generated');
                 const isOutdated = hasPortraits && char._identityHash && char._identityHash !== hashString(char.visual_identity);
                 return `
                 <div class="cast-card" data-index="${idx}">
@@ -5872,11 +6916,6 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                                   data-field="visual_identity" data-index="${idx}">${escapeHtml(char.visual_identity)}</textarea>
                     </div>
                     <div class="cast-card-field">
-                        <label>Appears in Beats</label>
-                        <input type="text" class="cast-field-input" value="${Array.isArray(char.appears_in_beats) ? char.appears_in_beats.join(', ') : char.appears_in_beats || ''}"
-                               placeholder="e.g., 1, 2, 3, 5, 7" data-field="appears_in_beats" data-index="${idx}">
-                    </div>
-                    <div class="cast-card-field">
                         <label>Notes</label>
                         <input type="text" class="cast-field-input" value="${escapeHtml(char.notes || '')}"
                                placeholder="Optional: special instructions" data-field="notes" data-index="${idx}">
@@ -5884,18 +6923,26 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                     <div class="cast-portrait-section">
                         <label>Character Reference Sheet</label>
                         ${!approvedStyle ? '<span class="cast-style-warning">&#9888; No style set — character may not match your visuals</span>' : ''}
-                        <div class="cast-portrait-images" id="cast-portraits-${idx}">
-                            ${(() => {
-                                const url = char.portraits?.reference_sheet?.url
-                                    || char.portraits?.face_closeup?.url
-                                    || char.portraits?.full_body?.url;
-                                return url ? `<img src="${url}" class="cast-portrait-thumb cast-portrait-wide" title="Character Reference Sheet">` : '';
-                            })()}
+                        ${char._styleWarning ? `<div class="cast-style-warning" style="display:block;margin:6px 0;">&#9888; This upload doesn't match your project style. <button class="btn-small" onclick="restyleUploadedReference(${idx}, 'character')">Restyle</button></div>` : ''}
+                        <div class="cast-portrait-images" id="cast-portraits-${idx}" style="display:flex;gap:8px;align-items:center;">
+                            ${generatedUrl ? `<div class="ref-slot ${activeRef === 'generated' ? 'active-ref' : ''}"><img src="${generatedUrl}" class="cast-portrait-thumb cast-portrait-wide" title="Generated"></div>` : ''}
+                            ${uploadedUrl ? `<div class="ref-slot ${activeRef === 'uploaded' ? 'active-ref' : ''}"><img src="${uploadedUrl}" class="cast-portrait-thumb cast-portrait-wide" title="Uploaded"></div>` : ''}
                             ${isOutdated ? '<span class="outdated-badge">Outdated</span>' : ''}
                         </div>
+                        ${(hasPortraits || hasUpload) ? `
+                        <div class="active-ref-toggle" style="font-size:11px;color:#aaa;margin:4px 0;">
+                            <label style="margin-right:10px;"><input type="radio" name="cast-active-${idx}" value="generated" ${activeRef === 'generated' ? 'checked' : ''} ${!hasPortraits ? 'disabled' : ''} onchange="setActiveCastReference(${idx}, 'generated')"> Generated</label>
+                            <label><input type="radio" name="cast-active-${idx}" value="uploaded" ${activeRef === 'uploaded' ? 'checked' : ''} ${!hasUpload ? 'disabled' : ''} onchange="setActiveCastReference(${idx}, 'uploaded')"> Uploaded</label>
+                        </div>
+                        ` : ''}
                         <button class="btn-secondary btn-small" onclick="generatePortraitForCharacter(${idx})" id="portrait-btn-${idx}">
-                            ${hasPortraits ? (isOutdated ? 'Regenerate Sheet' : 'Regenerate Sheet') : 'Generate Reference Sheet'}
+                            ${hasPortraits ? 'Regenerate Sheet' : 'Generate Reference Sheet'}
                         </button>
+                        <button class="btn-secondary btn-small" onclick="document.getElementById('cast-upload-input-${idx}').click()" style="margin-left:6px;">
+                            ${hasUpload ? 'Replace Upload' : 'Upload Sheet'}
+                        </button>
+                        <input type="file" id="cast-upload-input-${idx}" accept="image/png,image/jpeg,image/webp" style="display:none;"
+                               onchange="uploadReferenceForCharacter(${idx}, this.files[0]); this.value='';">
                         <div class="spinner" id="portrait-spinner-${idx}" style="display:none;"></div>
                     </div>
                 </div>
@@ -5916,7 +6963,6 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                 name: 'New Character',
                 role: '',
                 visual_identity: '',
-                appears_in_beats: [],
                 notes: ''
             });
             renderCastPanel(currentCast);
@@ -5942,10 +6988,7 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                 const getName = card.querySelector('[data-field="name"]')?.value || '';
                 const getRole = card.querySelector('[data-field="role"]')?.value || '';
                 const getIdentity = card.querySelector('[data-field="visual_identity"]')?.value || '';
-                const getBeatsStr = card.querySelector('[data-field="appears_in_beats"]')?.value || '';
                 const getNotes = card.querySelector('[data-field="notes"]')?.value || '';
-
-                const beats = getBeatsStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
 
                 // Preserve existing portrait data and hash from currentCast
                 const existingChar = currentCast.cast[idx] || {};
@@ -5954,12 +6997,14 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                     name: getName,
                     role: getRole,
                     visual_identity: getIdentity,
-                    appears_in_beats: beats,
                     notes: getNotes,
                     portrait_prompts: {
                         reference_sheet: existingChar.portrait_prompts?.reference_sheet || '',
                     },
                     portraits: existingChar.portraits || null,
+                    uploaded_ref: existingChar.uploaded_ref || null,
+                    active_ref: existingChar.active_ref || null,
+                    _styleWarning: existingChar._styleWarning || false,
                     _identityHash: existingChar._identityHash || null,
                 });
             });
@@ -5989,6 +7034,20 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
             return String(Math.abs(hash));
         }
 
+        // Build a reference-sheet prompt from the current visual_identity text.
+        // Mirrors execution/research_templates.py:4300-4311 so regen output matches
+        // what /api/suggest-cast originally produces, but always uses the latest
+        // edits the user typed into the Visual Identity textarea.
+        function buildReferenceSheetPrompt(char, styleSummary) {
+            const stylePrefix = styleSummary ? `${styleSummary}. ` : '';
+            const identity = (char.visual_identity || '').trim();
+            return `${stylePrefix}Create a professional character reference sheet for ${char.name}: ${identity}. ` +
+                `Use a clean, neutral plain background. Arrange in two horizontal rows: ` +
+                `Top row: four full-body standing views side-by-side — front view, left profile (facing left), right profile (facing right), back view. ` +
+                `Bottom row: three highly detailed close-up portraits — front portrait, left profile (facing left), right profile (facing right). ` +
+                `Maintain perfect identity consistency. Relaxed A-pose, consistent scale. Even spacing, clean panel separation. Consistent lighting. Crisp, print-ready.`;
+        }
+
         function getPortraitStyleContext() {
             // Collect style images — prefer Style Review panel refs, fallback to Visuals config
             const styleImages = [];
@@ -6016,11 +7075,8 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
             const char = currentCast?.cast?.[idx];
             if (!char) return;
 
-            const prompts = char.portrait_prompts;
-            // Support reference_sheet (new) with fallback to face_closeup (old data)
-            const refPrompt = prompts?.reference_sheet || prompts?.face_closeup;
-            if (!refPrompt) {
-                alert('No portrait prompt available. Re-suggest cast to generate prompts.');
+            if (!(char.visual_identity || '').trim()) {
+                alert('Visual Identity is empty. Describe the character before generating a reference sheet.');
                 return;
             }
 
@@ -6031,6 +7087,7 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
 
             const ctx = getPortraitStyleContext();
             const portraits = char.portraits || {};
+            const refPrompt = buildReferenceSheetPrompt(char, approvedStyle?.style_summary || '');
 
             try {
                 const resp = await authFetch('/api/generate-cast-portrait', {
@@ -6082,9 +7139,9 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                 return;
             }
 
-            const hasPrompts = currentCast.cast.some(c => c.portrait_prompts?.reference_sheet || c.portrait_prompts?.face_closeup);
-            if (!hasPrompts) {
-                alert('No portrait prompts found. Re-suggest cast to generate prompts.');
+            const missingIdentity = currentCast.cast.filter(c => !(c.visual_identity || '').trim());
+            if (missingIdentity.length) {
+                alert(`Visual Identity is empty for: ${missingIdentity.map(c => c.name).join(', ')}. Describe each character before generating.`);
                 return;
             }
 
@@ -6097,12 +7154,24 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
 
             const ctx = getPortraitStyleContext();
 
+            // Rebuild reference-sheet prompts from current Visual Identity text
+            // so user edits propagate to the batch endpoint (which keys on
+            // portrait_prompts.reference_sheet).
+            const styleSummary = approvedStyle?.style_summary || '';
+            const castForRequest = currentCast.cast.map(c => ({
+                ...c,
+                portrait_prompts: {
+                    ...(c.portrait_prompts || {}),
+                    reference_sheet: buildReferenceSheetPrompt(c, styleSummary),
+                }
+            }));
+
             try {
                 const response = await authFetch('/api/generate-cast-portraits-batch', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        cast: currentCast.cast,
+                        cast: castForRequest,
                         model: ctx.model,
                         project_id: currentProjectId,
                         style_images: ctx.styleImages,
@@ -6156,14 +7225,24 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
             let changed = false;
 
             for (const char of currentCast.cast) {
-                if (!char.portraits) continue;
                 const images = [];
-                if (char.portraits.reference_sheet?.url) {
-                    images.push({ data: char.portraits.reference_sheet.url, url: char.portraits.reference_sheet.url, path: char.portraits.reference_sheet.blob_path });
-                } else if (char.portraits.face_closeup?.url) {
-                    // fallback for old saved data
-                    images.push({ data: char.portraits.face_closeup.url, url: char.portraits.face_closeup.url, path: char.portraits.face_closeup.blob_path });
+                const generatedUrl = char.portraits?.reference_sheet?.url
+                    || char.portraits?.face_closeup?.url;
+                const generatedPath = char.portraits?.reference_sheet?.blob_path
+                    || char.portraits?.face_closeup?.blob_path;
+                const uploadedUrl = char.uploaded_ref?.url;
+                const uploadedPath = char.uploaded_ref?.blob_path;
+
+                // Respect active_ref: send only the active reference. If only
+                // one of generated/uploaded exists, use that regardless.
+                if (char.active_ref === 'uploaded' && uploadedUrl) {
+                    images.push({ data: uploadedUrl, url: uploadedUrl, path: uploadedPath });
+                } else if (generatedUrl) {
+                    images.push({ data: generatedUrl, url: generatedUrl, path: generatedPath });
+                } else if (uploadedUrl) {
+                    images.push({ data: uploadedUrl, url: uploadedUrl, path: uploadedPath });
                 }
+
                 if (images.length === 0) continue;
 
                 const existing = visualsCharacters.findIndex(vc => vc.name === char.name);
@@ -6179,6 +7258,551 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
 
             if (changed) {
                 renderCharacterList();
+            }
+        }
+
+        // ══════════════════════════════════════
+        // LOCATIONS PANEL
+        // Mirrors the Cast panel end-to-end. Suggest-cast returns both
+        // cast_data and locations_data; the panels render in parallel.
+        // ══════════════════════════════════════
+
+        function renderLocationsPanel(locationsData) {
+            const panel = document.getElementById('locationsPanel');
+            const container = document.getElementById('locationsCardsContainer');
+            const noneMsg = document.getElementById('locationsNoneMessage');
+            const notesDisplay = document.getElementById('locationsNotesDisplay');
+
+            panel.style.display = 'block';
+
+            const locs = (locationsData && locationsData.locations) || [];
+            if (!locationsData || !locationsData.has_locations || locs.length === 0) {
+                noneMsg.style.display = 'block';
+                container.innerHTML = '';
+                if (notesDisplay) notesDisplay.textContent = locationsData?.location_notes || '';
+                return;
+            }
+
+            noneMsg.style.display = 'none';
+            container.innerHTML = locs.map((loc, idx) => {
+                const generatedUrl = loc.references && loc.references.reference_sheet?.url;
+                const uploadedUrl = loc.uploaded_ref?.url;
+                const hasRef = !!generatedUrl;
+                const hasUpload = !!uploadedUrl;
+                const activeRef = loc.active_ref || (hasUpload && !generatedUrl ? 'uploaded' : 'generated');
+                const isOutdated = hasRef && loc._identityHash && loc._identityHash !== hashString(loc.description);
+                const envOptions = ['interior', 'exterior', 'abstract', 'vehicle', 'other']
+                    .map(t => `<option value="${t}" ${loc.environment_type === t ? 'selected' : ''}>${t}</option>`).join('');
+                return `
+                <div class="cast-card" data-loc-index="${idx}">
+                    <div class="cast-card-header">
+                        <input type="text" class="cast-name-input" value="${escapeHtml(loc.name || '')}"
+                               placeholder="Location name" data-loc-field="name" data-loc-index="${idx}">
+                        <button class="cast-remove-btn" onclick="removeLocation(${idx})" title="Remove location">&times;</button>
+                    </div>
+                    <div class="cast-card-field">
+                        <label>Description</label>
+                        <textarea class="cast-field-textarea" rows="3"
+                                  placeholder="Geometry, materials, palette, props, lighting character — anything that needs to stay consistent across shots set here"
+                                  data-loc-field="description" data-loc-index="${idx}">${escapeHtml(loc.description || '')}</textarea>
+                    </div>
+                    <div class="cast-card-field">
+                        <label>Environment Type</label>
+                        <select class="cast-field-input" data-loc-field="environment_type" data-loc-index="${idx}">
+                            ${envOptions}
+                        </select>
+                    </div>
+                    <div class="cast-card-field">
+                        <label>Mood</label>
+                        <input type="text" class="cast-field-input" value="${escapeHtml(loc.mood || '')}"
+                               placeholder="e.g., studious chaos; lonely contemplation" data-loc-field="mood" data-loc-index="${idx}">
+                    </div>
+                    <div class="cast-card-field">
+                        <label>Notes</label>
+                        <input type="text" class="cast-field-input" value="${escapeHtml(loc.notes || '')}"
+                               placeholder="Optional: continuity notes" data-loc-field="notes" data-loc-index="${idx}">
+                    </div>
+                    <div class="cast-portrait-section">
+                        <label>Location Reference Grid</label>
+                        ${!approvedStyle ? '<span class="cast-style-warning">&#9888; No style set — location may not match your visuals</span>' : ''}
+                        ${loc._styleWarning ? `<div class="cast-style-warning" style="display:block;margin:6px 0;">&#9888; This upload doesn't match your project style. <button class="btn-small" onclick="restyleUploadedReference(${idx}, 'location')">Restyle</button></div>` : ''}
+                        <div class="cast-portrait-images" id="loc-refs-${idx}" style="display:flex;gap:8px;align-items:center;">
+                            ${generatedUrl ? `<div class="ref-slot ${activeRef === 'generated' ? 'active-ref' : ''}"><img src="${generatedUrl}" class="cast-portrait-thumb cast-portrait-wide" title="Generated"></div>` : ''}
+                            ${uploadedUrl ? `<div class="ref-slot ${activeRef === 'uploaded' ? 'active-ref' : ''}"><img src="${uploadedUrl}" class="cast-portrait-thumb cast-portrait-wide" title="Uploaded"></div>` : ''}
+                            ${isOutdated ? '<span class="outdated-badge">Outdated</span>' : ''}
+                        </div>
+                        ${(hasRef || hasUpload) ? `
+                        <div class="active-ref-toggle" style="font-size:11px;color:#aaa;margin:4px 0;">
+                            <label style="margin-right:10px;"><input type="radio" name="loc-active-${idx}" value="generated" ${activeRef === 'generated' ? 'checked' : ''} ${!hasRef ? 'disabled' : ''} onchange="setActiveLocationReference(${idx}, 'generated')"> Generated</label>
+                            <label><input type="radio" name="loc-active-${idx}" value="uploaded" ${activeRef === 'uploaded' ? 'checked' : ''} ${!hasUpload ? 'disabled' : ''} onchange="setActiveLocationReference(${idx}, 'uploaded')"> Uploaded</label>
+                        </div>
+                        ` : ''}
+                        <button class="btn-secondary btn-small" onclick="generateReferenceForLocation(${idx})" id="loc-ref-btn-${idx}">
+                            ${hasRef ? 'Regenerate Reference' : 'Generate Reference Grid'}
+                        </button>
+                        <button class="btn-secondary btn-small" onclick="document.getElementById('loc-upload-input-${idx}').click()" style="margin-left:6px;">
+                            ${hasUpload ? 'Replace Upload' : 'Upload Reference'}
+                        </button>
+                        <input type="file" id="loc-upload-input-${idx}" accept="image/png,image/jpeg,image/webp" style="display:none;"
+                               onchange="uploadReferenceForLocation(${idx}, this.files[0]); this.value='';">
+                        <div class="spinner" id="loc-ref-spinner-${idx}" style="display:none;"></div>
+                    </div>
+                </div>
+            `}).join('');
+
+            if (locationsData.location_notes && notesDisplay) {
+                notesDisplay.textContent = locationsData.location_notes;
+                noneMsg.style.display = 'none';
+            }
+        }
+
+        function addLocation() {
+            if (!currentLocations) {
+                currentLocations = { has_locations: true, locations: [], location_notes: '' };
+            }
+            currentLocations.has_locations = true;
+            currentLocations.locations.push({
+                name: 'New Location',
+                description: '',
+                environment_type: 'interior',
+                mood: '',
+                notes: '',
+            });
+            renderLocationsPanel(currentLocations);
+        }
+
+        function removeLocation(idx) {
+            if (!currentLocations?.locations) return;
+            currentLocations.locations.splice(idx, 1);
+            if (currentLocations.locations.length === 0) {
+                currentLocations.has_locations = false;
+            }
+            renderLocationsPanel(currentLocations);
+        }
+
+        function readLocationsFromUI() {
+            if (!currentLocations) return null;
+            const cards = document.querySelectorAll('[data-loc-index]');
+            const seen = new Set();
+            const updated = [];
+
+            cards.forEach(card => {
+                const idx = parseInt(card.dataset.locIndex);
+                if (isNaN(idx) || seen.has(idx)) return;
+                seen.add(idx);
+
+                const get = (field) => {
+                    const el = document.querySelector(`[data-loc-field="${field}"][data-loc-index="${idx}"]`);
+                    return el?.value || '';
+                };
+
+                const existing = currentLocations.locations[idx] || {};
+                updated.push({
+                    name: get('name'),
+                    description: get('description'),
+                    environment_type: get('environment_type') || 'interior',
+                    mood: get('mood'),
+                    notes: get('notes'),
+                    reference_sheet_prompt: existing.reference_sheet_prompt || '',
+                    references: existing.references || null,
+                    uploaded_ref: existing.uploaded_ref || null,
+                    active_ref: existing.active_ref || null,
+                    _styleWarning: existing._styleWarning || false,
+                    _identityHash: existing._identityHash || null,
+                });
+            });
+
+            currentLocations.locations = updated;
+            currentLocations.has_locations = updated.length > 0;
+            return currentLocations;
+        }
+
+        function approveLocations() {
+            readLocationsFromUI();
+            const badge = document.getElementById('locationsApprovedBadge');
+            if (badge) badge.style.display = 'inline-block';
+            syncLocationsToVisualsLocations();
+            triggerAutosave();
+        }
+
+        // Mirror of buildReferenceSheetPrompt for locations. Built client-side
+        // so user edits to Description propagate to every regen.
+        function buildLocationReferencePrompt(loc, styleSummary) {
+            const stylePrefix = styleSummary ? `${styleSummary}. ` : '';
+            const desc = (loc.description || '').trim();
+            const envHint = loc.environment_type ? ` (${loc.environment_type})` : '';
+            return `${stylePrefix}Create a 2x3 reference grid for the location "${loc.name}"${envHint}: ${desc}. ` +
+                `Six panels arranged in two rows of three. Choose six diverse angles that best capture this specific location — ` +
+                `for interiors prefer wide / mid / detail / alt-angle / reverse / close-detail; ` +
+                `for exteriors prefer establishing wide / mid POV / detail / alt time-of-day / weather variation / close detail; ` +
+                `for abstract spaces prefer four atmospheric variations and two anchoring details. ` +
+                `Maintain perfect spatial and lighting consistency across all six panels. Clean panel separation, even spacing.`;
+        }
+
+        async function generateReferenceForLocation(idx) {
+            readLocationsFromUI();
+            const loc = currentLocations?.locations?.[idx];
+            if (!loc) return;
+
+            if (!(loc.description || '').trim()) {
+                alert('Description is empty. Describe the location before generating a reference grid.');
+                return;
+            }
+
+            const btn = document.getElementById(`loc-ref-btn-${idx}`);
+            const spinner = document.getElementById(`loc-ref-spinner-${idx}`);
+            if (btn) btn.disabled = true;
+            if (spinner) spinner.style.display = 'inline-block';
+
+            const ctx = getPortraitStyleContext();
+            const refs = loc.references || {};
+            const refPrompt = buildLocationReferencePrompt(loc, approvedStyle?.style_summary || '');
+
+            try {
+                const resp = await authFetch('/api/generate-location-reference', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt: refPrompt,
+                        location_name: loc.name,
+                        model: ctx.model,
+                        project_id: currentProjectId,
+                        style_images: ctx.styleImages,
+                        style_mode: ctx.styleMode,
+                        style_summary: approvedStyle?.style_summary || '',
+                    })
+                });
+
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    throw new Error(`Server error (${resp.status}): ${errText.substring(0, 200)}`);
+                }
+
+                const result = await resp.json();
+                if (result.success) {
+                    refs.reference_sheet = { url: result.image_url, blob_path: result.blob_path };
+                } else {
+                    throw new Error(result.error || 'Reference generation failed');
+                }
+
+                currentLocations.locations[idx].references = refs;
+                currentLocations.locations[idx]._identityHash = hashString(loc.description);
+                renderLocationsPanel(currentLocations);
+                syncLocationsToVisualsLocations();
+                triggerAutosave();
+
+            } catch (error) {
+                console.error('[Location Reference] Generation error:', error);
+                alert('Location reference generation failed: ' + error.message);
+            } finally {
+                if (btn) btn.disabled = false;
+                if (spinner) spinner.style.display = 'none';
+            }
+        }
+
+        async function generateAllLocationReferences() {
+            readLocationsFromUI();
+            if (!currentLocations?.locations?.length) {
+                alert('No locations to generate references for.');
+                return;
+            }
+
+            const missingDesc = currentLocations.locations.filter(l => !(l.description || '').trim());
+            if (missingDesc.length) {
+                alert(`Description is empty for: ${missingDesc.map(l => l.name).join(', ')}. Describe each location before generating.`);
+                return;
+            }
+
+            const btn = document.getElementById('generateAllLocRefsBtn');
+            const spinner = document.getElementById('generateAllLocRefsSpinner');
+            const btnText = document.getElementById('generateAllLocRefsBtnText');
+            btn.disabled = true;
+            spinner.style.display = 'inline-block';
+            btnText.textContent = 'Generating references...';
+
+            const ctx = getPortraitStyleContext();
+            const styleSummary = approvedStyle?.style_summary || '';
+            const locsForRequest = currentLocations.locations.map(l => ({
+                ...l,
+                reference_sheet_prompt: buildLocationReferencePrompt(l, styleSummary),
+            }));
+
+            try {
+                const response = await authFetch('/api/generate-location-references-batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        locations: locsForRequest,
+                        model: ctx.model,
+                        project_id: currentProjectId,
+                        style_images: ctx.styleImages,
+                        style_mode: ctx.styleMode,
+                        style_summary: styleSummary,
+                    })
+                });
+
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error(`Server error (${response.status}): ${errText.substring(0, 200)}`);
+                }
+                const data = await response.json();
+
+                const results = data.results || [];
+                for (const res of results) {
+                    const locIdx = currentLocations.locations.findIndex(l => l.name === res.location_name);
+                    if (locIdx < 0) continue;
+                    const refs = currentLocations.locations[locIdx].references || {};
+                    if (res.reference_sheet?.success) {
+                        refs.reference_sheet = { url: res.reference_sheet.image_url, blob_path: res.reference_sheet.blob_path };
+                    }
+                    currentLocations.locations[locIdx].references = refs;
+                    currentLocations.locations[locIdx]._identityHash = hashString(currentLocations.locations[locIdx].description);
+                }
+
+                renderLocationsPanel(currentLocations);
+                syncLocationsToVisualsLocations();
+                triggerAutosave();
+
+                const successCount = results.filter(r => r.reference_sheet?.success).length;
+                console.log(`[Location Reference] Batch complete: ${successCount}/${currentLocations.locations.length} locations`);
+
+            } catch (error) {
+                console.error('[Location Reference] Batch error:', error);
+                alert('Batch location reference generation failed: ' + error.message);
+            } finally {
+                btn.disabled = false;
+                spinner.style.display = 'none';
+                btnText.textContent = 'Generate All Location References';
+            }
+        }
+
+        function syncLocationsToVisualsLocations() {
+            if (!currentLocations?.locations?.length) return;
+            for (const loc of currentLocations.locations) {
+                const activeUrl = (loc.active_ref === 'uploaded' && loc.uploaded_ref?.url)
+                    ? loc.uploaded_ref.url
+                    : loc.references?.reference_sheet?.url;
+                const activePath = (loc.active_ref === 'uploaded' && loc.uploaded_ref?.url)
+                    ? loc.uploaded_ref.blob_path
+                    : loc.references?.reference_sheet?.blob_path;
+                if (!activeUrl) continue;
+                const img = { data: activeUrl, url: activeUrl, path: activePath };
+                const existing = visualsLocations.findIndex(vl => vl.name === loc.name);
+                const entry = { name: loc.name, images: [img], refMode: 'environment', fromCast: true };
+                if (existing >= 0) {
+                    visualsLocations[existing] = entry;
+                } else {
+                    visualsLocations.push(entry);
+                }
+            }
+        }
+
+        // ══════════════════════════════════════
+        // UPLOAD SUPPORT (Phase 3)
+        // Cast members and locations can have an uploaded reference sheet
+        // alongside the generated one. `active_ref` ('generated' | 'uploaded')
+        // controls which is sent to scene generation.
+        // ══════════════════════════════════════
+
+        async function _uploadAndAnalyzeReference(file, kind) {
+            const reader = new FileReader();
+            const b64 = await new Promise((resolve, reject) => {
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+
+            const folder = kind === 'character' ? 'character' : 'location';
+            const uploadResp = await authFetch('/api/upload-reference-image', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    image: b64,
+                    type: folder,
+                    project_id: currentProjectId,
+                    filename: file.name,
+                })
+            });
+            const uploadData = await uploadResp.json();
+            if (!uploadResp.ok || !uploadData.success) {
+                throw new Error(uploadData.error || 'Upload failed');
+            }
+
+            // Best-effort Vision pass — failures don't block the upload.
+            let analysis = { identity_text: '', style_summary: '', style_mismatch: false };
+            try {
+                const analyzeResp = await authFetch('/api/analyze-uploaded-reference', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image_url: uploadData.url,
+                        kind,
+                        style_summary: approvedStyle?.style_summary || '',
+                        project_id: currentProjectId,
+                    })
+                });
+                const analyzeData = await analyzeResp.json();
+                if (analyzeResp.ok && analyzeData.success) {
+                    analysis = {
+                        identity_text: analyzeData.identity_text || '',
+                        style_summary: analyzeData.style_summary || '',
+                        style_mismatch: !!analyzeData.style_mismatch,
+                    };
+                }
+            } catch (e) {
+                console.warn('[Upload] Vision analysis failed (non-fatal):', e);
+            }
+
+            return {
+                url: uploadData.url,
+                blob_path: uploadData.path,
+                ...analysis,
+            };
+        }
+
+        async function uploadReferenceForCharacter(idx, file) {
+            if (!file) return;
+            readCastFromUI();
+            const char = currentCast?.cast?.[idx];
+            if (!char) return;
+
+            const btn = document.getElementById(`portrait-btn-${idx}`);
+            const spinner = document.getElementById(`portrait-spinner-${idx}`);
+            if (btn) btn.disabled = true;
+            if (spinner) spinner.style.display = 'inline-block';
+
+            try {
+                const r = await _uploadAndAnalyzeReference(file, 'character');
+                char.uploaded_ref = { url: r.url, blob_path: r.blob_path };
+                char.active_ref = 'uploaded';
+                char._styleWarning = r.style_mismatch;
+                if (r.identity_text && !(char.visual_identity || '').trim()) {
+                    char.visual_identity = r.identity_text;
+                }
+                renderCastPanel(currentCast);
+                syncCastToVisualsCharacters();
+                triggerAutosave();
+            } catch (err) {
+                console.error('[Cast Upload] Failed:', err);
+                alert('Upload failed: ' + err.message);
+            } finally {
+                if (btn) btn.disabled = false;
+                if (spinner) spinner.style.display = 'none';
+            }
+        }
+
+        async function uploadReferenceForLocation(idx, file) {
+            if (!file) return;
+            readLocationsFromUI();
+            const loc = currentLocations?.locations?.[idx];
+            if (!loc) return;
+
+            const btn = document.getElementById(`loc-ref-btn-${idx}`);
+            const spinner = document.getElementById(`loc-ref-spinner-${idx}`);
+            if (btn) btn.disabled = true;
+            if (spinner) spinner.style.display = 'inline-block';
+
+            try {
+                const r = await _uploadAndAnalyzeReference(file, 'location');
+                loc.uploaded_ref = { url: r.url, blob_path: r.blob_path };
+                loc.active_ref = 'uploaded';
+                loc._styleWarning = r.style_mismatch;
+                if (r.identity_text && !(loc.description || '').trim()) {
+                    loc.description = r.identity_text;
+                }
+                renderLocationsPanel(currentLocations);
+                syncLocationsToVisualsLocations();
+                triggerAutosave();
+            } catch (err) {
+                console.error('[Location Upload] Failed:', err);
+                alert('Upload failed: ' + err.message);
+            } finally {
+                if (btn) btn.disabled = false;
+                if (spinner) spinner.style.display = 'none';
+            }
+        }
+
+        function setActiveCastReference(idx, source) {
+            readCastFromUI();
+            const char = currentCast?.cast?.[idx];
+            if (!char) return;
+            char.active_ref = source;
+            renderCastPanel(currentCast);
+            syncCastToVisualsCharacters();
+            triggerAutosave();
+        }
+
+        function setActiveLocationReference(idx, source) {
+            readLocationsFromUI();
+            const loc = currentLocations?.locations?.[idx];
+            if (!loc) return;
+            loc.active_ref = source;
+            renderLocationsPanel(currentLocations);
+            syncLocationsToVisualsLocations();
+            triggerAutosave();
+        }
+
+        async function restyleUploadedReference(idx, kind) {
+            const ctx = getPortraitStyleContext();
+            const styleSummary = approvedStyle?.style_summary || '';
+            let item, identityText, name;
+            if (kind === 'character') {
+                readCastFromUI();
+                item = currentCast?.cast?.[idx];
+                if (!item) return;
+                identityText = (item.visual_identity || '').trim();
+                name = item.name;
+            } else {
+                readLocationsFromUI();
+                item = currentLocations?.locations?.[idx];
+                if (!item) return;
+                identityText = (item.description || '').trim();
+                name = item.name;
+            }
+            if (!identityText) {
+                alert('No identity description available to restyle from. Fill in the description first.');
+                return;
+            }
+
+            try {
+                const resp = await authFetch('/api/restyle-reference', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        kind,
+                        name,
+                        identity_text: identityText,
+                        style_images: ctx.styleImages,
+                        style_mode: ctx.styleMode,
+                        style_summary: styleSummary,
+                        model: ctx.model,
+                        project_id: currentProjectId,
+                    })
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.error || 'Restyle failed');
+
+                if (kind === 'character') {
+                    item.portraits = item.portraits || {};
+                    item.portraits.reference_sheet = { url: data.image_url, blob_path: data.blob_path };
+                    item._identityHash = hashString(item.visual_identity);
+                    item.active_ref = 'generated';
+                    item._styleWarning = false;
+                    renderCastPanel(currentCast);
+                    syncCastToVisualsCharacters();
+                } else {
+                    item.references = item.references || {};
+                    item.references.reference_sheet = { url: data.image_url, blob_path: data.blob_path };
+                    item._identityHash = hashString(item.description);
+                    item.active_ref = 'generated';
+                    item._styleWarning = false;
+                    renderLocationsPanel(currentLocations);
+                    syncLocationsToVisualsLocations();
+                }
+                triggerAutosave();
+            } catch (err) {
+                console.error('[Restyle] Failed:', err);
+                alert('Restyle failed: ' + err.message);
             }
         }
 
@@ -6400,6 +8024,7 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
             styleMode: 'art_only',
         };
         let visualsCharacters = [];
+        let visualsLocations = []; // Per-project location refs derived from currentLocations.references
         let charModalImages = [];  // temp images for character modal
         let animationPollers = {};
         let visualsGenerationPhase = 'idle'; // 'idle' | 'preview' | 'batch'
@@ -6794,16 +8419,117 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
             }
         }
 
+        // ── Kie recovery: durable record of in-flight tasks, keyed by project.
+        // localStorage writes are synchronous and survive an instant tab close —
+        // unlike doSaveProject() which is a fire-and-forget fetch and will be
+        // cancelled if the tab closes before the PUT completes. This is the
+        // last line of defense against "I paid Kie but the UI lost the task."
+        function _kieRecoveryKey(projectId) { return `kieRecover:${projectId}`; }
+        function setKieRecoveryRecord(projectId, sceneId, taskId, kind) {
+            if (!projectId || !sceneId || !taskId) return;
+            try {
+                const key = _kieRecoveryKey(projectId);
+                const records = JSON.parse(localStorage.getItem(key) || '{}');
+                records[String(sceneId)] = { taskId, kind: kind || 'image', startedAt: Date.now() };
+                localStorage.setItem(key, JSON.stringify(records));
+            } catch (e) {
+                console.warn('[Kie recover] localStorage write failed:', e);
+            }
+        }
+        function clearKieRecoveryRecord(projectId, sceneId) {
+            if (!projectId || !sceneId) return;
+            try {
+                const key = _kieRecoveryKey(projectId);
+                const records = JSON.parse(localStorage.getItem(key) || '{}');
+                if (records[String(sceneId)]) {
+                    delete records[String(sceneId)];
+                    if (Object.keys(records).length === 0) localStorage.removeItem(key);
+                    else localStorage.setItem(key, JSON.stringify(records));
+                }
+            } catch (e) {}
+        }
+        function getKieRecoveryRecords(projectId) {
+            if (!projectId) return {};
+            try {
+                return JSON.parse(localStorage.getItem(_kieRecoveryKey(projectId)) || '{}');
+            } catch (e) { return {}; }
+        }
+
+        // Reconcile localStorage recovery records against the current
+        // visualsScenes array and resume polling for anything in flight.
+        // Idempotent — safe to call multiple times. Used by loadProject (to
+        // pick up after a tab close that lost the Firestore autosave) and by
+        // initVisualsFromProductionTable (the rebuild path loses pendingKieTaskId
+        // on the scene objects, so we re-attach it here).
+        function resumeKieRecoveryForVisuals() {
+            if (!currentProjectId) return 0;
+            const records = getKieRecoveryRecords(currentProjectId);
+            const entries = Object.entries(records);
+            if (entries.length === 0) return 0;
+            // Kie tempfile URLs expire ~24h after generation, so a recovery
+            // record older than 48h is almost certainly unrecoverable. Drop it.
+            const TTL_MS = 48 * 60 * 60 * 1000;
+            const now = Date.now();
+            let resumed = 0;
+            for (const [sceneId, rec] of entries) {
+                if (rec.startedAt && (now - rec.startedAt) > TTL_MS) {
+                    clearKieRecoveryRecord(currentProjectId, sceneId);
+                    continue;
+                }
+                const idx = visualsScenes.findIndex(s => String(s.sceneId) === String(sceneId));
+                if (idx === -1) continue;
+                const s = visualsScenes[idx];
+                const kind = rec.kind || 'image';
+                const urlField = kind === 'video' ? 'videoUrl' : 'imageUrl';
+                const statusField = kind === 'video' ? 'videoStatus' : 'imageStatus';
+                if (s[urlField]) {
+                    // Already finished from a different path — clean the record.
+                    clearKieRecoveryRecord(currentProjectId, sceneId);
+                    continue;
+                }
+                // Skip if a poll loop is already in flight against the same task.
+                if (s.pendingKieTaskId === rec.taskId && s[statusField] === 'polling') continue;
+                s.pendingKieTaskId = rec.taskId;
+                s.pendingKieKind = kind;
+                s.pendingKieStartedAt = rec.startedAt || Date.now();
+                s[statusField] = 'polling';
+                console.log(`[Visuals] resuming Kie poll (localStorage) scene=${sceneId} kind=${kind} task=${rec.taskId}`);
+                _visualsPollStudioKie(idx, kind, rec.taskId);
+                resumed++;
+            }
+            if (resumed > 0) updateImageProgress(), updateVideoProgress();
+            return resumed;
+        }
+
         async function _visualsPollStudioKie(idx, kind, taskId) {
             const s = visualsScenes[idx];
             const statusField = kind === 'video' ? 'videoStatus' : 'imageStatus';
             const errorField  = kind === 'video' ? 'videoError'  : 'imageError';
             const urlField    = kind === 'video' ? 'videoUrl'    : 'imageUrl';
+            // Pin the project ID so a mid-poll project switch can't make the
+            // localStorage record get cleared against the wrong project.
+            const targetProjectId = currentProjectId;
+
+            // SYNCHRONOUS durable write — survives instant tab close.
+            // The Firestore autosave below is fire-and-forget and can be lost
+            // if the user closes the tab before it completes.
+            setKieRecoveryRecord(targetProjectId, s.sceneId, taskId, kind);
+
+            // Persist the task on the scene so a refresh or a give-up here
+            // can rejoin instead of forcing the user to pay for a new task.
+            // Cleared only on terminal SUCCESS — terminal-failure paths leave
+            // these set so the "Recover task" button has something to use.
+            s.pendingKieTaskId = taskId;
+            s.pendingKieKind = kind;
+            s.pendingKieStartedAt = s.pendingKieStartedAt || Date.now();
+            doSaveProject();
+
             const start = Date.now();
-            const timeoutMs = 10 * 60 * 1000;
-            let consecutive = 0;
+            const timeoutMs = 20 * 60 * 1000;
+            let delay = 4000;       // base poll interval
+            const maxDelay = 30000; // cap when backing off on errors
             while (Date.now() - start < timeoutMs) {
-                await new Promise(r => setTimeout(r, 4000));
+                await new Promise(r => setTimeout(r, delay));
                 try {
                     // Thread scene_id + kind so server names the Firebase upload
                     // scene_{id}_{ts}, making it visible to the history scanner.
@@ -6815,19 +8541,22 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                         + (qs.toString() ? `?${qs.toString()}` : '');
                     const r = await authFetch(url);
                     if (!r.ok) {
-                        consecutive++;
-                        if (consecutive >= 5) throw new Error(`Polling failed (HTTP ${r.status})`);
+                        // Back off but keep polling — the task is still running
+                        // on Kie and the user has already paid for it.
+                        delay = Math.min(delay * 2, maxDelay);
+                        console.warn(`[Kie poll] HTTP ${r.status} on scene ${s.sceneId} — backing off to ${delay/1000}s`);
                         continue;
                     }
-                    consecutive = 0;
+                    delay = 4000; // reset on a clean poll
                     const data = await r.json();
                     // Server flips status to 'rehost_failed' when it could not
                     // persist any result. Don't store the kie tempfile URL — it
                     // would die in ~24h. Surface a retryable error instead.
                     if (data.status === 'rehost_failed') {
                         s[statusField] = 'error';
-                        s[errorField] = 'Could not save to permanent storage — click Regenerate to retry';
+                        s[errorField] = 'Could not save to permanent storage — click Recover to retry';
                         updateSceneCard(idx);
+                        doSaveProject();
                         return;
                     }
                     if (data.status === 'completed') {
@@ -6837,7 +8566,12 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                         if (persistent.length) {
                             s[urlField] = persistent[0];
                             s[statusField] = 'complete';
+                            s.pendingKieTaskId = null;
+                            s.pendingKieKind = null;
+                            s.pendingKieStartedAt = null;
+                            clearKieRecoveryRecord(targetProjectId, s.sceneId);
                             updateSceneCard(idx);
+                            if (kind === 'image') updateImageProgress(); else updateVideoProgress();
                             doSaveProject();
                             if (kind === 'image') fetchImageHistoryForScene(idx);
                             else if (kind === 'video') fetchVideoHistoryForScene(idx);
@@ -6847,26 +8581,55 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                         }
                         // Completed with no persisted URLs — treat as rehost failure.
                         s[statusField] = 'error';
-                        s[errorField] = 'Generation finished but could not be saved — click Regenerate to retry';
+                        s[errorField] = 'Generation finished but could not be saved — click Recover to retry';
                         updateSceneCard(idx);
+                        if (kind === 'image') updateImageProgress(); else updateVideoProgress();
+                        doSaveProject();
                         return;
                     }
                     if (data.status === 'failed' || data.status === 'error') {
-                        throw new Error(data.error || data.msg || 'Generation failed');
-                    }
-                } catch (e) {
-                    consecutive++;
-                    if (consecutive >= 5) {
                         s[statusField] = 'error';
-                        s[errorField] = e.message || String(e);
+                        s[errorField] = data.error || data.msg || 'Generation failed';
+                        // Kie itself reported failure — task can't be recovered,
+                        // safe to clear so the UI shows Regenerate not Recover.
+                        s.pendingKieTaskId = null;
+                        s.pendingKieKind = null;
+                        s.pendingKieStartedAt = null;
+                        clearKieRecoveryRecord(targetProjectId, s.sceneId);
                         updateSceneCard(idx);
+                        if (kind === 'image') updateImageProgress(); else updateVideoProgress();
+                        doSaveProject();
                         return;
                     }
+                } catch (e) {
+                    // Network glitch / token refresh hiccup / rate-limit throw
+                    // from authFetch — back off and keep listening. The task is
+                    // still running on Kie's side regardless of our retries.
+                    delay = Math.min(delay * 2, maxDelay);
+                    console.warn(`[Kie poll] error on scene ${s.sceneId}: ${e.message || e} — backing off to ${delay/1000}s`);
                 }
             }
+            // 20-minute wall-clock hit — leave pendingKieTaskId set so the user
+            // can click "Recover task" once Kie's queue catches up.
             s[statusField] = 'error';
-            s[errorField] = 'Generation timed out after 10 min';
+            s[errorField] = 'Polling timed out — click Recover to check again (no extra charge)';
             updateSceneCard(idx);
+            doSaveProject();
+        }
+
+        // Re-attach polling to a Kie task whose poll loop died (rate-limit
+        // give-up, refresh, 20-min timeout, etc). Costs nothing if the task
+        // already finished — the next poll returns the URL.
+        async function recoverPendingKieTask(idx) {
+            const s = visualsScenes[idx];
+            if (!s || !s.pendingKieTaskId) return;
+            const kind = s.pendingKieKind || 'image';
+            const statusField = kind === 'video' ? 'videoStatus' : 'imageStatus';
+            const errorField  = kind === 'video' ? 'videoError'  : 'imageError';
+            s[statusField] = 'polling';
+            s[errorField] = null;
+            updateSceneCard(idx);
+            _visualsPollStudioKie(idx, kind, s.pendingKieTaskId);
         }
 
         // ── Data Loading ──
@@ -7037,6 +8800,7 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                     markedForAnimation: false,
                     markedForImageGen: false,
                     selectedCharacters: existing?.selectedCharacters || [],
+                    selectedLocations: existing?.selectedLocations || [],
                     imageHistory: existing?.imageHistory || [],
                     videoHistory: existing?.videoHistory || [],
                     // Multi-reference animation state (Seedance etc.)
@@ -7097,8 +8861,43 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                 }
             }
 
+            // Auto-assign locations from production-table environment text. Same
+            // pattern as cast: scan first_frame_prompt + script_beat for location
+            // names; if no name hit, fall back to description-keyword overlap.
+            if (currentLocations?.locations?.length && pt.shots) {
+                for (const scene of visualsScenes) {
+                    if (scene.selectedLocations && scene.selectedLocations.length > 0) continue;
+                    const shot = pt.shots.find(s => String(s.shot_number) === scene.sceneId);
+                    if (!shot) continue;
+
+                    const promptText = ((shot.first_frame_prompt || '') + ' ' + (shot.script_beat || '')).toLowerCase();
+                    const matched = currentLocations.locations
+                        .filter(l => promptText.includes((l.name || '').toLowerCase()))
+                        .map(l => l.name);
+
+                    if (matched.length === 0) {
+                        const fallbackMatched = currentLocations.locations
+                            .filter(l => {
+                                const desc = (l.description || '').toLowerCase();
+                                const descWords = desc.split(/[,;.]/).map(w => w.trim()).filter(w => w.length > 5);
+                                return descWords.some(w => promptText.includes(w));
+                            })
+                            .map(l => l.name);
+                        if (fallbackMatched.length > 0) {
+                            scene.selectedLocations = fallbackMatched;
+                            continue;
+                        }
+                    }
+
+                    if (matched.length > 0) {
+                        scene.selectedLocations = matched;
+                    }
+                }
+            }
+
             // Sync cast portraits to visuals characters
             syncCastToVisualsCharacters();
+            syncLocationsToVisualsLocations();
 
             visualsGenerationPhase = 'idle';
 
@@ -7121,6 +8920,17 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
 
             // Update generate button text based on existing images
             updateGenerateAllBtnText();
+
+            // If we're rebuilding scenes from the production table, the new
+            // scene objects don't carry the previous session's pendingKieTaskId.
+            // Re-attach from the durable localStorage record and resume polling.
+            const resumed = resumeKieRecoveryForVisuals();
+            if (resumed > 0) {
+                const statusEl = document.getElementById('visualsLoadStatus');
+                if (statusEl) {
+                    statusEl.innerHTML += ` <small style="color: var(--accent);">— resumed ${resumed} in-flight Kie task${resumed > 1 ? 's' : ''}</small>`;
+                }
+            }
         }
 
         // ── Config ──
@@ -7503,18 +9313,34 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
         }
 
         function getStructuredCharacters(sceneIdx = null) {
-            let chars = visualsCharacters;
+            let chars;
             if (sceneIdx !== null) {
                 const scene = visualsScenes[sceneIdx];
-                if (scene && scene.selectedCharacters && scene.selectedCharacters.length > 0) {
-                    const selected = new Set(scene.selectedCharacters);
-                    chars = visualsCharacters.filter(ch => selected.has(ch.name));
-                }
+                const selected = new Set(scene?.selectedCharacters || []);
+                chars = visualsCharacters.filter(ch => selected.has(ch.name));
+            } else {
+                chars = visualsCharacters;
             }
             return chars.map(ch => ({
                 name: ch.name,
                 images: (ch.images || []).map(img => img.data || img.url).filter(Boolean).slice(0, 4),
                 ref_mode: 'identity'
+            }));
+        }
+
+        function getStructuredLocations(sceneIdx = null) {
+            let locs;
+            if (sceneIdx !== null) {
+                const scene = visualsScenes[sceneIdx];
+                const selected = new Set(scene?.selectedLocations || []);
+                locs = visualsLocations.filter(l => selected.has(l.name));
+            } else {
+                locs = visualsLocations;
+            }
+            return locs.map(l => ({
+                name: l.name,
+                images: (l.images || []).map(img => img.data || img.url).filter(Boolean).slice(0, 2),
+                ref_mode: 'environment'
             }));
         }
 
@@ -7609,7 +9435,7 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                         <div class="scene-chars-header" onclick="toggleSceneCharSelector(${idx})">
                             <span class="scene-chars-label">Characters: ${s.selectedCharacters && s.selectedCharacters.length > 0
                             ? s.selectedCharacters.join(', ')
-                            : 'All (' + visualsCharacters.length + ')'
+                            : 'None'
                         }</span>
                             <span class="scene-chars-toggle">&#9660;</span>
                         </div>
@@ -7617,10 +9443,32 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                             ${visualsCharacters.map(ch => `
                                 <label class="scene-char-checkbox">
                                     <input type="checkbox"
-                                        ${(!s.selectedCharacters || s.selectedCharacters.length === 0 || s.selectedCharacters.includes(ch.name)) ? 'checked' : ''}
+                                        ${s.selectedCharacters?.includes(ch.name) ? 'checked' : ''}
                                         onchange="toggleSceneCharacter(${idx}, '${ch.name.replace(/'/g, "\\\\'")}', this.checked)">
                                     <img src="${ch.images[0]?.data || ch.images[0]?.url || ''}" class="scene-char-thumb" alt="${escapeHtml(ch.name)}">
                                     <span>${escapeHtml(ch.name)}</span>
+                                </label>
+                            `).join('')}
+                        </div>
+                    </div>
+                    ` : ''}
+                    ${visualsLocations.length > 0 ? `
+                    <div class="scene-character-selector" id="scene-locs-${idx}">
+                        <div class="scene-chars-header" onclick="toggleSceneLocSelector(${idx})">
+                            <span class="scene-chars-label">Locations: ${s.selectedLocations && s.selectedLocations.length > 0
+                            ? s.selectedLocations.join(', ')
+                            : 'None'
+                        }</span>
+                            <span class="scene-chars-toggle">&#9660;</span>
+                        </div>
+                        <div class="scene-chars-body" id="scene-locs-body-${idx}" style="display: none;">
+                            ${visualsLocations.map(l => `
+                                <label class="scene-char-checkbox">
+                                    <input type="checkbox"
+                                        ${s.selectedLocations?.includes(l.name) ? 'checked' : ''}
+                                        onchange="toggleSceneLocation(${idx}, '${l.name.replace(/'/g, "\\\\'")}', this.checked)">
+                                    <img src="${l.images[0]?.data || l.images[0]?.url || ''}" class="scene-char-thumb" alt="${escapeHtml(l.name)}">
+                                    <span>${escapeHtml(l.name)}</span>
                                 </label>
                             `).join('')}
                         </div>
@@ -7817,11 +9665,22 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
         function getStatusHtml(scene) {
             const imgStatus = scene.imageStatus;
             const vidStatus = scene.videoStatus;
+            const idx = visualsScenes.indexOf(scene);
 
             if (imgStatus === 'generating') return '<span class="status-generating">Generating image...</span>';
             if (vidStatus === 'generating' || vidStatus === 'polling') return '<span class="status-generating">Animating...</span>';
-            if (imgStatus === 'error') return `<span class="status-error">Image error: ${escapeHtml(scene.imageError || 'Unknown')}</span>`;
-            if (vidStatus === 'error') return `<span class="status-error">Animation error: ${escapeHtml(scene.videoError || 'Unknown')}</span>`;
+            if (imgStatus === 'error') {
+                const recover = scene.pendingKieTaskId
+                    ? ` <button class="btn-small btn-secondary" onclick="recoverPendingKieTask(${idx})" title="Re-check the Kie task you already paid for">Recover task</button>`
+                    : '';
+                return `<span class="status-error">Image error: ${escapeHtml(scene.imageError || 'Unknown')}</span>${recover}`;
+            }
+            if (vidStatus === 'error') {
+                const recover = scene.pendingKieTaskId
+                    ? ` <button class="btn-small btn-secondary" onclick="recoverPendingKieTask(${idx})" title="Re-check the Kie task you already paid for">Recover task</button>`
+                    : '';
+                return `<span class="status-error">Animation error: ${escapeHtml(scene.videoError || 'Unknown')}</span>${recover}`;
+            }
             if (vidStatus === 'complete') return '<span class="status-complete">Image + Video ready</span>';
             if (imgStatus === 'complete') return '<span class="status-complete">Image ready</span>';
             return '<span class="status-idle">Pending</span>';
@@ -7845,10 +9704,9 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                 scene.selectedCharacters = scene.selectedCharacters.filter(n => n !== charName);
             }
 
-            // If all characters are selected, reset to empty (meaning "all")
-            if (scene.selectedCharacters.length === visualsCharacters.length) {
-                scene.selectedCharacters = [];
-            }
+            // Empty = no character refs sent. Strict membership only — explicit
+            // checks attach refs, no boxes checked means no refs (which is the
+            // right default for shots where no cast member is present).
 
             // Update the header label
             const label = document.querySelector(`#scene-chars-${idx} .scene-chars-label`);
@@ -7856,7 +9714,36 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
                 label.textContent = 'Characters: ' + (
                     scene.selectedCharacters.length > 0
                         ? scene.selectedCharacters.join(', ')
-                        : 'All (' + visualsCharacters.length + ')'
+                        : 'None'
+                );
+            }
+
+            updateDebugPanel(idx);
+        }
+
+        function toggleSceneLocSelector(idx) {
+            const body = document.getElementById(`scene-locs-body-${idx}`);
+            if (body) body.style.display = body.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        function toggleSceneLocation(idx, locName, checked) {
+            const scene = visualsScenes[idx];
+            if (!scene.selectedLocations) scene.selectedLocations = [];
+
+            if (checked) {
+                if (!scene.selectedLocations.includes(locName)) {
+                    scene.selectedLocations.push(locName);
+                }
+            } else {
+                scene.selectedLocations = scene.selectedLocations.filter(n => n !== locName);
+            }
+
+            const label = document.querySelector(`#scene-locs-${idx} .scene-chars-label`);
+            if (label) {
+                label.textContent = 'Locations: ' + (
+                    scene.selectedLocations.length > 0
+                        ? scene.selectedLocations.join(', ')
+                        : 'None'
                 );
             }
 
@@ -7985,13 +9872,19 @@ RESOLUTION: ${visualsConfig.resolution}`;
         function updateImageProgress() {
             const total = visualsScenes.length;
             const done = visualsScenes.filter(s => s.imageStatus === 'complete').length;
+            const polling = visualsScenes.filter(s => s.imageStatus === 'polling').length;
             const generating = visualsScenes.filter(s => s.imageStatus === 'generating').length;
+            const active = polling + generating;
             const el = document.getElementById('visualsImageProgress');
-            if (generating > 0 || done > 0) {
+            if (active > 0 || done > 0) {
                 el.style.display = 'inline';
-                el.textContent = generating > 0
-                    ? `Images: ${done}/${total} done (${generating} generating...)`
-                    : `Images: ${done}/${total} done`;
+                if (polling > 0 && generating === 0) {
+                    el.textContent = `Images: ${done}/${total} done · ${polling} polling`;
+                } else if (active > 0) {
+                    el.textContent = `Images: ${done}/${total} done (${active} generating...)`;
+                } else {
+                    el.textContent = `Images: ${done}/${total} done`;
+                }
             } else {
                 el.style.display = 'none';
             }
@@ -8000,13 +9893,19 @@ RESOLUTION: ${visualsConfig.resolution}`;
         function updateVideoProgress() {
             const total = visualsScenes.length;
             const done = visualsScenes.filter(s => s.videoStatus === 'complete').length;
-            const active = visualsScenes.filter(s => s.videoStatus === 'generating' || s.videoStatus === 'polling').length;
+            const polling = visualsScenes.filter(s => s.videoStatus === 'polling').length;
+            const generating = visualsScenes.filter(s => s.videoStatus === 'generating').length;
+            const active = polling + generating;
             const el = document.getElementById('visualsVideoProgress');
             if (active > 0 || done > 0) {
                 el.style.display = 'inline';
-                el.textContent = active > 0
-                    ? `Videos: ${done}/${total} done (${active} animating...)`
-                    : `Videos: ${done}/${total} done`;
+                if (polling > 0 && generating === 0) {
+                    el.textContent = `Videos: ${done}/${total} done · ${polling} polling`;
+                } else if (active > 0) {
+                    el.textContent = `Videos: ${done}/${total} done (${active} animating...)`;
+                } else {
+                    el.textContent = `Videos: ${done}/${total} done`;
+                }
             } else {
                 el.style.display = 'none';
             }
@@ -8024,6 +9923,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 style_images: visualsConfig.styleImages.map(img => img.data || img.url).filter(Boolean),
                 characters: getStructuredCharacters(idx),
                 character_images: getAllCharacterImages(),
+                location_refs: getStructuredLocations(idx),
                 additional_context: visualsConfig.additionalContext,
                 style_mode: visualsConfig.styleMode,
                 project_id: currentProjectId,
@@ -8125,6 +10025,295 @@ RESOLUTION: ${visualsConfig.resolution}`;
             btn.classList.remove('btn-cancel');
         }
 
+        // ── Kie batch helpers ──────────────────────────────────────
+        // Kie's ceiling per docs.kie.ai: 20 new generation requests per
+        // 10 seconds with 100+ concurrent running tasks per account.
+        // Rejected (429) requests do NOT enter the queue, so we must
+        // pace dispatches client-side and retry any 429 ourselves.
+
+        const KIE_DISPATCH_RATE_HZ = 2;       // 20 req / 10s = 2/sec
+        const KIE_DISPATCH_BUCKET_SIZE = 4;   // small burst allowance
+        const KIE_MAX_INFLIGHT = 20;          // headroom under documented 100+
+
+        const _kieBucket = { tokens: KIE_DISPATCH_BUCKET_SIZE, lastRefill: Date.now() };
+        let _kieInflight = 0;
+        const _kieInflightResolvers = [];
+
+        function _refillKieBucket() {
+            const now = Date.now();
+            const elapsed = (now - _kieBucket.lastRefill) / 1000;
+            _kieBucket.tokens = Math.min(
+                KIE_DISPATCH_BUCKET_SIZE,
+                _kieBucket.tokens + elapsed * KIE_DISPATCH_RATE_HZ
+            );
+            _kieBucket.lastRefill = now;
+        }
+
+        async function _waitForKieToken() {
+            while (true) {
+                if (_batchCancelled) throw new Error('Batch cancelled');
+                _refillKieBucket();
+                if (_kieBucket.tokens >= 1) {
+                    _kieBucket.tokens -= 1;
+                    return;
+                }
+                const need = 1 - _kieBucket.tokens;
+                const waitMs = (need / KIE_DISPATCH_RATE_HZ) * 1000 + Math.random() * 100;
+                await new Promise(r => setTimeout(r, waitMs));
+            }
+        }
+
+        async function _acquireKieInflightSlot() {
+            if (_batchCancelled) throw new Error('Batch cancelled');
+            if (_kieInflight < KIE_MAX_INFLIGHT) { _kieInflight++; return; }
+            await new Promise(r => _kieInflightResolvers.push(r));
+            if (_batchCancelled) throw new Error('Batch cancelled');
+            _kieInflight++;
+        }
+
+        function _releaseKieInflightSlot() {
+            _kieInflight = Math.max(0, _kieInflight - 1);
+            const r = _kieInflightResolvers.shift();
+            if (r) r();
+        }
+
+        async function _waitForKieDrain() {
+            while (_kieInflight > 0) await new Promise(r => setTimeout(r, 1000));
+        }
+
+        // 429-aware retry around the Studio dispatch endpoint. Server
+        // forwards Kie's 429 verbatim (server.py:1071-1082); the kie_client
+        // already does an internal 3-retry pass, so a 429 reaching us here
+        // is a sustained rate violation — we wait longer.
+        async function _dispatchStudioWithKieRetry(payload) {
+            let lastErr;
+            for (let attempt = 0; attempt < 4; attempt++) {
+                if (_batchCancelled) throw new Error('Batch cancelled');
+                const r = await authFetch('/api/studio/generate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload),
+                });
+                if (r.status !== 429) return r;
+                const backoff = (2 ** attempt) * 1000 + Math.random() * 500;
+                console.warn(`[Kie batch] 429 on dispatch, retry ${attempt + 1}/4 in ${(backoff / 1000).toFixed(1)}s`);
+                await new Promise(res => setTimeout(res, backoff));
+                lastErr = new Error(`HTTP 429 after ${attempt + 1} attempts`);
+            }
+            throw lastErr || new Error('429 retry exhausted');
+        }
+
+        // Resolves when a scene's status reaches a terminal value. We poll
+        // a sentinel on the scene rather than re-plumb _visualsPollStudioKie
+        // — its existing terminal updates (complete / error / rehost_failed
+        // → error) already drive this loop.
+        async function _awaitSceneTerminal(idx, kind) {
+            const statusField = kind === 'video' ? 'videoStatus' : 'imageStatus';
+            while (true) {
+                const s = visualsScenes[idx];
+                const st = s && s[statusField];
+                if (st === 'complete' || st === 'error') return st;
+                if (_batchCancelled) return 'cancelled-during-poll';
+                await new Promise(r => setTimeout(r, 1500));
+            }
+        }
+
+        // True if the currently-active batch engine is Kie-backed.
+        function _willBatchUseKie(kind) {
+            const eng = (visualsEngine && visualsEngine.useForBatch) ? visualsEngine[kind] : null;
+            if (!eng) return false;
+            const schema = (typeof studioState !== 'undefined' && studioState.schemas)
+                ? studioState.schemas[eng.modelId] : null;
+            return !!(schema && schema.backend === 'kie');
+        }
+
+        // Counter state for the dispatched·complete UI split.
+        let _batchDispatched = 0;
+        let _batchComplete = 0;
+        const _completionTimes = [];   // rolling 30s window for ETA
+
+        function _resetBatchCounters() {
+            _batchDispatched = 0;
+            _batchComplete = 0;
+            _completionTimes.length = 0;
+        }
+
+        function _markBatchComplete() {
+            _batchComplete++;
+            _completionTimes.push(Date.now());
+            const cutoff = Date.now() - 30000;
+            while (_completionTimes.length && _completionTimes[0] < cutoff) {
+                _completionTimes.shift();
+            }
+        }
+
+        function _updateBatchUI(btn, total) {
+            const dispatched = _batchDispatched;
+            const complete = _batchComplete;
+            const polling = Math.max(0, dispatched - complete);
+            if (btn && !_batchCancelled) {
+                btn.textContent = `Cancel Generation (${complete} complete · ${dispatched} dispatched)`;
+            }
+            const line = document.getElementById('batchStatusLine');
+            if (line) {
+                line.style.display = '';
+                const recentSec = Math.min(30, (_completionTimes.length > 0
+                    ? (Date.now() - _completionTimes[0]) / 1000 : 30));
+                const rate = recentSec > 0 ? _completionTimes.length / recentSec : 0;
+                const remaining = Math.max(0, total - complete);
+                let eta = 'ETA --';
+                if (rate > 0 && remaining > 0) {
+                    const secs = remaining / rate;
+                    eta = secs > 90 ? `ETA ~${Math.round(secs / 60)} min`
+                                    : `ETA ~${Math.round(secs)}s`;
+                }
+                line.textContent = `${polling} polling · ${eta}`;
+            }
+        }
+
+        function _hideBatchStatusLine() {
+            const line = document.getElementById('batchStatusLine');
+            if (line) { line.style.display = 'none'; line.textContent = ''; }
+        }
+
+        // The Kie image batch orchestration loop. One producer paces
+        // dispatches against the token bucket and in-flight semaphore;
+        // each dispatch spawns an async task that waits for its scene
+        // to reach a terminal status before releasing its in-flight slot.
+        async function _runKieBatchImages(scenes, btn, total) {
+            const tasks = [];
+            for (const item of scenes) {
+                if (_batchCancelled) break;
+                try {
+                    await _acquireKieInflightSlot();
+                    await _waitForKieToken();
+                } catch (e) {
+                    // _batchCancelled threw — release the slot if we got it
+                    if (_kieInflight > 0) _releaseKieInflightSlot();
+                    break;
+                }
+                const idx = item.idx;
+                tasks.push((async () => {
+                    try {
+                        const payload = _visualsBuildStudioPayload(idx, 'image');
+                        if (!payload) {
+                            visualsScenes[idx].imageStatus = 'error';
+                            visualsScenes[idx].imageError = 'No engine schema loaded';
+                            _batchDispatched++;
+                            _updateBatchUI(btn, total);
+                            return;
+                        }
+                        visualsScenes[idx].imageStatus = 'generating';
+                        visualsScenes[idx].imageError = null;
+                        updateSceneCard(idx);
+                        const r = await _dispatchStudioWithKieRetry(payload);
+                        const data = await r.json();
+                        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+                        if (data.taskId) {
+                            _batchDispatched++;
+                            visualsScenes[idx].imageStatus = 'polling';
+                            updateSceneCard(idx);
+                            // Fire-and-forget — _visualsPollStudioKie writes
+                            // s.imageStatus to terminal when it finishes.
+                            _visualsPollStudioKie(idx, 'image', data.taskId);
+                            _updateBatchUI(btn, total);
+                            const terminal = await _awaitSceneTerminal(idx, 'image');
+                            if (terminal === 'complete') {
+                                _markBatchComplete();
+                                _updateBatchUI(btn, total);
+                            }
+                        } else {
+                            // Sync return — Kie returned URL inline (rare for
+                            // Kie market models but some return immediately).
+                            const url = (data.image_urls && data.image_urls[0])
+                                     || data.image_url;
+                            if (url) {
+                                visualsScenes[idx].imageUrl = url;
+                                visualsScenes[idx].imageStatus = 'complete';
+                                updateSceneCard(idx);
+                                doSaveProject();
+                                fetchImageHistoryForScene(idx);
+                            }
+                            _batchDispatched++;
+                            _markBatchComplete();
+                            _updateBatchUI(btn, total);
+                        }
+                    } catch (e) {
+                        visualsScenes[idx].imageStatus = 'error';
+                        visualsScenes[idx].imageError = e.message || String(e);
+                        updateSceneCard(idx);
+                        _batchDispatched++;
+                        _updateBatchUI(btn, total);
+                    } finally {
+                        _releaseKieInflightSlot();
+                    }
+                })());
+            }
+            await Promise.all(tasks);
+            await _waitForKieDrain();
+        }
+
+        // The Kie video batch orchestration loop. Same shape as the image
+        // version but dispatches via 'video' kind and polls videoStatus.
+        async function _runKieBatchVideos(scenes, btn, total) {
+            const tasks = [];
+            for (const item of scenes) {
+                if (_batchCancelled) break;
+                try {
+                    await _acquireKieInflightSlot();
+                    await _waitForKieToken();
+                } catch (e) {
+                    if (_kieInflight > 0) _releaseKieInflightSlot();
+                    break;
+                }
+                const idx = item.idx;
+                tasks.push((async () => {
+                    try {
+                        const payload = _visualsBuildStudioPayload(idx, 'video');
+                        if (!payload) {
+                            visualsScenes[idx].videoStatus = 'error';
+                            visualsScenes[idx].videoError = 'No engine schema loaded';
+                            _batchDispatched++;
+                            _updateBatchUI(btn, total);
+                            return;
+                        }
+                        visualsScenes[idx].videoStatus = 'generating';
+                        visualsScenes[idx].videoError = null;
+                        updateSceneCard(idx);
+                        const r = await _dispatchStudioWithKieRetry(payload);
+                        const data = await r.json();
+                        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+                        if (data.taskId) {
+                            _batchDispatched++;
+                            visualsScenes[idx].videoStatus = 'polling';
+                            updateSceneCard(idx);
+                            _visualsPollStudioKie(idx, 'video', data.taskId);
+                            _updateBatchUI(btn, total);
+                            const terminal = await _awaitSceneTerminal(idx, 'video');
+                            if (terminal === 'complete') {
+                                _markBatchComplete();
+                                _updateBatchUI(btn, total);
+                            }
+                        } else {
+                            _batchDispatched++;
+                            _markBatchComplete();
+                            _updateBatchUI(btn, total);
+                        }
+                    } catch (e) {
+                        visualsScenes[idx].videoStatus = 'error';
+                        visualsScenes[idx].videoError = e.message || String(e);
+                        updateSceneCard(idx);
+                        _batchDispatched++;
+                        _updateBatchUI(btn, total);
+                    } finally {
+                        _releaseKieInflightSlot();
+                    }
+                })());
+            }
+            await Promise.all(tasks);
+            await _waitForKieDrain();
+        }
+
         async function generateAllImages() {
             const targetProjectId = currentProjectId;
             updateVisualsConfig();
@@ -8174,11 +10363,20 @@ RESOLUTION: ${visualsConfig.resolution}`;
             }
 
             if (visualsGenerationPhase === 'preview') {
-                // Phase 2: Generate remaining scenes with concurrent individual requests
+                // Phase 2: Generate remaining scenes. Engine-aware:
+                //   - Gemini sync (legacy or Studio Google native) → existing
+                //     CONCURRENCY=3 worker pool. Each call awaits a real URL,
+                //     so the counter is accurate.
+                //   - Kie async → dispatch is paced at 2/sec, in-flight cap
+                //     of 20 polls, 429-aware retry. Counter splits into
+                //     dispatched / complete because dispatch and completion
+                //     are decoupled.
                 visualsGenerationPhase = 'batch';
                 const btn = document.getElementById('generateAllImagesBtn');
                 const totalToGenerate = remaining.length;
-                _setBtnGenerating(btn, `Cancel Generation (0/${totalToGenerate})`);
+                _resetBatchCounters();
+                _setBtnGenerating(btn, `Cancel Generation (0 complete · 0 dispatched)`);
+                _updateBatchUI(btn, totalToGenerate);
 
                 // Set background op to track image generation
                 setBackgroundOp(targetProjectId, {
@@ -8186,77 +10384,90 @@ RESOLUTION: ${visualsConfig.resolution}`;
                     type: 'image_batch'
                 });
 
-                // Generate scenes concurrently with a limit of 3 parallel requests
-                // and a stagger delay to avoid rate-limit thundering herd
-                const CONCURRENCY = 3;
-                const STAGGER_DELAY_MS = 800; // delay between each worker picking up next job
-                const queue = [...remaining];
-                const workers = [];
-                let completedInBatch = 0;
+                const isKieBatch = _willBatchUseKie('image');
 
-                for (let i = 0; i < Math.min(CONCURRENCY, queue.length); i++) {
-                    workers.push((async () => {
-                        // Stagger worker starts to avoid all hitting API simultaneously
-                        if (i > 0) await new Promise(r => setTimeout(r, i * STAGGER_DELAY_MS));
-                        while (queue.length > 0 && !_batchCancelled) {
-                            const item = queue.shift();
-                            if (_batchCancelled) break;
-                            await generateSceneImage(item.idx);
-                            completedInBatch++;
-                            if (!_batchCancelled) {
-                                btn.textContent = `Cancel Generation (${completedInBatch}/${totalToGenerate})`;
+                if (isKieBatch) {
+                    await _runKieBatchImages(remaining, btn, totalToGenerate);
+                } else {
+                    // Gemini sync path — unchanged CONCURRENCY=3 worker pool.
+                    const CONCURRENCY = 3;
+                    const STAGGER_DELAY_MS = 800;
+                    const queue = [...remaining];
+                    const workers = [];
+
+                    for (let i = 0; i < Math.min(CONCURRENCY, queue.length); i++) {
+                        workers.push((async () => {
+                            if (i > 0) await new Promise(r => setTimeout(r, i * STAGGER_DELAY_MS));
+                            while (queue.length > 0 && !_batchCancelled) {
+                                const item = queue.shift();
+                                if (_batchCancelled) break;
+                                await generateSceneImage(item.idx);
+                                _batchDispatched++;
+                                if (visualsScenes[item.idx].imageStatus === 'complete') {
+                                    _markBatchComplete();
+                                }
+                                _updateBatchUI(btn, totalToGenerate);
+                                if (queue.length > 0 && !_batchCancelled) {
+                                    await new Promise(r => setTimeout(r, STAGGER_DELAY_MS));
+                                }
                             }
-                            // Small delay between jobs per worker to ease rate pressure
-                            if (queue.length > 0 && !_batchCancelled) {
-                                await new Promise(r => setTimeout(r, STAGGER_DELAY_MS));
-                            }
-                        }
-                    })());
+                        })());
+                    }
+                    await Promise.all(workers);
                 }
 
-                await Promise.all(workers);
-
-                // Auto-retry failed scenes with reduced concurrency
+                // Auto-retry failed scenes. For Kie batches we wait for all
+                // in-flight polls to drain first so the failure set is final
+                // before deciding whether to retry. (_runKieBatchImages
+                // already calls _waitForKieDrain at the end, but belt-and-
+                // suspenders.)
                 if (!_batchCancelled) {
+                    if (isKieBatch) await _waitForKieDrain();
                     const failedScenes = visualsScenes
                         .map((s, i) => ({ scene: s, idx: i }))
                         .filter(item => item.scene.imageStatus === 'error');
 
                     if (failedScenes.length > 0 && failedScenes.length <= totalToGenerate * 0.5) {
-                        // Only auto-retry if less than 50% failed (otherwise likely a systemic issue)
-                        console.log(`[Batch] Auto-retrying ${failedScenes.length} failed scenes with reduced concurrency...`);
+                        console.log(`[Batch] Auto-retrying ${failedScenes.length} failed scenes...`);
                         _setBtnGenerating(btn, `Auto-retrying ${failedScenes.length} failed...`);
 
-                        const RETRY_CONCURRENCY = 2;
-                        const RETRY_DELAY_MS = 2000;
-                        const retryQueue = [...failedScenes];
+                        // Reset error state before retry
+                        for (const item of failedScenes) {
+                            item.scene.imageStatus = 'idle';
+                            item.scene.imageError = null;
+                        }
 
                         // Wait before starting retries to let rate limits cool down
                         await new Promise(r => setTimeout(r, 3000));
 
-                        const retryWorkers = [];
-                        for (let i = 0; i < Math.min(RETRY_CONCURRENCY, retryQueue.length); i++) {
-                            retryWorkers.push((async () => {
-                                if (i > 0) await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
-                                while (retryQueue.length > 0 && !_batchCancelled) {
-                                    const item = retryQueue.shift();
-                                    if (_batchCancelled) break;
-                                    // Reset error state before retry
-                                    item.scene.imageStatus = 'idle';
-                                    item.scene.imageError = null;
-                                    await generateSceneImage(item.idx);
-                                    completedInBatch++;
-                                    if (!_batchCancelled) {
-                                        const retryRemaining = retryQueue.length;
-                                        btn.textContent = `Retrying... (${retryRemaining} left)`;
+                        if (isKieBatch) {
+                            // Reuse the same orchestration loop — token bucket
+                            // and in-flight semaphore handle pacing.
+                            await _runKieBatchImages(failedScenes, btn, totalToGenerate);
+                        } else {
+                            const RETRY_CONCURRENCY = 2;
+                            const RETRY_DELAY_MS = 2000;
+                            const retryQueue = [...failedScenes];
+                            const retryWorkers = [];
+                            for (let i = 0; i < Math.min(RETRY_CONCURRENCY, retryQueue.length); i++) {
+                                retryWorkers.push((async () => {
+                                    if (i > 0) await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+                                    while (retryQueue.length > 0 && !_batchCancelled) {
+                                        const item = retryQueue.shift();
+                                        if (_batchCancelled) break;
+                                        await generateSceneImage(item.idx);
+                                        if (visualsScenes[item.idx].imageStatus === 'complete') {
+                                            _markBatchComplete();
+                                        }
+                                        _updateBatchUI(btn, totalToGenerate);
+                                        if (retryQueue.length > 0 && !_batchCancelled) {
+                                            await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+                                        }
                                     }
-                                    if (retryQueue.length > 0 && !_batchCancelled) {
-                                        await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
-                                    }
-                                }
-                            })());
+                                })());
+                            }
+                            await Promise.all(retryWorkers);
                         }
-                        await Promise.all(retryWorkers);
                     }
                 }
 
@@ -8267,7 +10478,6 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 const stillRemaining = visualsScenes.filter(s => s.imageStatus !== 'complete').length;
 
                 if (_batchCancelled) {
-                    const doneCount = visualsScenes.filter(s => s.imageStatus === 'complete').length;
                     _setBtnNormal(btn, stillRemaining > 0
                         ? `Generate Remaining ${stillRemaining} Images`
                         : 'All Images Generated');
@@ -8280,6 +10490,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 }
 
                 _batchCancelled = false;
+                _hideBatchStatusLine();
 
                 // Mark background op completed
                 clearBackgroundOp(currentProjectId);
@@ -9301,6 +11512,42 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 if (ta) item.scene.veoPrompt = ta.value;
             });
 
+            const btn = document.getElementById('animateAllBtn');
+            const totalToGenerate = marked.length;
+
+            // If the global engine for batch is Kie-backed, route through the
+            // client-side orchestration (token bucket + in-flight semaphore +
+            // 429 retry). Otherwise fall through to the legacy Veo server
+            // batch which is server-orchestrated with max_workers=5.
+            if (_willBatchUseKie('video')) {
+                _batchCancelled = false;
+                _resetBatchCounters();
+                btn.disabled = false;
+                btn.textContent = `Cancel Generation (0 complete · 0 dispatched)`;
+                btn.onclick = cancelBatchGeneration;
+                btn.classList.add('btn-cancel');
+                _updateBatchUI(btn, totalToGenerate);
+
+                setBackgroundOp(targetProjectId, {
+                    status: 'in_progress',
+                    type: 'video_batch'
+                });
+
+                await _runKieBatchVideos(marked, btn, totalToGenerate);
+
+                updateVideoProgress();
+                _batchCancelled = false;
+                _hideBatchStatusLine();
+                btn.disabled = false;
+                btn.textContent = 'Animate all marked';
+                btn.onclick = animateAllScenes;
+                btn.classList.remove('btn-cancel');
+                clearBackgroundOp(currentProjectId);
+                updateAnimateAllBtn();
+                triggerAutosave();
+                return;
+            }
+
             // Mark all as generating
             marked.forEach(item => {
                 item.scene.videoStatus = 'generating';
@@ -9308,7 +11555,6 @@ RESOLUTION: ${visualsConfig.resolution}`;
             });
             updateVideoProgress();
 
-            const btn = document.getElementById('animateAllBtn');
             btn.disabled = true;
             btn.textContent = 'Starting animations...';
 
@@ -9642,6 +11888,8 @@ RESOLUTION: ${visualsConfig.resolution}`;
                     try { studioOnProjectChange(id); } catch (e) { console.warn('[Studio] project hook', e); }
                     restoreProjectState(data.project);
                     renderProjects(_lastSavedProjects); // re-render to highlight active
+                    // Surface a resumable partial production run, if any.
+                    try { checkProductionResumable(id); } catch (e) { console.warn('[resume] check', e); }
 
                     // Sync the new shell topbar with the loaded project
                     try {
@@ -10230,6 +12478,13 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 const el = document.getElementById('pacingTierSelect');
                 if (el) { el.value = project.pacing_tier; updateEstimatedShots(); }
             }
+            // Max shot duration (default 6s if not set)
+            const maxShotEl = document.getElementById('maxShotDurationInput');
+            if (maxShotEl) {
+                maxShotEl.value = (typeof project.max_shot_duration === 'number'
+                    && project.max_shot_duration > 0)
+                    ? project.max_shot_duration : 6;
+            }
             // quality_mode legacy — ignored, 6-phase pipeline always used
             if (project.review_aspect_ratio) {
                 const el = document.getElementById('reviewAspectRatio');
@@ -10262,6 +12517,17 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 syncCastToVisualsCharacters();
             }
 
+            // Restore locations data
+            if (project.locations_data) {
+                currentLocations = project.locations_data;
+                renderLocationsPanel(currentLocations);
+                if (currentLocations.has_locations && currentLocations.locations && currentLocations.locations.length > 0) {
+                    const locBadge = document.getElementById('locationsApprovedBadge');
+                    if (locBadge) locBadge.style.display = 'inline-block';
+                }
+                syncLocationsToVisualsLocations();
+            }
+
             // Restore production table
             if (project.production_data) {
                 try {
@@ -10283,6 +12549,19 @@ RESOLUTION: ${visualsConfig.resolution}`;
             // Restore visuals scenes (with image URLs from Firebase Storage)
             if (project.visuals_scenes && project.visuals_scenes.length > 0) {
                 visualsScenes = project.visuals_scenes;
+                // Heal stuck spinners: if a scene was saved mid-poll but has no
+                // pendingKieTaskId (older sessions), flip it to error so the
+                // user isn't waiting on a poll loop that no longer exists.
+                for (const s of visualsScenes) {
+                    if ((s.imageStatus === 'polling' || s.imageStatus === 'generating') && !s.pendingKieTaskId && !s.imageUrl) {
+                        s.imageStatus = 'error';
+                        s.imageError = s.imageError || 'Polling lost across reload — click Regenerate';
+                    }
+                    if ((s.videoStatus === 'polling' || s.videoStatus === 'generating') && !s.pendingKieTaskId && !s.videoUrl) {
+                        s.videoStatus = 'error';
+                        s.videoError = s.videoError || 'Polling lost across reload — click Regenerate';
+                    }
+                }
             }
 
             // Restore visuals config
@@ -10354,6 +12633,43 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 // Fetch image + video history for all scenes
                 fetchImageHistory();
                 fetchVideoHistory();
+
+                // Resume polling for scenes whose Kie task was still in flight
+                // when the previous session ended. The taskId is persisted on
+                // the scene by _visualsPollStudioKie, so we can re-attach
+                // without a re-charge.
+                for (let i = 0; i < visualsScenes.length; i++) {
+                    const s = visualsScenes[i];
+                    if (s.pendingKieTaskId) {
+                        const kind = s.pendingKieKind || 'image';
+                        const statusField = kind === 'video' ? 'videoStatus' : 'imageStatus';
+                        // Only resume if there's no completed asset already.
+                        if (s[kind === 'video' ? 'videoUrl' : 'imageUrl']) continue;
+                        s[statusField] = 'polling';
+                        console.log(`[Visuals] resuming Kie poll for scene ${s.sceneId} (${kind}) task=${s.pendingKieTaskId}`);
+                        _visualsPollStudioKie(i, kind, s.pendingKieTaskId);
+                    }
+                }
+                // Belt-and-suspenders: also rejoin via the durable
+                // localStorage record (covers the case where the previous
+                // session's Firestore autosave was cancelled mid-flight).
+                resumeKieRecoveryForVisuals();
+            }
+
+            // Recovery path when visuals_scenes wasn't in Firestore (the most
+            // common failure mode — user hit Generate ×N then closed the tab
+            // before autosave completed). The taskIds survived in
+            // localStorage; rebuild the scene list from the production table
+            // and resume polling so the user doesn't have to pay again.
+            if (visualsScenes.length === 0 && currentProductionData) {
+                const pending = Object.keys(getKieRecoveryRecords(currentProjectId)).length;
+                if (pending > 0) {
+                    const pt = currentProductionData.production_table || currentProductionData;
+                    if (pt && pt.shots && pt.shots.length) {
+                        console.log(`[Visuals] auto-loading production table to recover ${pending} in-flight Kie task(s)`);
+                        initVisualsFromProductionTable(pt);
+                    }
+                }
             }
 
             // Re-sign every asset URL — covers the 4h signed-URL expiry so projects
@@ -10415,6 +12731,9 @@ RESOLUTION: ${visualsConfig.resolution}`;
             // Sync badges based on restored state
             updateScriptSourceBadge();
             updateProdSourceBadge();
+
+            // Rehydrate the 5-stage agentic pipeline panels (if any state exists).
+            try { restoreAgenticPipelineState(); } catch (e) { console.warn('[agentic] restore err', e); }
         }
 
         // ── Gather full project state for saving ──
@@ -10517,8 +12836,13 @@ RESOLUTION: ${visualsConfig.resolution}`;
                     path: img.path || null
                 })),
                 approved_style: approvedStyle || null,
-                // Cast Definition
-                cast_data: currentCast || null,
+                // Cast Definition — strip appears_in_beats (deprecated cosmetic field
+                // that didn't drive anything; production table character_outfit is truth).
+                cast_data: currentCast ? {
+                    ...currentCast,
+                    cast: (currentCast.cast || []).map(({ appears_in_beats, ...rest }) => rest)
+                } : null,
+                locations_data: currentLocations || null,
                 // Creative Direction
                 creative_direction_input: document.getElementById('creativeDirectionInput')?.value || '',
                 creative_direction_data: currentCreativeDirection || null,
@@ -10528,6 +12852,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 style_review_fields: captureStyleReviewState(),
                 // Pacing & Quality
                 pacing_tier: document.getElementById('pacingTierSelect')?.value || 'Standard',
+                max_shot_duration: parseFloat(document.getElementById('maxShotDurationInput')?.value) || 6,
                 quality_mode: 'max_quality',  // Legacy field — always 6-phase
                 review_aspect_ratio: document.getElementById('reviewAspectRatio')?.value || '16:9',
                 // Kie Studio

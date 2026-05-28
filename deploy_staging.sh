@@ -66,7 +66,18 @@ gcloud run deploy $SERVICE_NAME \
     --allow-unauthenticated \
     --timeout 3600 \
     --memory 2Gi \
+    --no-cpu-throttling \
+    --min-instances 1 \
     --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID},ENVIRONMENT=staging,ENCRYPTION_KEY=${ENCRYPTION_KEY}"
+
+# --no-cpu-throttling keeps CPU allocated even between HTTP requests so the
+# background daemon thread that runs the 6-phase production pipeline doesn't
+# get starved/killed mid-batch. Without it, polling requests landing on
+# other instances caused the worker instance to be scaled down ~12 min into
+# generation (verified in the 2026-05-25 incident logs).
+#
+# --min-instances 1 keeps a single warm instance so background work has a
+# stable host. Trades ~$25/mo idle cost for reliability on long generations.
 
 # ── Auto-set MCP_ISSUER_URL to the real Cloud Run URL ──
 # Cloud Run assigns a hash-based URL that we can't predict before the first

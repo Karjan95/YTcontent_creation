@@ -2372,8 +2372,9 @@ def _build_cast_section(cast: dict, context: str = "storyboard") -> str:
 
         entry = f"""  {i}. "{name}"
      Role: {role}
-     Visual Identity: {visual}
-     Appears in beats: {beats_str or 'various'}"""
+     Visual Identity: {visual}"""
+        if beats_str:
+            entry += f"\n     Appears in beats: {beats_str}"
         if notes:
             entry += f"\n     Notes: {notes}"
         cast_entries.append(entry)
@@ -2400,6 +2401,61 @@ The following characters have been defined for this production.
 {instructions}
 
 {cast_text}
+"""
+
+
+def _build_locations_section(locations: dict, context: str = "storyboard") -> str:
+    """Build a locations definition section for injection into prompts.
+
+    Args:
+        locations: Locations data dict {has_locations, locations: [{name, description, environment_type, mood, notes}]}
+        context: 'storyboard' or 'dp' — controls instruction phrasing
+    """
+    if not locations or not locations.get('has_locations') or not locations.get('locations'):
+        return ""
+
+    loc_list = locations['locations']
+    if not loc_list:
+        return ""
+
+    entries = []
+    for i, loc in enumerate(loc_list, 1):
+        name = loc.get('name', f'Location {i}')
+        desc = loc.get('description', 'No description defined')
+        env_type = loc.get('environment_type', '')
+        mood = loc.get('mood', '')
+        notes = loc.get('notes', '')
+
+        entry = f"""  {i}. "{name}"
+     Description: {desc}"""
+        if env_type:
+            entry += f"\n     Environment: {env_type}"
+        if mood:
+            entry += f"\n     Mood: {mood}"
+        if notes:
+            entry += f"\n     Notes: {notes}"
+        entries.append(entry)
+
+    loc_text = "\n".join(entries)
+
+    if context == "storyboard":
+        instructions = """USE THIS LOCATION LIST when designing each shot:
+- When a shot is set in a named location below, reference it BY NAME in the environment / first_frame_prompt.
+- Use the "Description" to inform the visual details of that environment.
+- Each location must be VISUALLY CONSISTENT across all shots set there — same materials, palette, props, geometry.
+- The "Mood" hint informs lighting/atmosphere choices for shots in that location."""
+    else:  # dp
+        instructions = """USE THIS LOCATION LIST when writing prompts:
+- When a shot is set in a named location, weave its Description into the ENVIRONMENT / setting portion of the prompt.
+- Each location must look IDENTICAL across all shots set there — same architectural details, palette, lighting character.
+- Combine the Environment Rendering style (how to render) with the Location Description (what to render)."""
+
+    return f"""
+═══════ LOCATIONS ═══════
+The following recurring settings have been defined for this production.
+{instructions}
+
+{loc_text}
 """
 
 
@@ -3789,7 +3845,8 @@ def build_storyboard_prompt(director_shots: list, narration_json: dict,
                             style_intent: dict = None,
                             creative_direction: dict = None,
                             cast: dict = None,
-                            visual_brief: dict = None) -> str:
+                            visual_brief: dict = None,
+                            locations: dict = None) -> str:
     """
     Phase 3 of 6: THE STORYBOARD ARTIST — Visual Composition.
 
@@ -3819,6 +3876,9 @@ def build_storyboard_prompt(director_shots: list, narration_json: dict,
 
     # Build cast section
     cast_section = _build_cast_section(cast, context='storyboard')
+
+    # Build locations section
+    locations_section = _build_locations_section(locations, context='storyboard')
 
     # Build style direction section
     intent = style_intent or {}
@@ -3945,6 +4005,7 @@ You design the CONTENT of the frame — what the camera captures.
 {visual_brief_section}
 {style_direction}
 {cast_section}
+{locations_section}
 {wardrobe_instructions}
 
 {expression_instructions}
@@ -4255,12 +4316,14 @@ Incorporate this style at the START of every reference_sheet prompt.
 Use this context when crafting portrait generation prompts — they should match the creative vision.
 """
 
-    prompt = f"""You are THE CASTING DIRECTOR for a video production. The script has been finalized.
-Your job is to read the entire script and identify every distinct character, creature, or
-recurring visual subject that appears across the narrative.
+    prompt = f"""You are THE CASTING DIRECTOR and LOCATION SCOUT for a video production. The script has been finalized.
+Your job is to read the entire script and identify:
+  (A) every distinct character, creature, or recurring visual subject that appears, AND
+  (B) every distinct recurring location/setting where the story takes place.
 
-For each one, you will suggest a visual identity that makes them immediately recognizable
-and visually distinct from other characters.
+For each character, suggest a visual identity that makes them immediately recognizable
+and visually distinct. For each location, describe its visual character so we can render
+it consistently across every shot set there.
 
 {rendering_context}
 {approved_style_context}
@@ -4322,6 +4385,24 @@ IMPORTANT GUIDELINES:
   might be a character that needs a visual identity — or it might be camera-POV with no character.
   Use your judgment based on the overall script tone.
 
+═══════ LOCATION SCOUTING ═══════
+
+For each distinct RECURRING setting in the script, output:
+1. "name": Short identifier (e.g., "The Lab", "Coastal Cliff", "Old Bookshop")
+2. "description": A detailed prose description of the location's visual character —
+   geometry, materials, palette, props, lighting character, mood.
+3. "environment_type": One of: "interior", "exterior", "abstract", "vehicle", "other"
+4. "mood": Short keyword phrase (e.g., "studious, slightly chaotic", "tense, oppressive")
+5. "notes": (optional) Any continuity notes about the location.
+
+LOCATION GUIDELINES:
+- Only list RECURRING or NARRATIVELY IMPORTANT locations. A throwaway transitional shot
+  doesn't need its own entry.
+- If the script has no distinct recurring settings (e.g., abstract animation, single-room
+  documentary), set "has_locations" to false and return an empty array.
+- A "location" can be abstract (e.g., "Mindscape", "Memory Space") if the script uses
+  symbolic settings. Describe how that abstract space LOOKS.
+
 ═══════ OUTPUT FORMAT ═══════
 
 Return a JSON object:
@@ -4351,7 +4432,25 @@ Return a JSON object:
       }}
     }}
   ],
-  "casting_notes": "Brief summary of the visual differentiation strategy and any special considerations."
+  "casting_notes": "Brief summary of the visual differentiation strategy and any special considerations.",
+  "has_locations": true,
+  "locations": [
+    {{
+      "name": "The Lab",
+      "description": "A cluttered chemistry lab with brass fixtures, weathered wooden benches stacked with glassware, chalkboards covered in equations along the back wall, afternoon sun through tall arched windows lighting motes of chalk dust.",
+      "environment_type": "interior",
+      "mood": "studious, slightly chaotic",
+      "notes": "Recurring primary setting. Should feel lived-in, not pristine."
+    }},
+    {{
+      "name": "Coastal Cliff",
+      "description": "A windswept granite cliff overlooking gray-green ocean. Long grass bent by wind. Overcast sky with diffuse silver light. No vegetation taller than the grass — exposed, austere.",
+      "environment_type": "exterior",
+      "mood": "lonely, contemplative",
+      "notes": "Appears only in flashback / dream beats."
+    }}
+  ],
+  "location_notes": "Brief summary of how the locations interact and any continuity considerations."
 }}
 
 For NON-CHARACTER videos, return:
@@ -4360,8 +4459,14 @@ For NON-CHARACTER videos, return:
   "has_characters": false,
   "total_beats": {len(beats)},
   "cast": [],
-  "casting_notes": "This script is a [geography/nature/architecture/etc.] explainer with no recurring characters. Visual subjects are environments and objects — no cast definition needed."
+  "casting_notes": "This script is a [geography/nature/architecture/etc.] explainer with no recurring characters. Visual subjects are environments and objects — no cast definition needed.",
+  "has_locations": true,
+  "locations": [ /* still list recurring locations even when there are no characters */ ],
+  "location_notes": "..."
 }}
+
+If the script has no distinct recurring locations either, set "has_locations" to false
+and "locations" to an empty array.
 
 ⚠️⚠️⚠️ JSON SYNTAX VALIDATION ⚠️⚠️⚠️
 CRITICAL: You MUST generate VALID JSON with correct syntax:
@@ -4378,7 +4483,8 @@ def build_dp_prompt(storyboard_shots: list, style_analysis: dict = None,
                     aspect_ratio: str = "16:9", title: str = "Untitled",
                     creative_direction: dict = None,
                     cast: dict = None,
-                    visual_brief: dict = None) -> str:
+                    visual_brief: dict = None,
+                    locations: dict = None) -> str:
     """
     Phase 5 of 6: THE DIRECTOR OF PHOTOGRAPHY — Final Prompt Writer.
 
@@ -4480,6 +4586,7 @@ Default Mood: As appropriate for the narrative"""
     # Build creative direction section for DP
     creative_direction_section = _build_creative_direction_section(creative_direction, 'dp')
     cast_section = _build_cast_section(cast, context='dp')
+    locations_section = _build_locations_section(locations, context='dp')
 
     # Build visual brief context for DP
     dp_visual_brief_section = ""
@@ -4542,6 +4649,7 @@ Aspect Ratio: {aspect_ratio}
 
 {visual_style_section}
 {cast_section}
+{locations_section}
 ═══════ PRODUCTION SHOTS ═══════
 Each shot has been through Director, Cinematographer, Storyboard Artist, and Continuity Supervisor.
 Fields include: shot_number, script_beat, duration, emotion, directors_intent, camera_intent,

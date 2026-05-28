@@ -121,22 +121,86 @@ def get_client(api_key=None):
     return genai.Client(api_key=api_key)
 
 
-def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=False,
+def _diagnose_empty_response(response, desc):
+    """When Gemini returns empty text, surface WHY. Pulls finish_reason,
+    token usage, and safety ratings off the response so the caller knows
+    whether it was MAX_TOKENS, SAFETY, RECITATION, etc., instead of
+    bubbling a vague 'No JSON object found' downstream.
+
+    Returns a one-line diagnostic string. Also prints to stdout so it
+    shows up in Cloud Run logs.
+    """
+    parts = []
+    try:
+        cand = (response.candidates or [None])[0]
+        if cand is not None:
+            fr = getattr(cand, 'finish_reason', None)
+            if fr is not None:
+                # finish_reason may be an enum (FinishReason.MAX_TOKENS)
+                # or a string depending on SDK version.
+                parts.append(f"finish_reason={getattr(fr, 'name', fr)}")
+            sr = getattr(cand, 'safety_ratings', None) or []
+            blocked = [r for r in sr if getattr(r, 'blocked', False)]
+            if blocked:
+                cats = [getattr(r.category, 'name', str(r.category)) for r in blocked]
+                parts.append(f"safety_blocked={cats}")
+    except Exception:
+        pass
+    try:
+        usage = getattr(response, 'usage_metadata', None)
+        if usage is not None:
+            pt = getattr(usage, 'prompt_token_count', None)
+            ct = getattr(usage, 'candidates_token_count', None)
+            tt = getattr(usage, 'thoughts_token_count', None)
+            tot = getattr(usage, 'total_token_count', None)
+            parts.append(f"tokens(prompt={pt}, output={ct}, thinking={tt}, total={tot})")
+    except Exception:
+        pass
+    try:
+        pf = getattr(response, 'prompt_feedback', None)
+        if pf is not None:
+            br = getattr(pf, 'block_reason', None)
+            if br is not None:
+                parts.append(f"prompt_block_reason={getattr(br, 'name', br)}")
+    except Exception:
+        pass
+    diag = " · ".join(parts) if parts else "no diagnostics available"
+    msg = f"[{desc}] EMPTY RESPONSE — {diag}"
+    print(msg)
+    return diag
+
+
+def generate_content(prompt, model_name="gemini-3.5-flash", use_search=False,
                      temperature=None, api_key=None, max_output_tokens=None,
                      return_response=False, uid=None, project_id=None,
-                     description=None, timeout_s=180):
+                     description=None, timeout_s=180,
+                     thinking_level=None, thinking_budget=None,
+                     response_mime_type=None, response_schema=None):
     """Generate text content using Gemini, optionally with Google Search.
 
-    max_output_tokens: When set, unlocks Gemini's default 8192 cap (up to 65536 on Gemini 3).
-        If the model rejects the requested ceiling, we retry once with 16384 as a safe fallback.
-    return_response: When True, returns the raw response object instead of .text (needed to
-        extract grounding_metadata for structured research).
-    uid / project_id: Identify the billing owner + project for cost tracking. When absent
-        (CLI, unauthenticated) the tracker is a no-op.
-    description: Short label for the call (e.g. "director", "storyboard") shown on events.
-    timeout_s: Hard per-call timeout in seconds. A stuck Gemini connection used to
-        stall a phase for minutes before the OS killed it; this fails fast so the
-        retry path can run. Set to None to disable.
+    max_output_tokens: When set, unlocks Gemini's default 8192 cap (up to 65536 on
+        Gemini 3.x). If the model rejects the requested ceiling, we retry once at
+        16384 as a safe fallback.
+    thinking_level: For Gemini 3.x models — one of 'minimal', 'low', 'medium', 'high'.
+        Controls how much compute the model spends thinking before producing visible
+        output. For structured JSON generation, 'low' is usually right — too much
+        thinking eats output tokens and returns empty text.
+    thinking_budget: For Gemini 2.x models — explicit thinking token budget.
+        Setting a low value (e.g. 512) prevents thinking from consuming the entire
+        output budget and returning empty visible text. Pass 0 to disable thinking.
+    response_schema: A Pydantic v2 BaseModel class (or a dict schema). When set,
+        Gemini's sampler is constrained at inference time to emit only tokens that
+        keep the JSON valid against the schema — strongest available guarantee that
+        the output parses. Use ALONGSIDE response_mime_type="application/json".
+        Wrapped in try/except so older SDKs degrade to mime-type-only behavior.
+    return_response: When True, returns the raw response object instead of .text.
+    uid / project_id: Identify the billing owner + project for cost tracking.
+    description: Short label for the call (e.g. "director", "storyboard").
+    timeout_s: Hard per-call timeout in seconds. Set to None to disable.
+
+    Note: per Gemini 3.x docs, `temperature` / `top_p` / `top_k` are no longer
+    recommended on 3.x models — `thinking_level` controls reasoning depth instead.
+    We still accept `temperature` for backward compat with 2.x calls.
     """
     desc = description or f"generate_content({model_name})"
     try:
@@ -145,7 +209,9 @@ def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=Fal
         # Configure tools if search is requested
         config = None
         needs_config = (use_search or temperature is not None
-                        or max_output_tokens is not None or timeout_s is not None)
+                        or max_output_tokens is not None or timeout_s is not None
+                        or thinking_level is not None or thinking_budget is not None
+                        or response_mime_type is not None or response_schema is not None)
         if needs_config:
             config = types.GenerateContentConfig()
             if use_search:
@@ -156,6 +222,37 @@ def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=Fal
                 config.max_output_tokens = max_output_tokens
             if timeout_s is not None:
                 config.http_options = types.HttpOptions(timeout=int(timeout_s * 1000))
+            if response_mime_type is not None:
+                # Force structured output: model emits valid JSON only, no prose / no
+                # markdown fences. Critical for Phase 5 (DP) which has the largest
+                # input context and was returning prose explanations under load.
+                try:
+                    config.response_mime_type = response_mime_type
+                except (AttributeError, TypeError) as mt_err:
+                    print(f"[generate_content] Skipping response_mime_type ({mt_err})")
+            if response_schema is not None:
+                # Sampler-level constraint: model can ONLY emit tokens that keep
+                # the JSON valid against the schema. Pair with response_mime_type
+                # ="application/json". Strongest available guarantee that output
+                # parses cleanly. Falls back gracefully on older SDKs.
+                try:
+                    config.response_schema = response_schema
+                except (AttributeError, TypeError) as rs_err:
+                    print(f"[generate_content] Skipping response_schema ({rs_err})")
+            # Thinking config — defensive try/except so an older SDK doesn't
+            # crash the request. The SDK fields differ between 2.x and 3.x.
+            if thinking_level is not None or thinking_budget is not None:
+                try:
+                    tc_kwargs = {}
+                    if thinking_level is not None:
+                        tc_kwargs['thinking_level'] = thinking_level
+                    if thinking_budget is not None:
+                        tc_kwargs['thinking_budget'] = thinking_budget
+                    config.thinking_config = types.ThinkingConfig(**tc_kwargs)
+                except (AttributeError, TypeError) as tc_err:
+                    # Older SDK without ThinkingConfig, or unsupported field — just
+                    # skip. The call will still work, just without thinking control.
+                    print(f"[generate_content] Skipping thinking_config ({tc_err})")
 
         def _call():
             return client.models.generate_content(
@@ -184,9 +281,15 @@ def generate_content(prompt, model_name="gemini-3-flash-preview", use_search=Fal
 
         if return_response:
             return response
-        if response.text is None:
-            return "Error: Gemini returned an empty response (possibly blocked by safety filters)."
-        return response.text
+        # Catch both None and empty-string returns. Either way, we emit
+        # diagnostics so the operator knows whether it was MAX_TOKENS,
+        # SAFETY, RECITATION, or something else — instead of letting a
+        # downstream JSON parser throw a useless "No JSON object found".
+        text = response.text
+        if not text:
+            diag = _diagnose_empty_response(response, desc)
+            return f"Error: Gemini returned empty response ({diag})"
+        return text
     except Exception as e:
         if return_response:
             raise
@@ -654,6 +757,101 @@ Return a JSON object with EXACTLY this structure:
         "exclude": ["fields NOT RELEVANT for this style"]
     }
 }"""
+
+
+def analyze_image_for_identity(image_data, kind="character", api_key=None, uid=None, project_id=None):
+    """
+    Analyze a single uploaded image (character sheet OR location reference) and
+    extract both an identity/description prose block AND a style summary so the
+    caller can decide if the upload matches the project's approved style.
+
+    Args:
+        image_data: Single base64 data URI or raw URL string.
+        kind: 'character' or 'location'.
+
+    Returns:
+        Dict {identity_text: str, style_summary: str} or error string starting with "Error:".
+    """
+    try:
+        client = get_client(api_key)
+        parts = []
+
+        if isinstance(image_data, str) and image_data:
+            if ',' in image_data and image_data.startswith('data:'):
+                header, b64_data = image_data.split(',', 1)
+                mime_type = header.split(':')[1].split(';')[0] if ':' in header else 'image/jpeg'
+                image_bytes = base64.b64decode(b64_data)
+                parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+            elif image_data.startswith('http'):
+                import requests as _requests
+                try:
+                    resp = _requests.get(image_data, timeout=15)
+                    if resp.status_code == 200:
+                        mime_type = resp.headers.get('Content-Type', 'image/jpeg').split(';')[0]
+                        parts.append(types.Part.from_bytes(data=resp.content, mime_type=mime_type))
+                    else:
+                        return f"Error: Could not fetch image ({resp.status_code})"
+                except Exception as fetch_err:
+                    return f"Error: image fetch failed: {fetch_err}"
+            else:
+                return "Error: image_data must be a data URI or http(s) URL"
+        else:
+            return "Error: image_data is required"
+
+        if kind == 'location':
+            instruction = (
+                "Analyze this location reference image. Return JSON with two fields:\n"
+                "1. identity_text: a single paragraph of plain prose describing this location's "
+                "visual identity — geometry, materials, palette, props, lighting character, mood. "
+                "Suitable for use as a written description in a production pipeline. No style "
+                "language (no \"watercolor style\", \"3D render\" etc.) — only the location itself.\n"
+                "2. style_summary: a short phrase describing the rendering style / medium of the "
+                "image (e.g., \"high-detail photoreal cinematic\", \"flat 2D illustration\", "
+                "\"3D stylized animation\")."
+            )
+        else:
+            instruction = (
+                "Analyze this character reference image (could be a single image or a reference "
+                "sheet grid). Return JSON with two fields:\n"
+                "1. identity_text: a single paragraph of plain prose describing this character's "
+                "visual identity — wardrobe, distinctive features, body type, props, anything that "
+                "should remain consistent across shots. No style language (no \"anime style\", "
+                "\"3D render\" etc.) — only the character themselves.\n"
+                "2. style_summary: a short phrase describing the rendering style / medium of the "
+                "image (e.g., \"high-detail photoreal cinematic\", \"flat 2D illustration\", "
+                "\"stick figure cartoon\")."
+            )
+        parts.append(types.Part(text=instruction))
+
+        def _call():
+            return client.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents=types.Content(parts=parts),
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
+            )
+
+        response, retries = _retry_api_call(_call, description=f"analyze_image_identity_{kind}")
+
+        if cost_tracker is not None:
+            cost_tracker.track_text(
+                uid=uid, project_id=project_id, model="gemini-3-flash-preview",
+                response=response, retries=retries,
+                description=f"analyze_image_identity_{kind}",
+            )
+
+        try:
+            result = json.loads(response.text)
+            return {
+                "identity_text": result.get("identity_text", ""),
+                "style_summary": result.get("style_summary", ""),
+            }
+        except json.JSONDecodeError:
+            return f"Error: Could not parse identity analysis response"
+
+    except Exception as e:
+        return f"Error: {e}"
 
 
 def analyze_style_from_images(image_data_list, api_key=None, uid=None, project_id=None):
@@ -1156,7 +1354,8 @@ def _decode_ref_image(img_data):
 def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                          aspect_ratio="16:9", resolution="2K",
                          style_images=None, characters=None,
-                         character_images=None, additional_context="",
+                         character_images=None, location_refs=None,
+                         additional_context="",
                          style_mode="art_only", scene_id=None, api_key=None,
                          uid=None, project_id=None):
     """
@@ -1314,6 +1513,46 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
                 except Exception as e:
                     print(f"[Scene Image] Failed to decode legacy character image: {e}")
 
+        # 2b. Location references: labeled per-location sections
+        has_locations = location_refs and len(location_refs) > 0
+        if has_locations:
+            for loc in location_refs:
+                loc_name = loc.get('name', 'Unknown')
+                loc_images = loc.get('images', [])
+                if not loc_images:
+                    continue
+
+                loc_instruction = (
+                    f"\n--- LOCATION: \"{loc_name}\" (Environment Reference) ---\n"
+                    f"The following {len(loc_images)} image(s) define the setting \"{loc_name}\". "
+                    f"Preserve the spatial layout, materials, palette, props, and lighting "
+                    f"character of this location across every shot set there. Do NOT copy "
+                    f"the framing, camera angle, or specific composition — only the "
+                    f"environment's identity:"
+                )
+                parts.append(types.Part(text=loc_instruction))
+
+                for img_data in loc_images[:2]:
+                    if not img_data:
+                        continue
+                    try:
+                        image_bytes, mime_type = _decode_ref_image(img_data)
+                        parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+                    except Exception as e:
+                        print(f"[Scene Image] Failed to decode location image for {loc_name}: {e}")
+
+            loc_names = [l.get('name', 'Unknown') for l in location_refs if l.get('images')]
+            if loc_names:
+                loc_binding = (
+                    "\n--- LOCATION BINDING ---\n"
+                    f"Locations available in this scene: {', '.join(loc_names)}.\n"
+                    "When the scene description mentions one of these named settings, "
+                    "you MUST match the environment's materials, palette, geometry, and "
+                    "lighting character from the corresponding reference. The camera angle "
+                    "and framing follow the scene prompt, not the references.\n"
+                )
+                parts.append(types.Part(text=loc_binding))
+
         # 3. Style reference images (mode-dependent instruction)
         if has_style:
             if style_mode == "full":
@@ -1392,8 +1631,13 @@ def generate_scene_image(prompt, model_name="gemini-3-pro-image-preview",
             char_summary = f"{len(character_images)} unlabeled"
         else:
             char_summary = "none"
+        loc_summary = ", ".join(
+            f"{l.get('name','?')}({len(l.get('images',[]))} imgs)"
+            for l in (location_refs or []) if l.get('images')
+        ) or "none"
         print(f"[Scene Image] Generating scene {scene_id} with {model_name} "
-              f"({len(style_images or [])} style refs, chars=[{char_summary}]"
+              f"({len(style_images or [])} style refs, chars=[{char_summary}], "
+              f"locations=[{loc_summary}]"
               f"{', context=' + repr(additional_context[:50]) if additional_context else ''})")
 
         def _call_gemini_scene():

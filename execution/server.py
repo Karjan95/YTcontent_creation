@@ -19,11 +19,20 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
 import firebase_admin
 from firebase_admin import credentials, auth, firestore
+# firebase_admin.firestore re-exports these from google.cloud.firestore at
+# runtime, but the firebase_admin type stubs don't list them — pyrefly
+# flags every `SERVER_TIMESTAMP` etc. as missing-attribute. Pull
+# them from the canonical module so the IDE stays quiet. Runtime behavior
+# is identical (same Sentinel / Query / transform objects).
+from google.cloud.firestore import (
+    SERVER_TIMESTAMP, DELETE_FIELD, Query, ArrayUnion, ArrayRemove,
+)
 
 # Ensure the execution directory is in the Python path
 sys.path.insert(0, os.path.dirname(__file__))
 from gemini_client import (generate_image_content, generate_tts, generate_content,
                            analyze_style_from_images, analyze_style_from_text,
+                           analyze_image_for_identity,
                            expand_creative_direction, refine_creative_direction,
                            generate_scene_image, edit_scene_image,
                            start_video_generation, poll_video_generation,
@@ -52,6 +61,7 @@ from seedance_studio import register_routes as register_seedance_routes
 from model_schemas import (MODEL_SCHEMAS as STUDIO_MODELS,
                            get_provider_groups as studio_provider_groups,
                            get_schema as studio_get_schema)
+import firestore_helpers as fh
 
 # Paths relative to this script's location
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -789,7 +799,7 @@ def _rehost_kie_results(result_urls, task_id, project_id, scene_id=None, kind=No
 
 @app.route('/api/kie/poll/<task_id>', methods=['GET'])
 @require_auth
-@limiter.limit("600/hour")
+@limiter.limit("3600/hour")
 def kie_poll(task_id):
     """Poll a Kie.ai task for completion.
     On success, downloads result and uploads to Firebase Storage for persistence.
@@ -831,7 +841,7 @@ def kie_poll(task_id):
 
 @app.route('/api/kie/mj/poll/<task_id>', methods=['GET'])
 @require_auth
-@limiter.limit("600/hour")
+@limiter.limit("3600/hour")
 def kie_mj_poll(task_id):
     """Poll a Midjourney task using the dedicated /mj/ endpoint.
     On success, downloads result and uploads to Firebase Storage for persistence."""
@@ -1060,7 +1070,14 @@ def _studio_dispatch_kie_generic(schema, inputs, params, project_id):
     result = kie_create_task(schema['id'], prompt, g.kie_api_key,
                              image_urls=image_urls, **extras)
     if not result.get('success'):
-        return jsonify({'error': result.get('error', 'Kie task failed')}), 500
+        err = result.get('error', 'Kie task failed')
+        # Surface upstream 429 so a batch caller can apply its own backoff.
+        # kie_client already retries 3x internally with 2-8s waits; if we
+        # land here on a 429 it's a sustained rate violation, not a blip.
+        err_lower = str(err).lower()
+        if '429' in err_lower or 'rate limit' in err_lower:
+            return jsonify({'error': err}), 429
+        return jsonify({'error': err}), 500
     return jsonify({**result, 'backend': 'kie_generic'})
 
 
@@ -1769,14 +1786,36 @@ def suggest_cast_route():
         if cleaned.startswith("json"):
             cleaned = cleaned[4:].strip()
 
-        cast_data = json.loads(cleaned)
-        cast_count = len(cast_data.get('cast', []))
-        has_chars = cast_data.get('has_characters', cast_count > 0)
-        print(f"[Cast Suggestion] Complete: {cast_count} characters found, has_characters={has_chars}")
+        full_data = json.loads(cleaned)
+        cast_count = len(full_data.get('cast', []))
+        has_chars = full_data.get('has_characters', cast_count > 0)
+
+        # Split the LLM response into cast_data and locations_data so the
+        # frontend can render them in their own panels independently.
+        cast_data = {
+            'title': full_data.get('title', ''),
+            'has_characters': has_chars,
+            'total_beats': full_data.get('total_beats', 0),
+            'cast': full_data.get('cast', []),
+            'casting_notes': full_data.get('casting_notes', ''),
+        }
+
+        locations_list = full_data.get('locations') or []
+        has_locations = full_data.get('has_locations', len(locations_list) > 0)
+        locations_data = {
+            'has_locations': has_locations,
+            'locations': locations_list,
+            'location_notes': full_data.get('location_notes', ''),
+        }
+
+        loc_count = len(locations_list)
+        print(f"[Cast Suggestion] Complete: {cast_count} characters, {loc_count} locations, "
+              f"has_characters={has_chars}, has_locations={has_locations}")
 
         return jsonify({
             'success': True,
-            'cast_data': cast_data
+            'cast_data': cast_data,
+            'locations_data': locations_data,
         })
 
     except json.JSONDecodeError as e:
@@ -1986,6 +2025,336 @@ def generate_cast_portraits_batch():
         print(f"[Cast Portrait] Batch complete: {success_count}/{len(jobs)} succeeded")
 
         return jsonify({'results': list(grouped.values())})
+
+    except Exception as e:
+        return safe_error_response(e)
+
+
+# ────────────────────────────────────────────────────────────────
+#  LOCATION REFERENCE GENERATION
+# ────────────────────────────────────────────────────────────────
+
+@app.route('/api/generate-location-reference', methods=['POST'])
+@require_auth
+@limiter.limit("600/hour")
+def generate_location_reference():
+    """Generate a 2x3 reference grid image for a location."""
+    try:
+        data = request.json
+        prompt, err = validate_input(data, 'prompt', max_length=10000)
+        if err:
+            return jsonify({'error': err}), 400
+
+        location_name = data.get('location_name', 'Unknown')
+        project_id = data.get('project_id')
+        if not project_id:
+            return jsonify({'error': 'project_id is required'}), 400
+
+        model = data.get('model', 'gemini-3-pro-image-preview')
+        if model.startswith('imagen-'):
+            model = 'gemini-3-pro-image-preview'
+
+        style_images = [r for r in (resolve_image_input(img) for img in data.get('style_images', []) if img) if r]
+        style_mode = data.get('style_mode', 'art_only')
+        style_summary = data.get('style_summary', '')
+
+        safe_name = ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in location_name.lower())
+        scene_id = f"location_{safe_name}_reference"
+
+        print(f"[Location Reference] Generating reference grid for '{location_name}' "
+              f"(model={model}, {len(style_images)} style refs)")
+
+        result = generate_scene_image(
+            prompt=prompt,
+            model_name=model,
+            aspect_ratio='16:9',
+            resolution='2K',
+            style_images=style_images or None,
+            characters=None,
+            character_images=None,
+            additional_context=style_summary,
+            style_mode=style_mode,
+            scene_id=scene_id,
+            api_key=g.api_key,
+            uid=g.uid, project_id=project_id,
+        )
+
+        if "error" in result:
+            return jsonify({'error': result['error'], 'location_name': location_name}), 500
+
+        if result.get("success") and "local_path" in result:
+            url, blob_path = upload_to_storage(
+                result["local_path"],
+                f"references/{project_id}/location",
+                return_path=True
+            )
+            if url:
+                result["image_url"] = url
+                result["blob_path"] = blob_path
+            del result["local_path"]
+
+        result["location_name"] = location_name
+        return jsonify(result)
+
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/generate-location-references-batch', methods=['POST'])
+@require_auth
+@limiter.limit("60/hour")
+def generate_location_references_batch():
+    """Generate reference grids for all locations in parallel."""
+    try:
+        data = request.json
+        locations = data.get('locations', [])
+        if not locations:
+            return jsonify({'error': 'locations array is required'}), 400
+
+        project_id = data.get('project_id')
+        if not project_id:
+            return jsonify({'error': 'project_id is required'}), 400
+
+        model = data.get('model', 'gemini-3-pro-image-preview')
+        if model.startswith('imagen-'):
+            model = 'gemini-3-pro-image-preview'
+
+        style_images = [r for r in (resolve_image_input(img) for img in data.get('style_images', []) if img) if r]
+        style_mode = data.get('style_mode', 'art_only')
+        style_summary = data.get('style_summary', '')
+        api_key = g.api_key
+        tracking_uid = g.uid
+
+        def generate_one_location(loc_name, prompt):
+            safe_name = ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in loc_name.lower())
+            scene_id = f"location_{safe_name}_reference"
+
+            res = generate_scene_image(
+                prompt=prompt,
+                model_name=model,
+                aspect_ratio='16:9',
+                resolution='2K',
+                style_images=style_images or None,
+                characters=None,
+                character_images=None,
+                additional_context=style_summary,
+                style_mode=style_mode,
+                scene_id=scene_id,
+                api_key=api_key,
+                uid=tracking_uid, project_id=project_id,
+            )
+
+            if res.get("success") and "local_path" in res:
+                url, blob_path = upload_to_storage(
+                    res["local_path"],
+                    f"references/{project_id}/location",
+                    return_path=True
+                )
+                if url:
+                    res["image_url"] = url
+                    res["blob_path"] = blob_path
+                if "local_path" in res:
+                    del res["local_path"]
+
+            res["location_name"] = loc_name
+            return res
+
+        jobs = []
+        for loc in locations:
+            name = loc.get('name', 'Unknown')
+            prompt = loc.get('reference_sheet_prompt') or loc.get('prompt')
+            if prompt:
+                jobs.append((name, prompt))
+
+        if not jobs:
+            return jsonify({'error': 'No reference prompts found in locations data'}), 400
+
+        print(f"[Location Reference] Batch generating {len(jobs)} reference grids")
+
+        results = []
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(generate_one_location, *job): job for job in jobs}
+            for future in as_completed(futures):
+                try:
+                    res = future.result()
+                    results.append(res)
+                except Exception as exc:
+                    job = futures[future]
+                    results.append({
+                        "error": str(exc),
+                        "location_name": job[0],
+                    })
+
+        grouped = {}
+        for res in results:
+            name = res.get('location_name', 'Unknown')
+            grouped[name] = {
+                "location_name": name,
+                "reference_sheet": {
+                    "success": res.get("success", False),
+                    "image_url": res.get("image_url"),
+                    "blob_path": res.get("blob_path"),
+                    "error": res.get("error"),
+                }
+            }
+
+        success_count = sum(1 for r in results if r.get('success'))
+        print(f"[Location Reference] Batch complete: {success_count}/{len(jobs)} succeeded")
+
+        return jsonify({'results': list(grouped.values())})
+
+    except Exception as e:
+        return safe_error_response(e)
+
+
+# ────────────────────────────────────────────────────────────────
+#  UPLOADED REFERENCE ANALYSIS + RESTYLE
+# ────────────────────────────────────────────────────────────────
+
+@app.route('/api/analyze-uploaded-reference', methods=['POST'])
+@require_auth
+@limiter.limit("120/hour")
+def analyze_uploaded_reference():
+    """Analyze a user-uploaded reference image. Returns identity_text +
+    style_summary + style_mismatch flag (vs project's approved style)."""
+    try:
+        data = request.json
+        image_url = data.get('image_url')
+        image_b64 = data.get('image_b64')
+        kind = data.get('kind', 'character')
+        approved_style_summary = (data.get('style_summary') or '').strip()
+
+        image_data = image_b64 or image_url
+        if not image_data:
+            return jsonify({'error': 'image_url or image_b64 is required'}), 400
+        if kind not in ('character', 'location'):
+            return jsonify({'error': "kind must be 'character' or 'location'"}), 400
+
+        result = analyze_image_for_identity(
+            image_data=image_data,
+            kind=kind,
+            api_key=g.api_key,
+            uid=g.uid,
+            project_id=data.get('project_id'),
+        )
+
+        if isinstance(result, str) and result.startswith("Error"):
+            return jsonify({'error': result}), 500
+
+        identity_text = (result.get('identity_text') or '').strip()
+        upload_style_summary = (result.get('style_summary') or '').strip()
+
+        # Keyword-overlap heuristic — fewer than 30% of meaningful tokens shared
+        # is treated as a mismatch. False positives are acceptable because the
+        # user can dismiss the warning by toggling active ref.
+        style_mismatch = False
+        if approved_style_summary and upload_style_summary:
+            def _tokens(s):
+                return set(t for t in ''.join(c if c.isalnum() or c.isspace() else ' '
+                                              for c in s.lower()).split()
+                           if len(t) > 3)
+            a = _tokens(approved_style_summary)
+            b = _tokens(upload_style_summary)
+            if a and b:
+                overlap = len(a & b)
+                style_mismatch = (overlap / max(len(a), len(b))) < 0.3
+
+        return jsonify({
+            'success': True,
+            'identity_text': identity_text,
+            'style_summary': upload_style_summary,
+            'style_mismatch': style_mismatch,
+        })
+
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/restyle-reference', methods=['POST'])
+@require_auth
+@limiter.limit("60/hour")
+def restyle_reference():
+    """Regenerate a reference (cast portrait or location grid) in the project's
+    style, using the uploaded image's identity/description text as the subject.
+    Returns the new generated ref URL. The original upload is untouched."""
+    try:
+        data = request.json
+        kind = data.get('kind', 'character')
+        name = data.get('name', 'Unknown')
+        identity_text = (data.get('identity_text') or '').strip()
+        project_id = data.get('project_id')
+
+        if kind not in ('character', 'location'):
+            return jsonify({'error': "kind must be 'character' or 'location'"}), 400
+        if not identity_text:
+            return jsonify({'error': 'identity_text is required'}), 400
+        if not project_id:
+            return jsonify({'error': 'project_id is required'}), 400
+
+        model = data.get('model', 'gemini-3-pro-image-preview')
+        if model.startswith('imagen-'):
+            model = 'gemini-3-pro-image-preview'
+
+        style_images = [r for r in (resolve_image_input(img) for img in data.get('style_images', []) if img) if r]
+        style_mode = data.get('style_mode', 'art_only')
+        style_summary = (data.get('style_summary') or '').strip()
+        style_prefix = f"{style_summary}. " if style_summary else ""
+
+        if kind == 'character':
+            prompt = (
+                f"{style_prefix}Create a professional character reference sheet for {name}: "
+                f"{identity_text}. Use a clean, neutral plain background. Arrange in two "
+                f"horizontal rows: Top row: four full-body standing views side-by-side — "
+                f"front view, left profile (facing left), right profile (facing right), back "
+                f"view. Bottom row: three highly detailed close-up portraits — front portrait, "
+                f"left profile (facing left), right profile (facing right). Maintain perfect "
+                f"identity consistency. Relaxed A-pose, consistent scale. Even spacing, clean "
+                f"panel separation. Consistent lighting. Crisp, print-ready."
+            )
+            folder = f"references/{project_id}/character"
+            safe_name = ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in name.lower())
+            scene_id = f"portrait_{safe_name}_reference_sheet"
+        else:
+            prompt = (
+                f"{style_prefix}Create a 2x3 reference grid for the location \"{name}\": "
+                f"{identity_text}. Six panels arranged in two rows of three. Choose six diverse "
+                f"angles that best capture this specific location. Maintain perfect spatial and "
+                f"lighting consistency across all six panels. Clean panel separation, even spacing."
+            )
+            folder = f"references/{project_id}/location"
+            safe_name = ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in name.lower())
+            scene_id = f"location_{safe_name}_reference"
+
+        print(f"[Restyle] Generating restyled {kind} reference for '{name}'")
+
+        result = generate_scene_image(
+            prompt=prompt,
+            model_name=model,
+            aspect_ratio='16:9',
+            resolution='2K',
+            style_images=style_images or None,
+            characters=None,
+            character_images=None,
+            additional_context=style_summary,
+            style_mode=style_mode,
+            scene_id=scene_id,
+            api_key=g.api_key,
+            uid=g.uid, project_id=project_id,
+        )
+
+        if "error" in result:
+            return jsonify({'error': result['error']}), 500
+
+        if result.get("success") and "local_path" in result:
+            url, blob_path = upload_to_storage(result["local_path"], folder, return_path=True)
+            if url:
+                result["image_url"] = url
+                result["blob_path"] = blob_path
+            del result["local_path"]
+
+        result["kind"] = kind
+        result["name"] = name
+        return jsonify(result)
 
     except Exception as e:
         return safe_error_response(e)
@@ -2314,7 +2683,7 @@ Return ONLY the JSON."""
                     'research_summary': research_data.get("summary", ""),
                     'research_key_facts': research_data.get("key_facts", []),
                     'research_sources': research_data.get("sources_mentioned", []),
-                    'last_updated_at': firestore.SERVER_TIMESTAMP
+                    'last_updated_at': SERVER_TIMESTAMP
                 }
                 if structured is not None:
                     project_payload['research_structured'] = structured
@@ -2337,7 +2706,7 @@ Return ONLY the JSON."""
                 'key_facts': research_data.get("key_facts", []),
                 'sources': research_data.get("sources_mentioned", []),
                 'summary': research_data.get("summary", ""),
-                'created_at': firestore.SERVER_TIMESTAMP,
+                'created_at': SERVER_TIMESTAMP,
                 'research_model': research_model
             }
             if structured is not None:
@@ -2377,7 +2746,7 @@ def list_projects():
     """List all saved projects for the user."""
     try:
         docs = db.collection('users').document(g.uid).collection('projects') \
-                 .order_by('last_updated_at', direction=firestore.Query.DESCENDING).stream()
+                 .order_by('last_updated_at', direction=Query.DESCENDING).stream()
                  
         projects = []
         for doc in docs:
@@ -2414,8 +2783,8 @@ def create_project():
             'research_dossier': data.get('research_dossier', ''),
             'narration_data': data.get('narration_data', None),
             'production_data': data.get('production_data', None),
-            'created_at': firestore.SERVER_TIMESTAMP,
-            'last_updated_at': firestore.SERVER_TIMESTAMP,
+            'created_at': SERVER_TIMESTAMP,
+            'last_updated_at': SERVER_TIMESTAMP,
         }
         project_ref.set(new_project)
 
@@ -2435,7 +2804,13 @@ def create_project():
 @require_auth
 @limiter.limit("200/hour")
 def get_project(project_id):
-    """Load a specific project's full state."""
+    """Load a specific project's full state.
+
+    Shots and visuals live in subcollections (so a 1000-shot project doesn't
+    exceed Firestore's 1MB per-doc limit). On first load of a legacy project,
+    `fh.migrate_project` splits the embedded `production_data` /
+    `visuals_scenes` fields out into subcollections — idempotent, transparent.
+    """
     try:
         doc = db.collection('users').document(g.uid).collection('projects').document(project_id).get()
         if not doc.exists:
@@ -2443,8 +2818,31 @@ def get_project(project_id):
 
         project_data = doc.to_dict()
         project_data['id'] = doc.id
+
+        try:
+            migrated = fh.migrate_project(g.uid, project_id, project_data)
+            if migrated:
+                # Drop the legacy fields from the response so the UI sees the
+                # post-migration shape (subcollection sources only).
+                project_data.pop('production_data', None)
+                project_data.pop('visuals_scenes', None)
+        except Exception as mig_err:
+            print(f"[Migration] project {project_id}: {mig_err}")
+
+        # Assemble subcollection data into the response. Keep the legacy keys
+        # the UI already expects so loadProject() doesn't need to change shape.
+        shots = fh.read_shots(g.uid, project_id)
+        if shots:
+            project_data['production_data'] = {
+                'production_table': {'shots': shots, 'total_shots': len(shots)}
+            }
+        visuals = fh.read_visuals(g.uid, project_id)
+        if visuals:
+            project_data['visuals_scenes'] = visuals
+        project_data['pipeline_state'] = fh.read_checkpoints(g.uid, project_id)
+
         # Convert Firestore timestamps to ISO strings for JSON serialization
-        for key in ('created_at', 'last_updated_at'):
+        for key in ('created_at', 'last_updated_at', 'migrated_at'):
             if key in project_data and hasattr(project_data[key], 'isoformat'):
                 project_data[key] = project_data[key].isoformat()
         return jsonify({'success': True, 'project': project_data})
@@ -2455,20 +2853,44 @@ def get_project(project_id):
 @require_auth
 @limiter.limit("200/hour")
 def update_project(project_id):
-    """Auto-save / Update a specific project."""
+    """Auto-save / Update a specific project.
+
+    `production_data` and `visuals_scenes` are intercepted here and routed
+    into the shots/ and visuals/ subcollections — they used to blow the 1MB
+    project-doc cap on large tables. The rest of the autosave payload (title,
+    settings, narration_data, etc.) goes onto the project doc as before.
+    """
     try:
         data = request.json
         if not data:
             return jsonify({'error': 'No data provided'}), 400
-            
+
         # Don't update timestamps provided from client, use server timestamp
-        if 'last_updated_at' in data:
-            del data['last_updated_at']
-        if 'created_at' in data:
-            del data['created_at']
-            
-        data['last_updated_at'] = firestore.SERVER_TIMESTAMP
-        
+        data.pop('last_updated_at', None)
+        data.pop('created_at', None)
+
+        legacy_pd = data.pop('production_data', None)
+        legacy_vs = data.pop('visuals_scenes', None)
+
+        if legacy_pd is not None:
+            shots = fh.extract_legacy_shots(legacy_pd) if isinstance(legacy_pd, dict) else []
+            try:
+                fh.clear_shots(g.uid, project_id)
+                if shots:
+                    fh.write_shots(g.uid, project_id, shots, start_order=0)
+            except Exception as e:
+                print(f"[autosave/shots] project {project_id}: {e}")
+
+        if isinstance(legacy_vs, list):
+            try:
+                fh.clear_visuals(g.uid, project_id)
+                if legacy_vs:
+                    fh.write_visuals(g.uid, project_id, legacy_vs, start_order=0)
+            except Exception as e:
+                print(f"[autosave/visuals] project {project_id}: {e}")
+
+        data['last_updated_at'] = SERVER_TIMESTAMP
+
         db.collection('users').document(g.uid).collection('projects').document(project_id).set(
             data, merge=True
         )
@@ -2493,6 +2915,15 @@ def delete_project(project_id):
                 print(f"[Asset Cleanup] Deleted {len(asset_docs)} asset docs for project {project_id}")
         except Exception as e:
             print(f"[Asset Cleanup] Error: {e}")
+
+        # Cascade-delete the production subcollections (shots, visuals,
+        # pipeline_checkpoints). These live alongside `assets`.
+        try:
+            n = fh.cascade_delete_project_subcollections(g.uid, project_id)
+            if n:
+                print(f"[Subcoll Cleanup] Deleted {n} docs across shots/visuals/checkpoints for {project_id}")
+        except Exception as e:
+            print(f"[Subcoll Cleanup] Error: {e}")
 
         project_ref.delete()
 
@@ -2580,6 +3011,255 @@ def _serialize_asset(doc):
     return d
 
 
+# ────────────────────────────────────────────────────────────────
+#  Production table — granular shot + resume endpoints
+# ────────────────────────────────────────────────────────────────
+
+# A production task whose `updated_at` is older than this without reaching a
+# terminal status is treated as orphaned (the worker thread died — most likely
+# its Cloud Run instance was killed). Threshold needs to be long enough that
+# a slow Gemini call inside a still-running task doesn't trip it; 15 min is
+# well above the observed 8-12 min ceiling for a single batch including
+# Gemini's RetryInfo waits.
+_STALE_TASK_AGE_MIN = 15
+
+
+def _recover_stale_production_tasks(uid, project_id):
+    """Sweep any orphaned production_tasks for this project whose worker
+    died before writing a terminal status. Shots that completed before the
+    crash live in `production_tasks/{tid}/batches/` (the ephemeral buffer
+    added 2026-05-18). Move them into the durable `shots/` subcollection,
+    compute missing beats from the project's narration, and write a
+    `task_state` checkpoint so the Resume banner picks them up.
+
+    Idempotent — once a task is marked terminal, subsequent calls skip it.
+    Returns the recovered task_id or None.
+    """
+    from datetime import datetime, timezone, timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=_STALE_TASK_AGE_MIN)
+
+    tasks_ref = db.collection('users').document(uid).collection('production_tasks')
+    try:
+        candidates = list(tasks_ref.where('project_id', '==', project_id)
+                                   .where('status', '==', 'running').stream())
+    except Exception as e:
+        print(f"[Recovery] query failed for {project_id}: {e}")
+        return None
+
+    for task_snap in candidates:
+        task_data = task_snap.to_dict() or {}
+        updated_at = task_data.get('updated_at')
+        # Firestore timestamps come back as datetime; SERVER_TIMESTAMP that
+        # never resolved would be None — treat as stale.
+        if updated_at and hasattr(updated_at, 'timestamp'):
+            if updated_at > cutoff:
+                continue  # still warm, leave it alone
+        elif updated_at is not None:
+            continue  # unknown shape, be conservative
+
+        task_id = task_snap.id
+        # Reassemble shots from per-batch docs.
+        try:
+            batch_docs = list(task_snap.reference.collection('batches').stream())
+        except Exception as e:
+            print(f"[Recovery] {task_id} batches read failed: {e}")
+            continue
+        all_shots = []
+        for bd in batch_docs:
+            bdata = bd.to_dict() or {}
+            shots = bdata.get('shots') or []
+            if shots:
+                all_shots.append((bdata.get('batch_idx', 0), shots))
+        all_shots.sort(key=lambda t: t[0])
+        recovered_shots = [s for _, batch in all_shots for s in batch]
+
+        if not recovered_shots:
+            # Worker died before producing any shots — nothing to salvage,
+            # but still mark the task terminal so future polls stop.
+            try:
+                task_snap.reference.update({
+                    'status': 'failed',
+                    'error': 'Worker terminated before producing any shots (instance kill suspected)',
+                    'updated_at': SERVER_TIMESTAMP,
+                })
+            except Exception:
+                pass
+            continue
+
+        # Move into the durable home. Preserve any shots already there (e.g.
+        # from a prior retry) by appending — keyed by shot_number when present,
+        # else by current count.
+        try:
+            existing = fh.read_shots(uid, project_id) or []
+            existing_keys = {str(s.get('shot_number') or s.get('_id') or i)
+                             for i, s in enumerate(existing)}
+            to_add = [s for s in recovered_shots
+                      if str(s.get('shot_number') or '') not in existing_keys
+                      or not s.get('shot_number')]
+            if to_add:
+                # Renumber order to extend after existing.
+                start = len(existing)
+                fh.write_shots(uid, project_id, to_add, start_order=start)
+        except Exception as e:
+            print(f"[Recovery] {task_id} write_shots failed: {e}")
+            continue
+
+        # Compute missing beats so Resume can target just the gap.
+        missing_beats = []
+        try:
+            proj_snap = (db.collection('users').document(uid)
+                           .collection('projects').document(project_id).get())
+            if proj_snap.exists:
+                narration_data = (proj_snap.to_dict() or {}).get('narration_data') or {}
+                input_beats = narration_data.get('narration') or []
+                if input_beats:
+                    from research_scriptwriter import _check_beat_coverage
+                    merged = (fh.read_shots(uid, project_id) or [])
+                    missing_beats = _check_beat_coverage(input_beats, merged)
+        except Exception as e:
+            print(f"[Recovery] {task_id} coverage check failed: {e}")
+
+        # Update checkpoints + close out the task.
+        try:
+            fh.write_checkpoint(uid, project_id, 'task_state', {
+                'active_task_id': task_id,
+                'last_completed_phase': 'phase5_dp',
+                'partial': True,
+                'status': 'recovered_from_stale_task',
+                'missing_beats': missing_beats,
+                'error': 'Worker terminated mid-stream (instance kill suspected); shots recovered from ephemeral buffer.',
+            })
+            task_snap.reference.update({
+                'status': 'failed',
+                'error': 'Worker terminated mid-stream; shots recovered from ephemeral buffer',
+                'recovered_shot_count': len(recovered_shots),
+                'updated_at': SERVER_TIMESTAMP,
+            })
+            print(f"[Recovery] {task_id}: salvaged {len(recovered_shots)} shots into project {project_id}, "
+                  f"{len(missing_beats)} beats still missing")
+        except Exception as e:
+            print(f"[Recovery] {task_id} checkpoint write failed: {e}")
+            continue
+
+        return task_id
+
+    return None
+
+
+@app.route('/api/projects/<project_id>/resumable', methods=['GET'])
+@require_auth
+@limiter.limit("400/hour")
+def project_resumable_state(project_id):
+    """Report whether the project has a partial production run that can be
+    resumed. Backed by `pipeline_checkpoints/task_state` which generation
+    endpoints update at terminal points, plus a sweep for orphaned
+    `production_tasks` (Cloud Run instance kills that never reached a
+    terminal handler).
+    """
+    try:
+        # Self-heal: any stale running task with stranded batch data gets
+        # swept into the durable shots/ subcollection and surfaced via
+        # task_state. Cheap (one indexed query) on the happy path.
+        try:
+            _recover_stale_production_tasks(g.uid, project_id)
+        except Exception as rec_err:
+            print(f"[Recovery] sweep error: {rec_err}")
+
+        state = fh.read_checkpoint(g.uid, project_id, 'task_state') or {}
+        shots_n = fh.shots_count(g.uid, project_id)
+        partial = bool(state.get('partial'))
+        return jsonify({
+            'resumable': partial,
+            'last_completed_phase': state.get('last_completed_phase'),
+            'status': state.get('status'),
+            'shots_written': shots_n,
+            'total_shots': state.get('total_shots') or shots_n,
+            'missing_beats': state.get('missing_beats') or [],
+            'error': state.get('error'),
+            'active_task_id': state.get('active_task_id'),
+            # Surface persisted per-phase/batch errors so the UI's inline
+            # error log can render them (see ui/index.html:renderProductionErrorLog).
+            'errors': state.get('errors') or [],
+        })
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/projects/<project_id>/pipeline_state', methods=['DELETE'])
+@require_auth
+@limiter.limit("200/hour")
+def clear_project_pipeline_state(project_id):
+    """Discard a resumable partial run. Optional query flags:
+       - clear_shots=1 also wipes the shots/ subcollection (Start Over).
+    """
+    try:
+        also_clear_shots = request.args.get('clear_shots', '0') in ('1', 'true', 'yes')
+        n = fh.clear_checkpoints(g.uid, project_id)
+        shots_cleared = 0
+        if also_clear_shots:
+            shots_cleared = fh.clear_shots(g.uid, project_id)
+        return jsonify({
+            'success': True,
+            'checkpoints_cleared': n,
+            'shots_cleared': shots_cleared,
+        })
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/projects/<project_id>/shots/<shot_id>', methods=['PUT'])
+@require_auth
+@limiter.limit("1200/hour")
+def update_shot(project_id, shot_id):
+    """Upsert a single shot doc. Used for inline-edit autosave so the UI
+    doesn't have to re-send the whole table on every keystroke.
+    """
+    try:
+        data = request.json or {}
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Shot payload must be an object'}), 400
+        fh.write_shot(g.uid, project_id, shot_id, data)
+        return jsonify({'success': True})
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/projects/<project_id>/shots/<shot_id>', methods=['DELETE'])
+@require_auth
+@limiter.limit("600/hour")
+def delete_shot_route(project_id, shot_id):
+    try:
+        fh.delete_shot(g.uid, project_id, shot_id)
+        return jsonify({'success': True})
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/projects/<project_id>/visuals/<visual_id>', methods=['PUT'])
+@require_auth
+@limiter.limit("1200/hour")
+def update_visual(project_id, visual_id):
+    try:
+        data = request.json or {}
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Visual payload must be an object'}), 400
+        fh.write_visual(g.uid, project_id, visual_id, data)
+        return jsonify({'success': True})
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/projects/<project_id>/visuals/<visual_id>', methods=['DELETE'])
+@require_auth
+@limiter.limit("600/hour")
+def delete_visual_route(project_id, visual_id):
+    try:
+        fh.delete_visual(g.uid, project_id, visual_id)
+        return jsonify({'success': True})
+    except Exception as e:
+        return safe_error_response(e)
+
+
 @app.route('/api/projects/<project_id>/assets', methods=['GET'])
 @require_auth
 @limiter.limit("600/hour")
@@ -2595,10 +3275,10 @@ def list_project_assets(project_id):
         coll = (db.collection('users').document(g.uid)
                   .collection('projects').document(project_id)
                   .collection('assets'))
-        query = coll.order_by('ts', direction=firestore.Query.DESCENDING).limit(limit)
+        query = coll.order_by('ts', direction=Query.DESCENDING).limit(limit)
         if kind in {'image', 'video', 'audio'}:
             query = coll.where('kind', '==', kind) \
-                        .order_by('ts', direction=firestore.Query.DESCENDING).limit(limit)
+                        .order_by('ts', direction=Query.DESCENDING).limit(limit)
 
         assets = [_serialize_asset(d) for d in query.stream()]
         return jsonify({'success': True, 'assets': assets})
@@ -2625,7 +3305,7 @@ def create_project_asset(project_id):
         doc['url'] = url
         doc['favorite'] = bool(doc.get('favorite', False))
         doc['created_by'] = g.uid
-        doc['ts'] = firestore.SERVER_TIMESTAMP
+        doc['ts'] = SERVER_TIMESTAMP
 
         ref = (db.collection('users').document(g.uid)
                  .collection('projects').document(project_id)
@@ -2682,7 +3362,7 @@ def list_dossiers():
     """List saved research dossiers for the current user."""
     try:
         docs = db.collection('users').document(g.uid).collection('dossiers') \
-                 .order_by('created_at', direction=firestore.Query.DESCENDING) \
+                 .order_by('created_at', direction=Query.DESCENDING) \
                  .limit(20).stream()
 
         dossiers = []
@@ -2804,7 +3484,7 @@ def poll_research():
                 'key_facts': [],
                 'sources': [],
                 'summary': research_text[:500],
-                'created_at': firestore.SERVER_TIMESTAMP,
+                'created_at': SERVER_TIMESTAMP,
                 'research_model': 'deep_research_agent'
             }
             if structured is not None:
@@ -2836,7 +3516,7 @@ def poll_research():
                     'research_summary': research_text[:500],
                     'research_key_facts': [],
                     'research_sources': [],
-                    'last_updated_at': firestore.SERVER_TIMESTAMP
+                    'last_updated_at': SERVER_TIMESTAMP
                 }
                 if structured is not None:
                     project_payload['research_structured'] = structured
@@ -2979,7 +3659,7 @@ def research_spine_extract():
                 project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
                 project_ref.set({
                     'research_spine': spine,
-                    'last_updated_at': firestore.SERVER_TIMESTAMP,
+                    'last_updated_at': SERVER_TIMESTAMP,
                 }, merge=True)
             except Exception as e:
                 print(f"[Spine] Failed to persist for {project_id}: {e}")
@@ -3014,7 +3694,7 @@ def research_spine_save():
             project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
             project_ref.set({
                 'research_spine': cleaned,
-                'last_updated_at': firestore.SERVER_TIMESTAMP,
+                'last_updated_at': SERVER_TIMESTAMP,
             }, merge=True)
         except Exception as e:
             print(f"[Spine] Save failed for {project_id}: {e}")
@@ -3069,7 +3749,7 @@ def research_spine_rerank():
             project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
             project_ref.set({
                 'research_spine': new_spine,
-                'last_updated_at': firestore.SERVER_TIMESTAMP,
+                'last_updated_at': SERVER_TIMESTAMP,
             }, merge=True)
         except Exception as e:
             print(f"[Spine rerank] Persist failed for {project_id}: {e}")
@@ -3288,7 +3968,7 @@ def generate_script_route():
                 project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
                 project_ref.set({
                     'narration_data': result.get('narration', result),
-                    'last_updated_at': firestore.SERVER_TIMESTAMP
+                    'last_updated_at': SERVER_TIMESTAMP
                 }, merge=True)
                 print(f"[Narration] Saved to project document {project_id}")
             except Exception as e:
@@ -3371,6 +4051,47 @@ def regenerate_beat_route():
         return safe_error_response(e)
 
 
+def _commit_production_table(uid, pid, table, task_state_patch=None):
+    """Durably persist a production table into the per-project shots/
+    subcollection. Replaces the older pattern of writing the whole table
+    as a `production_data` field on the project doc (which blew Firestore's
+    1MB per-doc cap once shot counts grew past ~400).
+
+    Also writes a `pipeline_checkpoints/task_state` doc so the Resume flow
+    can see what was last committed. `task_state_patch` lets the caller
+    overlay phase/status/error fields without re-fetching.
+    """
+    if not pid:
+        return
+    shots = []
+    if isinstance(table, dict):
+        shots = fh.extract_legacy_shots(table) or table.get('shots') or []
+    try:
+        fh.clear_shots(uid, pid)
+        if shots:
+            fh.write_shots(uid, pid, shots, start_order=0)
+    except Exception as e:
+        print(f"[Production] commit-shots error for {pid}: {e}")
+    try:
+        state = {
+            'shots_written': len(shots),
+            'total_shots': len(shots),
+        }
+        if isinstance(task_state_patch, dict):
+            state.update(task_state_patch)
+        fh.write_checkpoint(uid, pid, 'task_state', state)
+    except Exception as e:
+        print(f"[Production] task_state checkpoint error for {pid}: {e}")
+    # Bump the project doc's last_updated_at so the sidebar's sort order
+    # reflects the generation event. The doc itself stays tiny.
+    try:
+        db.collection('users').document(uid).collection('projects').document(pid).set({
+            'last_updated_at': SERVER_TIMESTAMP,
+        }, merge=True)
+    except Exception as e:
+        print(f"[Production] last_updated_at bump error for {pid}: {e}")
+
+
 @app.route('/api/generate-production-table', methods=['POST'])
 @require_auth
 @limiter.limit("60/hour")
@@ -3422,6 +4143,11 @@ def generate_production_table_route():
         if cast and cast.get('has_characters') and cast.get('cast'):
             print(f"[Production] Using cast: {len(cast['cast'])} characters")
 
+        # Check for locations definition
+        locations = data.get('locations')
+        if locations and locations.get('has_locations') and locations.get('locations'):
+            print(f"[Production] Using locations: {len(locations['locations'])} settings")
+
         # ── Streaming path: spawn worker, return task_id immediately ──
         if streaming:
             import uuid as _uuid
@@ -3442,16 +4168,36 @@ def generate_production_table_route():
                 'title': narration.get('title', 'Untitled'),
                 'total_batches': None,
                 'failed_batches': [],
-                'created_at': firestore.SERVER_TIMESTAMP,
-                'updated_at': firestore.SERVER_TIMESTAMP,
+                'created_at': SERVER_TIMESTAMP,
+                'updated_at': SERVER_TIMESTAMP,
             })
 
+            # Sentinel for cooperative cancellation. The cancel endpoint marks
+            # task.status='cancelled'; the worker sees it on the next batch
+            # callback and raises this so the outer handler skips terminal
+            # commits (the cancel endpoint has already wiped state).
+            class _GenerationCancelled(Exception):
+                pass
+
             def _progress_cb(event):
+                # Cooperative cancel check — only on batch-boundary events to
+                # avoid per-event Firestore reads. The cancel endpoint wipes
+                # shots/ + checkpoints immediately for UI; this check stops the
+                # worker from re-writing the now-cancelled state.
+                if event.get('type') in ('batch', 'batch_failed'):
+                    try:
+                        snap = task_ref.get()
+                        if snap.exists and (snap.to_dict() or {}).get('status') == 'cancelled':
+                            raise _GenerationCancelled('cancel requested')
+                    except _GenerationCancelled:
+                        raise
+                    except Exception:
+                        pass  # Don't kill the worker on transient Firestore errors.
                 try:
                     if event.get('type') == 'stage' and event.get('total_batches'):
                         task_ref.update({
                             'total_batches': event['total_batches'],
-                            'updated_at': firestore.SERVER_TIMESTAMP,
+                            'updated_at': SERVER_TIMESTAMP,
                         })
                     elif event.get('type') == 'batch':
                         # Each batch is its own doc (~30-60 KB max), keeping the
@@ -3460,20 +4206,33 @@ def generate_production_table_route():
                         task_ref.collection('batches').document(str(batch_idx)).set({
                             'batch_idx': batch_idx,
                             'shots': event['shots'],
-                            'created_at': firestore.SERVER_TIMESTAMP,
+                            'created_at': SERVER_TIMESTAMP,
                         })
-                        update_fields = {'updated_at': firestore.SERVER_TIMESTAMP}
+                        update_fields = {'updated_at': SERVER_TIMESTAMP}
                         if event.get('total_batches'):
                             update_fields['total_batches'] = event['total_batches']
                         task_ref.update(update_fields)
                     elif event.get('type') == 'batch_failed':
                         task_ref.update({
-                            'failed_batches': firestore.ArrayUnion([{
+                            'failed_batches': ArrayUnion([{
                                 'batch_idx': event['batch_idx'],
                                 'error': event['error'],
                             }]),
-                            'updated_at': firestore.SERVER_TIMESTAMP,
+                            'updated_at': SERVER_TIMESTAMP,
                         })
+                        # Mirror into task_state.errors[] so the UI's inline
+                        # error log can surface the failure immediately and
+                        # across reloads.
+                        if project_id:
+                            try:
+                                fh.append_error(captured_uid, project_id, {
+                                    'phase': 'batch',
+                                    'batch': f"{event['batch_idx']}/{event.get('total_batches') or '?'}",
+                                    'error': event['error'],
+                                    'task_id': task_id,
+                                })
+                            except Exception as err_log_err:
+                                print(f"[Production stream] error-log write failed: {err_log_err}")
                 except Exception as cb_err:
                     print(f"[Production stream] progress write failed: {cb_err}")
 
@@ -3491,6 +4250,7 @@ def generate_production_table_route():
                         cast=cast,
                         format_preset=format_preset,
                         spine=spine_data,
+                        locations=locations,
                         uid=captured_uid, project_id=project_id,
                         progress_callback=_progress_cb,
                     )
@@ -3504,38 +4264,74 @@ def generate_production_table_route():
                             print(f"[Production stream] Error writing tmp table: {e}")
 
                     if worker_result.get('error') == 'coverage_failure':
-                        # Persist partial table on project doc; task doc keeps only
-                        # missing_beats (small) so the poll endpoint can surface them.
+                        # Persist whatever shots we got into the shots/ subcollection
+                        # so the partial table survives refresh. task_state flags
+                        # the project as resumable; missing_beats is what's left.
                         if project_id and final_table:
-                            db.collection('users').document(captured_uid).collection('projects').document(project_id).set({
-                                'production_data': final_table,
-                                'last_updated_at': firestore.SERVER_TIMESTAMP,
-                            }, merge=True)
+                            _commit_production_table(
+                                captured_uid, project_id, final_table,
+                                task_state_patch={
+                                    'active_task_id': task_id,
+                                    'last_completed_phase': 'phase5_dp',
+                                    'partial': True,
+                                    'status': 'coverage_failure',
+                                    'missing_beats': worker_result.get('missing_beats', []),
+                                },
+                            )
                         task_ref.update({
                             'status': 'coverage_failure',
                             'missing_beats': worker_result.get('missing_beats', []),
-                            'updated_at': firestore.SERVER_TIMESTAMP,
+                            'updated_at': SERVER_TIMESTAMP,
                         })
                         return
                     if 'error' in worker_result:
+                        if project_id:
+                            try:
+                                fh.write_checkpoint(captured_uid, project_id, 'task_state', {
+                                    'active_task_id': task_id,
+                                    'partial': True,
+                                    'status': 'failed',
+                                    'error': worker_result['error'],
+                                })
+                            except Exception as ck_err:
+                                print(f"[Production] failure checkpoint error: {ck_err}")
+                            try:
+                                fh.append_error(captured_uid, project_id, {
+                                    'phase': 'pipeline',
+                                    'batch': '',
+                                    'error': worker_result['error'],
+                                    'task_id': task_id,
+                                })
+                            except Exception as err_log_err:
+                                print(f"[Production] error-log write failed: {err_log_err}")
                         task_ref.update({
                             'status': 'failed',
                             'error': worker_result['error'],
-                            'updated_at': firestore.SERVER_TIMESTAMP,
+                            'updated_at': SERVER_TIMESTAMP,
                         })
                         return
-                    
-                    # Write full table to project doc first (source of truth) so
-                    # the poll endpoint can read it back when reporting completion.
+
+                    # Durable commit: shots → projects/{pid}/shots/ subcollection.
                     if project_id and final_table:
-                        db.collection('users').document(captured_uid).collection('projects').document(project_id).set({
-                            'production_data': final_table,
-                            'last_updated_at': firestore.SERVER_TIMESTAMP,
-                        }, merge=True)
+                        _commit_production_table(
+                            captured_uid, project_id, final_table,
+                            task_state_patch={
+                                'active_task_id': task_id,
+                                'last_completed_phase': 'phase5_dp',
+                                'partial': False,
+                                'status': 'complete',
+                            },
+                        )
                     task_ref.update({
                         'status': 'complete',
-                        'updated_at': firestore.SERVER_TIMESTAMP,
+                        'updated_at': SERVER_TIMESTAMP,
                     })
+                except _GenerationCancelled:
+                    # User cancelled; the cancel endpoint already wiped shots/
+                    # and pipeline_checkpoints/. Do nothing terminal here so
+                    # we don't resurrect deleted state.
+                    print(f"[Production stream] task {task_id} cancelled by user")
+                    return
                 except Exception as worker_err:
                     import traceback as _tb
                     print(f"[Production stream] worker exception: {worker_err}")
@@ -3544,10 +4340,20 @@ def generate_production_table_route():
                         task_ref.update({
                             'status': 'failed',
                             'error': str(worker_err),
-                            'updated_at': firestore.SERVER_TIMESTAMP,
+                            'updated_at': SERVER_TIMESTAMP,
                         })
                     except Exception:
                         pass
+                    if project_id:
+                        try:
+                            fh.append_error(captured_uid, project_id, {
+                                'phase': 'worker',
+                                'batch': '',
+                                'error': str(worker_err),
+                                'task_id': task_id,
+                            })
+                        except Exception:
+                            pass
 
             _threading.Thread(target=_worker, daemon=True, name=f"prodtable-{task_id[:8]}").start()
             return jsonify({'task_id': task_id, 'streaming': True})
@@ -3565,6 +4371,7 @@ def generate_production_table_route():
             cast=cast,
             format_preset=format_preset,
             spine=_load_project_spine(project_id),
+            locations=locations,
             uid=g.uid, project_id=project_id,
         )
 
@@ -3572,30 +4379,31 @@ def generate_production_table_route():
         # UI can show a blocking modal with a targeted retry option (200 OK, not 500).
         if result.get('error') == 'coverage_failure':
             if project_id and result.get('production_table'):
-                try:
-                    project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
-                    project_ref.set({
-                        'production_data': result['production_table'],
-                        'last_updated_at': firestore.SERVER_TIMESTAMP
-                    }, merge=True)
-                except Exception as e:
-                    print(f"[Production] Warning: Failed to save partial table: {e}")
+                _commit_production_table(
+                    g.uid, project_id, result['production_table'],
+                    task_state_patch={
+                        'last_completed_phase': 'phase5_dp',
+                        'partial': True,
+                        'status': 'coverage_failure',
+                        'missing_beats': result.get('missing_beats', []),
+                    },
+                )
             return jsonify(result), 200
 
         if "error" in result:
             return jsonify({'error': result['error']}), 500
 
-        # Save to Project Firestore document
+        # Durable commit: shots → projects/{pid}/shots/ subcollection.
         if project_id:
-            try:
-                project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
-                project_ref.set({
-                    'production_data': result.get('production_table', result),
-                    'last_updated_at': firestore.SERVER_TIMESTAMP
-                }, merge=True)
-                print(f"[Production] Saved to project document {project_id}")
-            except Exception as e:
-                print(f"[Production] Warning: Failed to save to project document: {e}")
+            _commit_production_table(
+                g.uid, project_id, result.get('production_table', result),
+                task_state_patch={
+                    'last_completed_phase': 'phase5_dp',
+                    'partial': False,
+                    'status': 'complete',
+                },
+            )
+            print(f"[Production] Committed shots subcollection for project {project_id}")
 
         # Save to .tmp
         if DEBUG_SAVE_TMP:
@@ -3667,17 +4475,27 @@ def production_task_poll_route(task_id):
                 except Exception as tmp_err:
                     print(f"[Production poll] tmp table read failed: {tmp_err}")
 
-            # Priority 2: Fallback to project document
+            # Priority 2: Fallback to project shots/ subcollection (durable home)
             if not final_table:
                 proj_id = doc.get('project_id')
                 if proj_id:
                     try:
-                        proj_snap = (db.collection('users').document(g.uid)
-                                       .collection('projects').document(proj_id).get())
-                        if proj_snap.exists:
-                            final_table = (proj_snap.to_dict() or {}).get('production_data')
+                        shots = fh.read_shots(g.uid, proj_id)
+                        if shots:
+                            final_table = {'shots': shots, 'total_shots': len(shots)}
                     except Exception as proj_err:
-                        print(f"[Production poll] project doc read failed: {proj_err}")
+                        print(f"[Production poll] subcollection read failed: {proj_err}")
+                    # Priority 2b: legacy embedded field, if shots/ is empty
+                    if not final_table:
+                        try:
+                            proj_snap = (db.collection('users').document(g.uid)
+                                           .collection('projects').document(proj_id).get())
+                            if proj_snap.exists:
+                                legacy = (proj_snap.to_dict() or {}).get('production_data')
+                                if isinstance(legacy, dict):
+                                    final_table = legacy.get('production_table') or legacy
+                        except Exception as proj_err:
+                            print(f"[Production poll] legacy doc read failed: {proj_err}")
 
             # Best-effort cleanup: once we've hydrated final_table and the
             # task is terminal, the project doc is the source of truth.
@@ -3702,6 +4520,439 @@ def production_task_poll_route(task_id):
             'project_id': doc.get('project_id'),
             'title': doc.get('title'),
         })
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/production-task/<task_id>/cancel', methods=['POST'])
+@require_auth
+@limiter.limit("200/hour")
+def production_task_cancel_route(task_id):
+    """Cancel an in-flight production task. **Full-wipe** semantics — clears
+    the shots/ subcollection and pipeline_checkpoints/ so the user lands on a
+    clean slate. The worker thread sees the status flip on its next batch
+    callback and exits without writing any terminal state.
+
+    Idempotent: cancelling a finished or already-cancelled task is harmless
+    (no-op on the worker; cleanup runs to the same end state).
+    """
+    try:
+        if not task_id or not task_id.replace('-', '').replace('_', '').isalnum():
+            return jsonify({'error': 'Invalid task_id'}), 400
+        task_ref = (db.collection('users').document(g.uid)
+                      .collection('production_tasks').document(task_id))
+        snap = task_ref.get()
+        if not snap.exists:
+            return jsonify({'error': 'Task not found'}), 404
+        doc = snap.to_dict() or {}
+        project_id = doc.get('project_id')
+
+        # Flip task status first so the worker bails on its next checkpoint.
+        try:
+            task_ref.update({
+                'status': 'cancelled',
+                'updated_at': SERVER_TIMESTAMP,
+            })
+        except Exception as upd_err:
+            print(f"[Cancel] task status update failed: {upd_err}")
+
+        # Wipe the user-facing state. UI sees a clean slate immediately;
+        # the worker thread's in-flight commits would land on already-wiped
+        # state, and its cancel-check on the next batch callback exits cleanly.
+        shots_cleared = 0
+        checkpoints_cleared = 0
+        if project_id:
+            try:
+                shots_cleared = fh.clear_shots(g.uid, project_id)
+            except Exception as e:
+                print(f"[Cancel] clear_shots error: {e}")
+            try:
+                checkpoints_cleared = fh.clear_checkpoints(g.uid, project_id)
+            except Exception as e:
+                print(f"[Cancel] clear_checkpoints error: {e}")
+
+        return jsonify({
+            'success': True,
+            'status': 'cancelled',
+            'shots_cleared': shots_cleared,
+            'checkpoints_cleared': checkpoints_cleared,
+        })
+    except Exception as e:
+        return safe_error_response(e)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Agentic 5-stage production pipeline endpoints
+# (See docs/agentic_5stage_pipeline_2026_05_25/plan.md)
+# ─────────────────────────────────────────────────────────────────────────
+
+def _validate_project_id(pid: str) -> bool:
+    return bool(pid) and pid.replace('-', '').replace('_', '').isalnum()
+
+
+@app.route('/api/production/run', methods=['POST'])
+@require_auth
+@limiter.limit("60/hour")
+def agentic_production_run():
+    """Kick off the 5-stage agentic pipeline for a project. Returns a task_id
+    immediately; the UI polls /api/production/state for progress.
+    """
+    try:
+        data = request.get_json() or {}
+        project_id = (data.get('project_id') or '').strip()
+        if not _validate_project_id(project_id):
+            return jsonify({'error': 'project_id required'}), 400
+        start_at = int(data.get('start_at') or 1)
+        if start_at < 1 or start_at > 5:
+            return jsonify({'error': 'start_at must be 1..5'}), 400
+
+        # Wipe stale state if starting from scratch.
+        if start_at == 1:
+            try:
+                fh.clear_production_stages(g.uid, project_id)
+            except Exception as e:
+                print(f"[agentic_run] clear_production_stages: {e}")
+            # Seed pending stage docs so the UI renders 5 panels immediately.
+            from agentic_schemas import STAGE_NAMES as _SN
+            for n in range(1, 7):
+                fh.write_production_stage(g.uid, project_id, n, {
+                    'stage_number': n,
+                    'stage_name': _SN[n],
+                    'status': 'pending',
+                })
+
+        import uuid as _uuid
+        import threading as _threading
+        task_id = _uuid.uuid4().hex
+        captured_uid = g.uid
+        captured_api_key = g.api_key
+        captured_pid = project_id
+
+        from agentic_pipeline import run_pipeline_worker
+
+        def _worker():
+            try:
+                run_pipeline_worker(
+                    captured_uid, captured_pid, task_id,
+                    captured_api_key, start_at=start_at,
+                )
+            except Exception as e:
+                print(f"[agentic_worker] crash: {type(e).__name__}: {e}")
+
+        _threading.Thread(
+            target=_worker, daemon=True,
+            name=f"agentic-{task_id[:8]}",
+        ).start()
+
+        return jsonify({
+            'success': True,
+            'task_id': task_id,
+            'project_id': project_id,
+        })
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/production/state', methods=['GET'])
+@require_auth
+@limiter.limit("600/hour")
+def agentic_production_state():
+    """Return all stage docs + flow_state + composed bible. Polled by UI."""
+    try:
+        project_id = (request.args.get('project_id') or '').strip()
+        if not _validate_project_id(project_id):
+            return jsonify({'error': 'project_id required'}), 400
+        from agentic_pipeline import get_pipeline_state
+        state = get_pipeline_state(g.uid, project_id)
+        return jsonify({'success': True, **state})
+    except Exception as e:
+        return safe_error_response(e)
+
+
+# Pause/Resume removed 2026-05-26: the pipeline is now gated stage-by-stage
+# via Approve, so pausing between stages is the default state. To halt
+# mid-stage, use /api/production/cancel.
+
+
+@app.route('/api/production/cancel', methods=['POST'])
+@require_auth
+@limiter.limit("200/hour")
+def agentic_production_cancel():
+    """Full-wipe cancel: marks flow cancelled, clears production_stages/,
+    shots/, and pipeline_checkpoints/. The worker bails on its next
+    cooperative check.
+    """
+    try:
+        data = request.get_json() or {}
+        project_id = (data.get('project_id') or '').strip()
+        if not _validate_project_id(project_id):
+            return jsonify({'error': 'project_id required'}), 400
+
+        # Flip flow state first so the worker exits early.
+        try:
+            fh.write_checkpoint(g.uid, project_id, 'agentic_flow', {
+                'status': 'cancelled',
+                'cancelled': True,
+                'paused': False,
+            })
+        except Exception as e:
+            print(f"[agentic_cancel] flow flip: {e}")
+
+        stages_cleared = 0
+        shots_cleared = 0
+        checkpoints_cleared = 0
+        try:
+            stages_cleared = fh.clear_production_stages(g.uid, project_id)
+        except Exception as e:
+            print(f"[agentic_cancel] clear_production_stages: {e}")
+        try:
+            shots_cleared = fh.clear_shots(g.uid, project_id)
+        except Exception as e:
+            print(f"[agentic_cancel] clear_shots: {e}")
+        try:
+            checkpoints_cleared = fh.clear_checkpoints(g.uid, project_id)
+        except Exception as e:
+            print(f"[agentic_cancel] clear_checkpoints: {e}")
+
+        # Also clear the production_table on the project doc so the Visuals
+        # tab doesn't read stale shots after a cancel.
+        try:
+            db.collection('users').document(g.uid) \
+              .collection('projects').document(project_id) \
+              .set({'production_data': {}}, merge=True)
+        except Exception as e:
+            print(f"[agentic_cancel] clear production_data: {e}")
+
+        return jsonify({
+            'success': True,
+            'stages_cleared': stages_cleared,
+            'shots_cleared': shots_cleared,
+            'checkpoints_cleared': checkpoints_cleared,
+        })
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/production/stage/<int:stage_number>/approve', methods=['POST'])
+@require_auth
+@limiter.limit("300/hour")
+def agentic_stage_approve(stage_number):
+    """Approve a completed stage and advance the pipeline.
+
+    Behavior:
+      1. Mark this stage as 'approved'.
+      2. Find the lowest stage in [1..5] whose status is pending/stale/error.
+      3. If found, spawn a single-stage worker for that stage and return
+         {success, advancing_to_stage, task_id}.
+      4. If none found, the pipeline is complete — return success with no
+         task_id.
+    """
+    try:
+        if stage_number < 1 or stage_number > 6:
+            return jsonify({'error': 'stage_number must be 1..6'}), 400
+        data = request.get_json() or {}
+        project_id = (data.get('project_id') or '').strip()
+        if not _validate_project_id(project_id):
+            return jsonify({'error': 'project_id required'}), 400
+        existing = fh.read_production_stage(g.uid, project_id, stage_number) or {}
+        if existing.get('status') not in ('complete', 'approved'):
+            return jsonify({'error': 'stage is not complete'}), 400
+        fh.write_production_stage(g.uid, project_id, stage_number, {
+            'status': 'approved',
+        })
+
+        from agentic_pipeline import find_next_runnable_stage, run_pipeline_worker
+        from datetime import datetime as _dt, timezone as _tz
+        next_stage = find_next_runnable_stage(g.uid, project_id)
+        if next_stage is None:
+            # Pipeline fully complete (every stage approved or complete).
+            try:
+                fh.write_checkpoint(g.uid, project_id, 'agentic_flow', {
+                    'status': 'complete',
+                    'last_event_at': _dt.now(_tz.utc).isoformat(),
+                })
+            except Exception:
+                pass
+            return jsonify({'success': True, 'pipeline_complete': True})
+
+        # Spawn worker for the next runnable stage.
+        import uuid as _uuid
+        import threading as _threading
+        task_id = _uuid.uuid4().hex
+        captured_uid = g.uid
+        captured_api_key = g.api_key
+        captured_pid = project_id
+        captured_next = int(next_stage)
+
+        def _worker():
+            try:
+                run_pipeline_worker(
+                    captured_uid, captured_pid, task_id,
+                    captured_api_key, start_at=captured_next,
+                )
+            except Exception as e:
+                print(f"[agentic_approve] worker crash: {type(e).__name__}: {e}")
+
+        _threading.Thread(
+            target=_worker, daemon=True,
+            name=f"agentic-approve-{task_id[:8]}",
+        ).start()
+
+        return jsonify({
+            'success': True,
+            'advancing_to_stage': captured_next,
+            'task_id': task_id,
+        })
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/production/stage/6/resume', methods=['POST'])
+@require_auth
+@limiter.limit("60/hour")
+def agentic_stage6_resume():
+    """Resume Stage 6 after a Cloud Run timeout or worker crash.
+
+    The Stage 6 batched executor checkpoints completed batches in the
+    stage doc's `completed_batches` field. This endpoint just spawns a
+    fresh worker for Stage 6 — the executor reads the checkpoint and
+    skips any batches that already wrote deltas, so the resumed run
+    picks up at the next unfinished batch.
+    """
+    try:
+        data = request.get_json() or {}
+        project_id = (data.get('project_id') or '').strip()
+        if not _validate_project_id(project_id):
+            return jsonify({'error': 'project_id required'}), 400
+
+        # Sanity: Stage 4 (blueprints) and Stage 5 (continuity brief) must
+        # be complete for Stage 6 to resume meaningfully.
+        s4 = fh.read_production_stage(g.uid, project_id, 4) or {}
+        s5 = fh.read_production_stage(g.uid, project_id, 5) or {}
+        if (s4.get('status') not in ('complete', 'approved')
+                or s5.get('status') not in ('complete', 'approved')):
+            return jsonify({'error': 'Stages 4 and 5 must be complete before resuming Stage 6'}), 400
+
+        import uuid as _uuid
+        import threading as _threading
+        task_id = _uuid.uuid4().hex
+        captured_uid = g.uid
+        captured_api_key = g.api_key
+        captured_pid = project_id
+
+        from agentic_pipeline import run_pipeline_worker
+
+        def _worker():
+            try:
+                run_pipeline_worker(
+                    captured_uid, captured_pid, task_id,
+                    captured_api_key, start_at=6,
+                )
+            except Exception as e:
+                print(f"[agentic_resume6] crash: {type(e).__name__}: {e}")
+
+        _threading.Thread(
+            target=_worker, daemon=True,
+            name=f"agentic-resume6-{task_id[:8]}",
+        ).start()
+
+        existing_stage6 = fh.read_production_stage(g.uid, project_id, 6) or {}
+        return jsonify({
+            'success': True,
+            'task_id': task_id,
+            'resumed_from_batch': len(existing_stage6.get('completed_batches') or []),
+            'total_batches': existing_stage6.get('total_batches') or 0,
+        })
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/production/stage/<int:stage_number>/edit', methods=['POST'])
+@require_auth
+@limiter.limit("600/hour")
+def agentic_stage_edit(stage_number):
+    """Persist user edits on a stage's output. Edits are dotted-path keys.
+    Marks stages [stage_number+1..5] stale so the user knows to re-run.
+    """
+    try:
+        if stage_number < 1 or stage_number > 6:
+            return jsonify({'error': 'stage_number must be 1..6'}), 400
+        data = request.get_json() or {}
+        project_id = (data.get('project_id') or '').strip()
+        user_edits = data.get('user_edits') or {}
+        if not _validate_project_id(project_id):
+            return jsonify({'error': 'project_id required'}), 400
+        if not isinstance(user_edits, dict):
+            return jsonify({'error': 'user_edits must be an object'}), 400
+        existing = fh.read_production_stage(g.uid, project_id, stage_number) or {}
+        merged_edits = dict(existing.get('user_edits') or {})
+        merged_edits.update(user_edits)
+        fh.write_production_stage(g.uid, project_id, stage_number, {
+            'user_edits': merged_edits,
+        })
+        # Mark downstream stages stale so the UI can warn.
+        if stage_number < 6:
+            fh.mark_stages_stale(g.uid, project_id, stage_number + 1)
+        return jsonify({'success': True, 'user_edits': merged_edits})
+    except Exception as e:
+        return safe_error_response(e)
+
+
+@app.route('/api/production/stage/<int:stage_number>/regenerate', methods=['POST'])
+@require_auth
+@limiter.limit("60/hour")
+def agentic_stage_regenerate(stage_number):
+    """Re-run a single stage with optional user feedback. Marks downstream
+    stages stale. The worker runs ONLY this one stage and stops —
+    downstream stages wait for explicit Approve clicks.
+    """
+    try:
+        if stage_number < 1 or stage_number > 6:
+            return jsonify({'error': 'stage_number must be 1..6'}), 400
+        data = request.get_json() or {}
+        project_id = (data.get('project_id') or '').strip()
+        feedback = (data.get('feedback') or '').strip() or None
+        if not _validate_project_id(project_id):
+            return jsonify({'error': 'project_id required'}), 400
+
+        # Reset the target stage to pending so the UI re-renders properly.
+        fh.write_production_stage(g.uid, project_id, stage_number, {
+            'status': 'pending',
+            'error': None,
+        })
+        # Mark downstream stale.
+        if stage_number < 6:
+            fh.mark_stages_stale(g.uid, project_id, stage_number + 1)
+
+        import uuid as _uuid
+        import threading as _threading
+        task_id = _uuid.uuid4().hex
+        captured_uid = g.uid
+        captured_api_key = g.api_key
+        captured_pid = project_id
+        captured_stage = stage_number
+        captured_feedback = feedback
+
+        from agentic_pipeline import run_pipeline_worker
+
+        def _regen_worker():
+            try:
+                run_pipeline_worker(
+                    captured_uid, captured_pid, task_id,
+                    captured_api_key,
+                    start_at=captured_stage,
+                    feedback=captured_feedback,
+                )
+            except Exception as e:
+                print(f"[agentic_regen] crash: {type(e).__name__}: {e}")
+
+        _threading.Thread(
+            target=_regen_worker, daemon=True,
+            name=f"agentic-regen-{task_id[:8]}",
+        ).start()
+
+        return jsonify({'success': True, 'task_id': task_id,
+                        'stage_number': stage_number, 'feedback': feedback})
     except Exception as e:
         return safe_error_response(e)
 
@@ -3801,9 +5052,17 @@ def retry_missing_beats_route():
             
         if not existing_table.get('shots') and project_id:
             try:
-                proj_snap = db.collection('users').document(g.uid).collection('projects').document(project_id).get()
-                if proj_snap.exists:
-                    existing_table = (proj_snap.to_dict() or {}).get('production_data') or {}
+                shots = fh.read_shots(g.uid, project_id)
+                if shots:
+                    existing_table = {'shots': shots, 'total_shots': len(shots)}
+                else:
+                    # Fallback for any legacy project where the embedded
+                    # production_data field hasn't been migrated yet.
+                    proj_snap = db.collection('users').document(g.uid).collection('projects').document(project_id).get()
+                    if proj_snap.exists:
+                        legacy = (proj_snap.to_dict() or {}).get('production_data') or {}
+                        if isinstance(legacy, dict):
+                            existing_table = legacy.get('production_table') or legacy
             except Exception as e:
                 print(f"[Retry] Error fetching existing table from project: {e}")
                 
@@ -3846,8 +5105,8 @@ def retry_missing_beats_route():
                 'missing_beats_count': len(missing_beats),
                 'total_batches': 1,
                 'failed_batches': [],
-                'created_at': firestore.SERVER_TIMESTAMP,
-                'updated_at': firestore.SERVER_TIMESTAMP,
+                'created_at': SERVER_TIMESTAMP,
+                'updated_at': SERVER_TIMESTAMP,
             })
 
             def _retry_worker():
@@ -3866,30 +5125,36 @@ def retry_missing_beats_route():
                         except Exception as e:
                             print(f"[Production retry] Error writing tmp table: {e}")
 
-                    # Persist the merged table to the project doc (source of
-                    # truth that the poll endpoint reads back as final_table).
+                    # Durable commit: merged shots → shots/ subcollection.
                     if project_id and merged_table:
-                        db.collection('users').document(captured_uid).collection('projects').document(project_id).set({
-                            'production_data': merged_table,
-                            'last_updated_at': firestore.SERVER_TIMESTAMP,
-                        }, merge=True)
-                        
+                        is_partial = res['kind'] != 'success'
+                        _commit_production_table(
+                            captured_uid, project_id, merged_table,
+                            task_state_patch={
+                                'active_task_id': task_id,
+                                'last_completed_phase': 'phase5_dp',
+                                'partial': is_partial,
+                                'status': res['kind'],
+                                'missing_beats': res.get('missing_beats', []) if is_partial else [],
+                            },
+                        )
+
                     if res['kind'] == 'success':
                         task_ref.update({
                             'status': 'complete',
-                            'updated_at': firestore.SERVER_TIMESTAMP,
+                            'updated_at': SERVER_TIMESTAMP,
                         })
                     elif res['kind'] == 'coverage_failure':
                         task_ref.update({
                             'status': 'coverage_failure',
                             'missing_beats': res.get('missing_beats', []),
-                            'updated_at': firestore.SERVER_TIMESTAMP,
+                            'updated_at': SERVER_TIMESTAMP,
                         })
                     else:
                         task_ref.update({
                             'status': 'failed',
                             'error': res.get('error', 'Retry failed'),
-                            'updated_at': firestore.SERVER_TIMESTAMP,
+                            'updated_at': SERVER_TIMESTAMP,
                         })
                 except Exception as worker_err:
                     import traceback as _tb
@@ -3899,7 +5164,7 @@ def retry_missing_beats_route():
                         task_ref.update({
                             'status': 'failed',
                             'error': str(worker_err),
-                            'updated_at': firestore.SERVER_TIMESTAMP,
+                            'updated_at': SERVER_TIMESTAMP,
                         })
                     except Exception:
                         pass
@@ -3913,14 +5178,16 @@ def retry_missing_beats_route():
         merged_table = res.get('production_table')
 
         if project_id and merged_table:
-            try:
-                project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
-                project_ref.set({
-                    'production_data': merged_table,
-                    'last_updated_at': firestore.SERVER_TIMESTAMP,
-                }, merge=True)
-            except Exception as e:
-                print(f"[Production] retry-beats save warning: {e}")
+            is_partial = res['kind'] != 'success'
+            _commit_production_table(
+                g.uid, project_id, merged_table,
+                task_state_patch={
+                    'last_completed_phase': 'phase5_dp',
+                    'partial': is_partial,
+                    'status': res['kind'],
+                    'missing_beats': res.get('missing_beats', []) if is_partial else [],
+                },
+            )
 
         if res['kind'] == 'error':
             return jsonify({'error': res['error'], 'missing_beats': missing_beats}), 500
@@ -3954,7 +5221,17 @@ def get_latest_production_table():
         if not project_id:
             return jsonify({'error': 'project_id is required'}), 400
 
-        # Priority 1: Try Firestore (authoritative source)
+        # Priority 1a: shots/ subcollection (new home, no 1MB cap)
+        try:
+            shots = fh.read_shots(g.uid, project_id)
+            if shots:
+                pt = {'shots': shots, 'total_shots': len(shots)}
+                print(f"[Visuals] Loaded {len(shots)} shots from subcollection for project {project_id}")
+                return jsonify({'success': True, 'production_table': pt})
+        except Exception as e:
+            print(f"[Visuals] shots/ subcollection read failed: {e}")
+
+        # Priority 1b: legacy embedded production_data field (pre-migration)
         try:
             project_ref = db.collection('users').document(g.uid).collection('projects').document(project_id)
             doc = project_ref.get()
@@ -3963,7 +5240,7 @@ def get_latest_production_table():
                 if proj_data.get('production_data'):
                     pd = proj_data['production_data']
                     pt = pd.get('production_table', pd) if isinstance(pd, dict) else pd
-                    print(f"[Visuals] Loaded production table from Firestore for project {project_id}")
+                    print(f"[Visuals] Loaded legacy production table from Firestore for project {project_id}")
                     return jsonify({'success': True, 'production_table': pt})
         except Exception as e:
             print(f"[Visuals] Firestore lookup failed, falling back to .tmp/: {e}")
@@ -4237,14 +5514,19 @@ def visuals_generate_image():
             if 'images' in char:
                 char['images'] = [r for r in (resolve_image_input(img) for img in char['images'] if img) if r]
         character_images = [r for r in (resolve_image_input(img) for img in data.get('character_images', []) if img) if r]
+        location_refs = data.get('location_refs', [])
+        for loc in (location_refs or []):
+            if 'images' in loc:
+                loc['images'] = [r for r in (resolve_image_input(img) for img in loc['images'] if img) if r]
         additional_context = data.get('additional_context', '')
         style_mode = data.get('style_mode', 'art_only')
 
         char_count = len(characters) if characters else 0
         char_img_count = sum(len(c.get('images', [])) for c in characters) if characters else len(character_images or [])
+        loc_count = len(location_refs) if location_refs else 0
         print(f"[Visuals] Generating image for scene {scene_id}: "
               f"{len(style_images or [])} style refs, {char_count} characters "
-              f"({char_img_count} char images), style_mode={style_mode}"
+              f"({char_img_count} char images), {loc_count} locations, style_mode={style_mode}"
               f"{', context=' + repr(additional_context[:50]) if additional_context else ''}")
         project_id = data.get('project_id')
         result = generate_scene_image(
@@ -4255,6 +5537,7 @@ def visuals_generate_image():
             style_images=style_images or None,
             characters=characters or None,
             character_images=character_images or None,
+            location_refs=location_refs or None,
             additional_context=additional_context,
             style_mode=style_mode,
             scene_id=scene_id,
