@@ -33,7 +33,13 @@ from agentic_prompts import (
 from agentic_schemas import STAGE_LABELS, STAGE_NAMES, STAGE_SCHEMAS
 
 # Reuse the existing parser ladder — no need to duplicate it.
-from research_scriptwriter import _parse_json_response
+# _check_beat_coverage / _beat_fingerprint give us the same beat-level
+# no-loss safety net the 6-phase pipeline already uses (see
+# research_scriptwriter.py): a beat is "covered" if any shot's script_beat
+# contains its leading-word fingerprint.
+from research_scriptwriter import (
+    _parse_json_response, _check_beat_coverage,
+)
 
 # Gemini wrapper.
 from gemini_client import generate_content
@@ -140,8 +146,28 @@ _STAGE_MODELS: dict[int, dict] = {
 
 # Batch sizes for the two stages that batch.
 STAGE4_BEATS_PER_BATCH = 10   # ~50 shots/batch at Standard tier
+# Hard word ceiling per Stage 4 batch. A batch closes when it hits either
+# STAGE4_BEATS_PER_BATCH beats OR this many words, whichever comes first.
+# Rationale: each Stage 4 call emits one large JSON object (~25 fields/shot)
+# and Gemini truncates at the 65536-token output cap. A heavy batch (e.g. the
+# 831-word, 10-beat batch in the 2026-05-29 "Third Wave" incident) overflows
+# and silently drops the LAST beat in the batch. Capping by words keeps every
+# call comfortably under the cap so no beat gets truncated. ~Same total work;
+# heavy scripts just get a couple more (smaller, faster) batches.
+STAGE4_MAX_BATCH_WORDS = 500
+# Bound on per-beat coverage-recovery re-generation so a pathological beat
+# can't stall the run. After this many attempts we let the run finish and
+# flag the gap for the UI's resume banner (never block, never stub).
+STAGE4_COVERAGE_MAX_ATTEMPTS = 2
 STAGE6_BATCH_SIZE = 25
 STAGE6_PARALLEL_WORKERS = 3   # Stage 6 batches run concurrently
+# Stage 4 batches are fully independent: each batch's prompt is built from the
+# shared Production Bible (fixed before Stage 4) plus its own narration slice,
+# and shot_numbers are reassigned deterministically at assembly. So running
+# them concurrently is byte-for-byte quality-equivalent to sequential — only
+# wall-clock changes. Workers are capped to keep concurrent Gemini load (and
+# rate-limit exposure) in the same band as Stage 6.
+STAGE4_PARALLEL_WORKERS = 3
 STAGE5_TWO_PHASE_THRESHOLD = 800  # above this many shots, split Stage 5 across two calls
 
 
@@ -388,22 +414,56 @@ def _merge_stage6_with_blueprints(
 # to the beats' word counts, and assign sequential shot_numbers
 # server-side so batches don't have to coordinate.
 
+def _beat_word_count(beat: dict) -> int:
+    """Words in a single beat's narration text (same field precedence as
+    _batch_word_count)."""
+    if not isinstance(beat, dict):
+        return 0
+    text = beat.get("voiceover") or beat.get("text") or beat.get("narration") or ""
+    return len(text.split()) if isinstance(text, str) else 0
+
+
 def _split_narration_into_batches(narration: dict,
-                                  beats_per_batch: int = STAGE4_BEATS_PER_BATCH
+                                  beats_per_batch: int = STAGE4_BEATS_PER_BATCH,
+                                  max_batch_words: int = STAGE4_MAX_BATCH_WORDS
                                   ) -> list[dict]:
-    """Return a list of narration-shaped dicts, each holding a slice of beats."""
+    """Return a list of narration-shaped dicts, each holding a slice of beats.
+
+    A batch closes when it reaches EITHER `beats_per_batch` beats OR
+    `max_batch_words` words, whichever comes first — so a heavy batch never
+    grows large enough to overflow Gemini's output cap and truncate its last
+    beat. A single beat that exceeds the word budget on its own becomes its
+    own batch (we never split a beat across batches here).
+    """
     beats = (narration or {}).get("narration") or (narration or {}).get("beats") or []
     if not isinstance(beats, list):
         return [narration]
     if not beats:
         return [narration]
-    batches = []
+
     title = (narration or {}).get("title") or (narration or {}).get("topic") or ""
-    for i in range(0, len(beats), beats_per_batch):
-        batches.append({
-            "title": title,
-            "narration": beats[i:i + beats_per_batch],
-        })
+
+    batches = []
+    current: list[dict] = []
+    current_words = 0
+    for beat in beats:
+        bw = _beat_word_count(beat)
+        # Close the current batch before adding this beat if doing so would
+        # exceed either the beat count or the word budget (but never emit an
+        # empty batch — a lone over-budget beat still goes in by itself).
+        if current and (
+            len(current) >= beats_per_batch
+            or (current_words + bw) > max_batch_words
+        ):
+            batches.append({"title": title, "narration": current})
+            current = []
+            current_words = 0
+        current.append(beat)
+        current_words += bw
+
+    if current:
+        batches.append({"title": title, "narration": current})
+
     return batches
 
 
@@ -673,20 +733,33 @@ def _run_stage4_batched(
           f"shots from {total_words} words | tier={pacing_tier} "
           f"format_preset={format_preset!r}")
 
-    all_shots: list[dict] = []
-    starting_shot_number = 1
+    # Per-batch proportional shot targets, pre-computed so concurrent workers
+    # don't share a mutable counter.
+    batch_targets = []
+    for batch_narration in batches:
+        bw = _batch_word_count(batch_narration)
+        if total_target > 0 and total_words > 0:
+            batch_targets.append(max(1, round(total_target * bw / total_words)))
+        else:
+            batch_targets.append(0)
 
-    for batch_idx, batch_narration in enumerate(batches):
+    def _run_one_batch(batch_idx: int, batch_narration: dict) -> list[dict]:
+        """Generate one Stage 4 batch end-to-end (call + pacing retry +
+        coverage recovery) and return its shots.
+
+        Stateless w.r.t. other batches: the prompt is built only from the
+        shared Bible + this batch's narration, so batches are independent and
+        safe to run concurrently. Shot numbers are NOT assigned here — the
+        model's per-batch numbering is unreliable and gets reassigned globally
+        at assembly, so running in parallel is byte-for-byte equivalent to
+        sequential output.
+        """
         _check_cancelled(uid, pid)
         batch_words = _batch_word_count(batch_narration)
-        if total_target > 0 and total_words > 0:
-            batch_target = max(1, round(total_target * batch_words / total_words))
-        else:
-            batch_target = 0
+        batch_target = batch_targets[batch_idx]
         label = f"(batch {batch_idx + 1}/{len(batches)})"
         print(f"[Stage4 batch {batch_idx + 1}/{len(batches)}] "
-              f"words={batch_words} target={batch_target} "
-              f"starting_shot_number={starting_shot_number}")
+              f"words={batch_words} target={batch_target} - STARTED")
 
         if progress_callback:
             progress_callback({
@@ -707,7 +780,8 @@ def _run_stage4_batched(
                 pacing_tier=pacing_tier,
                 total_words=batch_words,
                 batch_info=label,
-                starting_shot_number=starting_shot_number,
+                # Cosmetic only — discarded and reassigned at assembly.
+                starting_shot_number=1,
                 max_shot_duration=max_shot_duration,
                 target_wps=TARGET_WPS,
                 feedback=(extra_feedback or
@@ -745,16 +819,105 @@ def _run_stage4_batched(
                     batch_idx=batch_idx, batches_total=len(batches),
                 )
 
-        # Renumber to be globally sequential. The prompt asks the model to
-        # start at starting_shot_number but it isn't always reliable — we
-        # enforce it deterministically here.
-        for i, shot in enumerate(batch_shots):
-            shot['shot_number'] = str(starting_shot_number + i)
-        starting_shot_number += len(batch_shots)
-        all_shots.extend(batch_shots)
+        # Coverage recovery: the pacing retry above only checks shot COUNT.
+        # A batch can clear its count while a whole beat contributed zero
+        # shots — exactly the output-cap truncation that dropped "The Reveal"
+        # in the 2026-05-29 incident (the last beat of an 831-word batch was
+        # silently cut). Verify every input beat in THIS batch produced at
+        # least one shot; if not, re-generate just the missing beat(s) with
+        # real, directed shots. Pure in-memory string check — zero API cost
+        # unless a beat is actually missing.
+        batch_beats = (batch_narration.get('narration')
+                       or batch_narration.get('beats') or [])
+        for cov_attempt in range(STAGE4_COVERAGE_MAX_ATTEMPTS):
+            uncovered = _check_beat_coverage(batch_beats, batch_shots)
+            if not uncovered:
+                break
+            _check_cancelled(uid, pid)
+            print(f"[Stage4 batch {batch_idx + 1}] coverage gap: "
+                  f"{len(uncovered)}/{len(batch_beats)} beat(s) produced no "
+                  f"shots (attempt {cov_attempt + 1}/"
+                  f"{STAGE4_COVERAGE_MAX_ATTEMPTS}). Re-generating just the "
+                  f"missing beat(s).")
+            recovery_narration = {
+                'title': batch_narration.get('title', ''),
+                'narration': [
+                    {'act': u.get('act', ''), 'beat': u.get('beat', ''),
+                     'text': u.get('text', '')}
+                    for u in uncovered
+                ],
+            }
+            recovery_words = _batch_word_count(recovery_narration)
+            recovery_target = (
+                max(1, round(total_target * recovery_words / total_words))
+                if total_target > 0 and total_words > 0 else 0
+            )
+            recovery_prompt, recovery_schema = build_stage4_shot_list_prompt(
+                bible_so_far=bible,
+                cast=cast,
+                narration=recovery_narration,
+                format_preset=format_preset,
+                style_analysis=style_analysis,
+                target_shot_count=recovery_target,
+                pacing_tier=pacing_tier,
+                total_words=recovery_words,
+                batch_info=f"(batch {batch_idx + 1} coverage recovery)",
+                starting_shot_number=1,
+                max_shot_duration=max_shot_duration,
+                target_wps=TARGET_WPS,
+                feedback=("COVERAGE RECOVERY: a previous attempt produced ZERO "
+                          "shots for the beat(s) below. Every beat here MUST get "
+                          "at least one shot. Copy script_beat verbatim from the "
+                          "narration. Do not omit any beat."),
+            )
+            recovered = _call_stage4_batch(
+                uid=uid, pid=pid, api_key=api_key, prompt=recovery_prompt,
+                schema=recovery_schema, model_kwargs=model_kwargs,
+                batch_idx=batch_idx, batches_total=len(batches),
+            )
+            if recovered:
+                batch_shots.extend(recovered)
+                print(f"[Stage4 batch {batch_idx + 1}] coverage recovery "
+                      f"added {len(recovered)} shot(s)")
+
         delta = len(batch_shots) - batch_target if batch_target else 0
         print(f"[Stage4 batch {batch_idx + 1}/{len(batches)}] returned "
               f"{len(batch_shots)} shots (target {batch_target}, delta {delta:+d})")
+        return batch_shots
+
+    # Run batches concurrently (they're independent), but ASSEMBLE in
+    # batch-index order so the final shot sequence is identical to the
+    # sequential version. Mirrors the Stage 6 parallel pattern. A single
+    # batch skips the pool entirely (the common short-script case).
+    results_by_idx: dict[int, list[dict]] = {}
+    if len(batches) <= 1:
+        if batches:
+            results_by_idx[0] = _run_one_batch(0, batches[0])
+    else:
+        print(f"[Stage4 parallel] running {len(batches)} batches with "
+              f"{STAGE4_PARALLEL_WORKERS} workers")
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=STAGE4_PARALLEL_WORKERS,
+                thread_name_prefix='stage4_batch') as executor:
+            futures = {
+                executor.submit(_run_one_batch, idx, bn): idx
+                for idx, bn in enumerate(batches)
+            }
+            for fut in concurrent.futures.as_completed(futures):
+                idx = futures[fut]
+                try:
+                    results_by_idx[idx] = fut.result()
+                except GenerationCancelled:
+                    for other in futures:
+                        other.cancel()
+                    raise
+
+    # Concatenate in order, then assign globally sequential shot_numbers.
+    all_shots: list[dict] = []
+    for idx in range(len(batches)):
+        all_shots.extend(results_by_idx.get(idx, []))
+    for i, shot in enumerate(all_shots):
+        shot['shot_number'] = str(i + 1)
 
     total_returned = len(all_shots)
     if total_target > 0:
@@ -788,7 +951,28 @@ def _run_stage4_batched(
               f"narration_implied={narration_runtime:.1f}s "
               f"shots={len(all_shots)} target_wps={TARGET_WPS} "
               f"max_shot={max_shot_duration}s")
-    return {'shots': all_shots}
+
+    # Final no-loss check over the WHOLE narration. Per-batch recovery above
+    # handles the common case; this catches anything that still slipped
+    # through (incl. a beat lost during dedupe/split). We never block or
+    # insert placeholder shots — the run finishes with a complete, saved
+    # production JSON and any residual gap is reported as `missing_beats`
+    # so the UI's existing resume banner can offer a one-click targeted
+    # retry (same path the 6-phase pipeline uses).
+    all_beats = (narration.get('narration') or narration.get('beats') or [])
+    missing_beats = _check_beat_coverage(all_beats, all_shots)
+    if missing_beats:
+        print(f"[Stage4 coverage] WARNING: {len(missing_beats)}/"
+              f"{len(all_beats)} beat(s) still uncovered after recovery — "
+              f"flagging for resume: "
+              f"{[m.get('beat') for m in missing_beats]}")
+    else:
+        print(f"[Stage4 coverage] OK — all {len(all_beats)} beats covered")
+
+    result = {'shots': all_shots}
+    if missing_beats:
+        result['missing_beats'] = missing_beats
+    return result
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1424,6 +1608,34 @@ def run_stage(
             })
             payload['feedback_history'] = hist
         fh.write_production_stage(uid, pid, stage_number, payload)
+
+        # Stage 4 no-loss flag: if the coverage net found beats that produced
+        # zero shots even after targeted recovery, record them in `task_state`
+        # so the UI's existing Resume banner (shared with the 6-phase pipeline)
+        # offers a one-click targeted retry via /generate-production-table/
+        # retry-beats. We never block the run — Stages 5/6 still finish and the
+        # project gets a complete saved JSON; this just flags the gap. A clean
+        # Stage 4 run clears any prior flag so a re-run resets it.
+        if stage_number == 4:
+            try:
+                stage4_missing = (parsed or {}).get('missing_beats') or []
+                existing_state = fh.read_checkpoint(uid, pid, 'task_state') or {}
+                if stage4_missing:
+                    existing_state.update({
+                        'partial': True,
+                        'status': 'coverage_failure',
+                        'missing_beats': stage4_missing,
+                    })
+                else:
+                    # Clean run — clear any stale coverage flag.
+                    existing_state['missing_beats'] = []
+                    if existing_state.get('status') == 'coverage_failure':
+                        existing_state['partial'] = False
+                        existing_state['status'] = 'running'
+                fh.write_checkpoint(uid, pid, 'task_state', existing_state)
+            except Exception as ts_err:
+                print(f"[Stage4 coverage] task_state write failed (non-fatal): "
+                      f"{ts_err}")
 
         # Stage 6: write merged shots to the shots/ subcollection and a
         # production_data summary (without the shots array) onto the

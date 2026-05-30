@@ -2303,6 +2303,7 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
         let currentResearchStructured = null; // Structured research {meta, sections, claims, sources}
         let currentResearchSpine = null;      // Narrative Spine {key_claims, logical_flow, source_map}
         let selectedTitle = null;
+        let currentProjectTitle = null; // User-chosen project name — authoritative, never overwritten by script/narration titles
         let currentScriptData = null;
         let currentNarration = null;   // Narration data (acts/beats) from Phase 2
         let currentDossierId = null;   // Firestore dossier ID
@@ -2710,16 +2711,17 @@ We'll analyze the pacing, tone, and structure to write YOUR script in this style
             const newName = prompt('Rename project:', currentName);
             if (newName !== null && newName.trim() !== '') {
                 const trimmedName = newName.trim();
-                selectedTitle = trimmedName;
-                if (currentNarration && currentNarration.title) {
-                    currentNarration.title = trimmedName;
-                }
+                currentProjectTitle = trimmedName; // authoritative user-chosen name
                 updateTopbarProjectTitle(trimmedName);
-                
+
+                // Keep the in-memory sidebar cache in sync so it survives re-renders
+                const cached = (_lastSavedProjects || []).find(p => p.id === currentProjectId);
+                if (cached) cached.title = trimmedName;
+
                 // update sidebar
                 const activeItem = document.querySelector('.project-item.active .project-title');
                 if (activeItem) activeItem.textContent = trimmedName;
-                
+
                 // save
                 doSaveProject();
             }
@@ -10710,13 +10712,16 @@ RESOLUTION: ${visualsConfig.resolution}`;
 
         // ── Sync Orphaned Images from Firebase Storage ──
         async function syncOrphanedImages() {
-            const scenesWithoutImages = visualsScenes.filter(s => !s.imageUrl);
-            if (!scenesWithoutImages.length) {
-                alert('All scenes already have images. Nothing to sync.');
+            // Recover BOTH missing images and missing videos (Kie videos in
+            // particular finish re-hosting after the scene was last saved, so
+            // their URL never lands in the project doc).
+            const scenesNeedingSync = visualsScenes.filter(s => !s.imageUrl || !s.videoUrl);
+            if (!scenesNeedingSync.length) {
+                alert('All scenes already have their images and videos. Nothing to sync.');
                 return;
             }
 
-            const sceneIds = scenesWithoutImages.map(s => s.sceneId);
+            const sceneIds = scenesNeedingSync.map(s => s.sceneId);
             const syncBtn = document.querySelector('[onclick="syncOrphanedImages()"]');
             if (syncBtn) {
                 syncBtn.disabled = true;
@@ -10740,26 +10745,42 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 }
 
                 const matches = data.matches || {};
-                let recovered = 0;
+                const videoMatches = data.video_matches || {};
+                let recoveredImages = 0;
+                let recoveredVideos = 0;
 
                 for (const [sid, url] of Object.entries(matches)) {
                     const sceneIdx = visualsScenes.findIndex(s => s.sceneId === sid);
-                    if (sceneIdx !== -1) {
+                    if (sceneIdx !== -1 && !visualsScenes[sceneIdx].imageUrl) {
                         visualsScenes[sceneIdx].imageUrl = url;
                         visualsScenes[sceneIdx].imageStatus = 'complete';
                         updateSceneCard(sceneIdx);
-                        recovered++;
+                        recoveredImages++;
+                    }
+                }
+
+                for (const [sid, url] of Object.entries(videoMatches)) {
+                    const sceneIdx = visualsScenes.findIndex(s => s.sceneId === sid);
+                    if (sceneIdx !== -1 && !visualsScenes[sceneIdx].videoUrl) {
+                        visualsScenes[sceneIdx].videoUrl = url;
+                        visualsScenes[sceneIdx].videoStatus = 'complete';
+                        updateSceneCard(sceneIdx);
+                        recoveredVideos++;
                     }
                 }
 
                 updateImageProgress();
                 updateGenerateMarkedBtn();
 
-                if (recovered > 0) {
+                const total = recoveredImages + recoveredVideos;
+                if (total > 0) {
                     triggerAutosave();
-                    alert(`✅ Recovered ${recovered} image${recovered > 1 ? 's' : ''} from Firebase Storage!`);
+                    const parts = [];
+                    if (recoveredImages) parts.push(`${recoveredImages} image${recoveredImages > 1 ? 's' : ''}`);
+                    if (recoveredVideos) parts.push(`${recoveredVideos} video${recoveredVideos > 1 ? 's' : ''}`);
+                    alert(`✅ Recovered ${parts.join(' and ')} from Firebase Storage!`);
                 } else {
-                    alert('No orphaned images found in storage for the missing scenes.');
+                    alert('No orphaned images or videos found in storage for the missing scenes.');
                 }
             } catch (e) {
                 console.error('Sync failed:', e);
@@ -11778,7 +11799,15 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 const res = await authFetch('/api/projects');
                 if (!res.ok) throw new Error('Failed to fetch projects');
                 const data = await res.json();
-                _lastSavedProjects = data.projects || [];
+                const serverProjects = data.projects || [];
+                // Preserve the currently-open project if the server query hasn't
+                // indexed it yet (read-after-write lag) — otherwise a freshly
+                // created project would vanish from the sidebar until refresh.
+                if (currentProjectId && !serverProjects.find(p => p.id === currentProjectId)) {
+                    const cached = (_lastSavedProjects || []).find(p => p.id === currentProjectId);
+                    if (cached) serverProjects.unshift(cached);
+                }
+                _lastSavedProjects = serverProjects;
                 renderProjects(_lastSavedProjects);
 
                 // Auto-load last project on first load
@@ -11814,6 +11843,24 @@ RESOLUTION: ${visualsConfig.resolution}`;
             `).join('');
         }
 
+        // Keep the sidebar (both the in-memory cache and the DOM) in sync after
+        // any save, so a project's name/date update live without a page refresh.
+        // Creates the entry if it's missing (e.g. a freshly-created project the
+        // background fetch hasn't returned yet).
+        function updateSidebarEntry(projectId, { title, date } = {}) {
+            if (!projectId) return;
+            const iso = (date instanceof Date ? date : new Date()).toISOString();
+            let entry = (_lastSavedProjects || []).find(p => p.id === projectId);
+            if (!entry) {
+                entry = { id: projectId, title: title || 'Untitled Project', last_updated_at: iso };
+                _lastSavedProjects.unshift(entry);
+            } else {
+                if (title != null) entry.title = title;
+                entry.last_updated_at = iso;
+            }
+            renderProjects(_lastSavedProjects);
+        }
+
         // ── Create Project (with name modal) ──
         function createNewProject() {
             document.getElementById('projectNameModal').style.display = 'flex';
@@ -11840,6 +11887,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 const data = await res.json();
                 if (data.success) {
                     currentProjectId = data.project_id;
+                    currentProjectTitle = title; // lock the user-chosen name
                     sessionStorage.setItem('currentProjectId', data.project_id);
                     try { studioOnProjectChange(data.project_id); } catch (e) { console.warn('[Studio] project hook', e); }
                     clearAppForNewProject();
@@ -11892,8 +11940,9 @@ RESOLUTION: ${visualsConfig.resolution}`;
                     try { checkProductionResumable(id); } catch (e) { console.warn('[resume] check', e); }
 
                     // Sync the new shell topbar with the loaded project
+                    currentProjectTitle = (data.project && data.project.title) || 'Untitled Project';
                     try {
-                        updateTopbarProjectTitle(data.project && data.project.title);
+                        updateTopbarProjectTitle(currentProjectTitle);
                         refreshExportButton();
                         refreshStepperDoneState();
                         // When loading a project, default to research phase 1
@@ -12740,11 +12789,12 @@ RESOLUTION: ${visualsConfig.resolution}`;
         function gatherProjectState() {
             const topic = document.getElementById('researchTopic').value || '';
 
-            // Determine the best title
-            let title = selectedTitle || topic || 'Untitled Project';
-            if (currentNarration && currentNarration.title) {
-                title = currentNarration.title;
-            }
+            // Determine the best title. The user-chosen project name
+            // (currentProjectTitle) is authoritative and must NEVER be
+            // overwritten by a generated script/narration title — that was the
+            // old bug where naming a project then pasting a script renamed it.
+            // Fall back to derived values only when no name was ever set.
+            let title = currentProjectTitle || selectedTitle || topic || 'Untitled Project';
 
             // Get audience from select dropdown
             const audienceSelect = document.getElementById('audienceSelect');
@@ -12875,6 +12925,7 @@ RESOLUTION: ${visualsConfig.resolution}`;
                 });
                 console.log("Saved project:", currentProjectId);
                 try { setAutosaveState && setAutosaveState('saved'); } catch (e) {}
+                try { updateSidebarEntry(currentProjectId, { title: state.title }); } catch (e) {}
             } catch (e) {
                 console.error("Save failed", e);
                 try { setAutosaveState && setAutosaveState('error'); } catch (_) {}
@@ -12899,11 +12950,9 @@ RESOLUTION: ${visualsConfig.resolution}`;
                     console.log("Auto-saved project.");
                     try { setAutosaveState && setAutosaveState('saved'); } catch (e) {}
 
-                    // Update sidebar UI locally
-                    const dateEl = document.getElementById(`project-date-${currentProjectId}`);
-                    if (dateEl) dateEl.innerText = new Date().toLocaleString();
-                    const titleEls = document.querySelectorAll(`.project-item.active .project-title`);
-                    if (titleEls.length > 0) titleEls[0].innerText = state.title;
+                    // Update sidebar UI locally (cache + DOM) so it never goes
+                    // stale until the next refresh.
+                    try { updateSidebarEntry(currentProjectId, { title: state.title }); } catch (e) {}
 
                 } catch (e) {
                     console.error("Auto-save failed", e);

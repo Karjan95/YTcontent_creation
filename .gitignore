@@ -31,4 +31,5 @@ ui/## Multi-speaker TTS
 
 # Temporary files & Large JSON dumps
 *.diff
-docs/production_table_*.json
+docs/*production_table_*.json
+docs/*.json

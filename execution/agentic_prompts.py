@@ -649,8 +649,10 @@ what they're feeling and wearing.
 ## Principles
 - **Hit the shot count target.** Don't summarize beats into single shots. If the target says
   ~200 shots and you produce 30, you're handing back a treatment — not a shot list.
-- **Cover every beat.** Each narration beat needs at least one shot. Beats with more words
-  need proportionally more shots.
+- **Cover every beat — NEVER omit one.** Each narration beat above MUST appear in your output
+  with at least one shot, even the last beat in this batch. Do not stop early, drop, or skip a
+  beat to save space. If you are running low on room, write terser shots — but every beat must
+  be represented. Missing a beat means the viewer loses that part of the script entirely.
 - **`script_beat` is a verbatim slice of the narration, not a paraphrase.** Editors and the
   Visuals tab use this to align voice-over to picture. Copy text directly from the narration —
   a sentence if it fits the shot-length cap, or a CLAUSE (split on commas/em-dashes/

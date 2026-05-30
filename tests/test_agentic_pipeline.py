@@ -696,3 +696,210 @@ class TestPromptBuilders:
         # Without an approved style, the prompt should give the LLM creative
         # latitude (examples list).
         assert "Polished hand-drawn graphic-novel" in prompt
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Stage 4 word-budget batching (output-cap truncation prevention)
+# ──────────────────────────────────────────────────────────────────────
+
+def _beats(*specs):
+    """Build a narration dict from (beat_name, word_count) specs."""
+    return {
+        "title": "T",
+        "narration": [
+            {"act": "ACT 1", "beat": name, "text": " ".join(["word"] * n)}
+            for name, n in specs
+        ],
+    }
+
+
+class TestStage4WordBudgetBatching:
+    def test_closes_batch_on_word_budget_before_beat_count(self):
+        """The 2026-05-29 incident: a 10-beat, 831-word batch overflowed the
+        output cap and dropped its last beat. With a word budget far below 10
+        beats' worth of words, the batch must split BEFORE hitting 10 beats."""
+        from agentic_pipeline import (_split_narration_into_batches,
+                                       _batch_word_count)
+        # 10 beats * 200 words = 2000 words; budget 500 → must be >1 batch.
+        narration = _beats(*[(f"B{i}", 200) for i in range(10)])
+        batches = _split_narration_into_batches(
+            narration, beats_per_batch=10, max_batch_words=500)
+        assert len(batches) > 1
+        for b in batches:
+            # No batch exceeds the word budget unless it's a single beat.
+            n_beats = len(b["narration"])
+            if n_beats > 1:
+                assert _batch_word_count(b) <= 500
+
+    def test_no_beat_is_dropped_across_batches(self):
+        from agentic_pipeline import _split_narration_into_batches
+        narration = _beats(*[(f"B{i}", 120) for i in range(7)])
+        batches = _split_narration_into_batches(
+            narration, beats_per_batch=10, max_batch_words=500)
+        flat = [bt["beat"] for b in batches for bt in b["narration"]]
+        assert flat == [f"B{i}" for i in range(7)]
+
+    def test_lone_oversize_beat_becomes_its_own_batch(self):
+        """A single beat larger than the budget is never split across batches;
+        it goes in alone rather than being dropped or merged."""
+        from agentic_pipeline import _split_narration_into_batches
+        narration = _beats(("Small1", 50), ("Huge", 900), ("Small2", 50))
+        batches = _split_narration_into_batches(
+            narration, beats_per_batch=10, max_batch_words=500)
+        huge = [b for b in batches
+                if any(bt["beat"] == "Huge" for bt in b["narration"])]
+        assert len(huge) == 1
+        assert len(huge[0]["narration"]) == 1  # Huge is alone
+
+    def test_beat_count_still_caps_when_words_are_light(self):
+        from agentic_pipeline import _split_narration_into_batches
+        # 12 tiny beats, generous word budget → split by beat count (10).
+        narration = _beats(*[(f"B{i}", 3) for i in range(12)])
+        batches = _split_narration_into_batches(
+            narration, beats_per_batch=10, max_batch_words=5000)
+        assert len(batches) == 2
+        assert len(batches[0]["narration"]) == 10
+        assert len(batches[1]["narration"]) == 2
+
+    def test_short_script_stays_single_batch(self):
+        """Regression guard: the common case (one light batch) must not gain
+        extra batches/API calls."""
+        from agentic_pipeline import _split_narration_into_batches
+        narration = _beats(("A", 40), ("B", 40), ("C", 40))
+        batches = _split_narration_into_batches(
+            narration, beats_per_batch=10, max_batch_words=500)
+        assert len(batches) == 1
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Beat coverage net (reused from research_scriptwriter)
+# ──────────────────────────────────────────────────────────────────────
+
+class TestBeatCoverageNet:
+    def test_detects_dropped_beat(self):
+        """_check_beat_coverage must report a beat whose text appears in NO
+        shot's script_beat — the exact 'The Reveal' failure mode."""
+        from agentic_pipeline import _check_beat_coverage
+        beats = [
+            {"act": "ACT 1", "beat": "Hook",
+             "text": "A teacher made a simple bet with himself."},
+            {"act": "ACT 3", "beat": "The Reveal",
+             "text": "He turned on a television set in the center of the stage."},
+        ]
+        shots = [
+            {"script_beat": "A teacher made a simple bet with himself"},
+            # Note: nothing covers "The Reveal".
+        ]
+        uncovered = _check_beat_coverage(beats, shots)
+        assert len(uncovered) == 1
+        assert uncovered[0]["beat"] == "The Reveal"
+
+    def test_passes_when_all_beats_covered(self):
+        from agentic_pipeline import _check_beat_coverage
+        beats = [
+            {"act": "ACT 1", "beat": "Hook",
+             "text": "A teacher made a simple bet with himself."},
+        ]
+        shots = [
+            {"script_beat": "A teacher made a simple bet with himself, alone."},
+        ]
+        assert _check_beat_coverage(beats, shots) == []
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Stage 4 parallel execution (quality-equivalent to sequential)
+# ──────────────────────────────────────────────────────────────────────
+
+class TestStage4ParallelAssembly:
+    def _run(self, monkeypatch, n_batches, complete_order=None, max_workers=3):
+        """Drive _run_stage4_batched with the Gemini boundary stubbed.
+
+        Each batch i has one beat whose text leads with a unique marker
+        ("markI ...") and the stub returns a single shot whose script_beat
+        echoes that marker — so the coverage net passes (no recovery noise)
+        and we can assert assembly order by marker.
+
+        complete_order: optional list of batch_idx to simulate out-of-order
+                        completion (a sleep is injected per batch).
+        """
+        import time as _time
+        import agentic_pipeline as ap
+
+        # Distinct leading marker per beat so fingerprints differ + coverage
+        # can be satisfied per batch.
+        narration = {
+            "title": "T",
+            "narration": [
+                {"act": "ACT 1", "beat": f"B{i}",
+                 "text": f"mark{i} " + " ".join(["word"] * 30)}
+                for i in range(n_batches)
+            ],
+        }
+        # Force exactly n_batches (one beat each). Patch the splitter directly
+        # rather than the constants — the constants are bound as default args
+        # at definition time, so monkeypatching them wouldn't change splitting.
+        def _split_one_per_beat(narr, *a, **k):
+            title = narr.get("title", "")
+            return [{"title": title, "narration": [b]}
+                    for b in narr.get("narration", [])]
+        monkeypatch.setattr(ap, "_split_narration_into_batches",
+                            _split_one_per_beat)
+        monkeypatch.setattr(ap, "STAGE4_PARALLEL_WORKERS", max_workers)
+        monkeypatch.setattr(ap, "_check_cancelled", lambda *a, **k: None)
+        monkeypatch.setattr(ap, "_compose_bible", lambda *a, **k: "# bible")
+        # Identity post-passes so we assert raw assembly.
+        monkeypatch.setattr(ap, "_dedupe_and_split_shots",
+                            lambda shots, mx: shots)
+        monkeypatch.setattr(ap, "_normalize_shot_durations",
+                            lambda shots, **k: None)
+        monkeypatch.setattr(ap, "build_stage4_shot_list_prompt",
+                            lambda **k: ("prompt", object()),
+                            raising=False)
+
+        delay = {bi: 0.0 for bi in range(n_batches)}
+        if complete_order:
+            # Later in complete_order = finishes later (bigger sleep).
+            for rank, bi in enumerate(complete_order):
+                delay[bi] = 0.01 * (rank + 1)
+
+        def fake_call(*, uid, pid, api_key, prompt, schema, model_kwargs,
+                      batch_idx, batches_total):
+            if delay.get(batch_idx):
+                _time.sleep(delay[batch_idx])
+            # script_beat echoes the beat's text so _check_beat_coverage passes.
+            text = f"mark{batch_idx} " + " ".join(["word"] * 30)
+            return [{"script_beat": text}]
+
+        monkeypatch.setattr(ap, "_call_stage4_batch", fake_call)
+
+        context = {
+            "narration": narration,
+            "target_shot_count": 0,  # no pacing target → no pacing retry
+            "total_words": ap._count_narration_words(narration),
+            "pacing_tier": "Standard",
+            "format_preset": "standard",
+            "style_analysis": None,
+            "cast": None,
+            "max_shot_duration": 6.0,
+            "project_title": "T",
+        }
+        return ap._run_stage4_batched(
+            "u", "p", context, stages_so_far=[], feedback=None, api_key="k")
+
+    def test_assembles_in_batch_order_despite_out_of_order_completion(
+            self, monkeypatch):
+        # 3 batches; batch 2 finishes first, then 0, then 1.
+        result = self._run(monkeypatch, 3, complete_order=[2, 0, 1])
+        markers = [s["script_beat"].split()[0] for s in result["shots"]]
+        # Must be in batch-index order, NOT completion order.
+        assert markers == ["mark0", "mark1", "mark2"]
+        # Shot numbers reassigned globally + sequentially.
+        assert [s["shot_number"] for s in result["shots"]] == ["1", "2", "3"]
+        # No coverage gap → no missing_beats flag.
+        assert "missing_beats" not in result
+
+    def test_no_shot_lost_across_parallel_batches(self, monkeypatch):
+        result = self._run(monkeypatch, 5, complete_order=[4, 3, 2, 1, 0])
+        assert len(result["shots"]) == 5
+        markers = {s["script_beat"].split()[0] for s in result["shots"]}
+        assert markers == {f"mark{i}" for i in range(5)}

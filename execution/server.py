@@ -5337,15 +5337,16 @@ def refresh_project_urls():
 @require_auth
 @limiter.limit("200/hour")
 def visuals_sync_storage_images():
-    """Scan Firebase Storage for orphaned images and link them back to project scenes.
-    
-    Accepts: { scene_ids: ["1", "2", ...] }
-    Returns: { matches: { "1": "https://...", "2": "https://..." } }
-    
-    For each scene_id, searches for blobs matching 'images/scene_{id}_*' and returns
-    the most recent one (by name/timestamp). This recovers images that were uploaded
-    to Storage but whose URLs were never saved to the database (e.g., page refresh
-    during batch generation).
+    """Scan Firebase Storage for orphaned images AND videos, link them back to scenes.
+
+    Accepts: { scene_ids: ["1", "2", ...], project_id }
+    Returns: { matches: {sid: img_url}, video_matches: {sid: video_url} }
+
+    For each scene_id, searches for the most recent blob (by name/timestamp) under
+    both 'images/{project}/scene_{id}_*' and 'videos/{project}/scene_{id}_*'. This
+    recovers assets that were uploaded to Storage but whose URLs were never saved to
+    the project doc — e.g. a page refresh during batch generation, or a Kie video
+    that finished re-hosting after the scene state was last saved.
     """
     try:
         if not bucket:
@@ -5354,30 +5355,33 @@ def visuals_sync_storage_images():
         data = request.json
         scene_ids = data.get('scene_ids', [])
         project_id = data.get('project_id')
-        
+
         if not scene_ids:
-            return jsonify({'matches': {}})
+            return jsonify({'matches': {}, 'video_matches': {}})
 
-        matches = {}
-        # List all blobs in images/ prefix (scoped by project if provided)
-        search_prefix = f"images/{project_id}/scene_" if project_id else "images/scene_"
-        all_blobs = list(bucket.list_blobs(prefix=search_prefix))
+        def _latest_per_scene(folder):
+            """Return {sid: signed_url} for the newest blob per scene in `folder`."""
+            search_prefix = f"{folder}/{project_id}/scene_" if project_id else f"{folder}/scene_"
+            all_blobs = list(bucket.list_blobs(prefix=search_prefix))
+            out = {}
+            for sid in scene_ids:
+                safe_id = str(sid).replace("/", "_").replace(" ", "_")
+                prefix = f"scene_{safe_id}_"
+                scene_blobs = [b for b in all_blobs if b.name.split('/')[-1].startswith(prefix)]
+                if scene_blobs:
+                    # Sort by name (contains timestamp) → last = most recent
+                    scene_blobs.sort(key=lambda b: b.name)
+                    url = _generate_signed_url(scene_blobs[-1])
+                    if url:
+                        out[str(sid)] = url
+            return out
 
-        for sid in scene_ids:
-            safe_id = str(sid).replace("/", "_").replace(" ", "_")
-            prefix = f"scene_{safe_id}_"
-            # Find all blobs matching this scene
-            scene_blobs = [b for b in all_blobs if b.name.split('/')[-1].startswith(prefix)]
-            if scene_blobs:
-                # Sort by name (contains timestamp) → last = most recent
-                scene_blobs.sort(key=lambda b: b.name)
-                latest = scene_blobs[-1]
-                url = _generate_signed_url(latest)
-                if url:
-                    matches[str(sid)] = url
+        matches = _latest_per_scene('images')
+        video_matches = _latest_per_scene('videos')
 
-        print(f"[Sync] Found {len(matches)} orphaned images for {len(scene_ids)} scene IDs")
-        return jsonify({'matches': matches})
+        print(f"[Sync] Found {len(matches)} orphaned images and "
+              f"{len(video_matches)} orphaned videos for {len(scene_ids)} scene IDs")
+        return jsonify({'matches': matches, 'video_matches': video_matches})
 
     except Exception as e:
         return safe_error_response(e)
@@ -6102,7 +6106,13 @@ def download_asset():
 @limiter.limit("200/hour")
 def download_all_assets():
     """Download all generated assets for a specific project as a zip file.
-    Streams the zip to avoid loading everything into memory at once."""
+
+    The zip is streamed to the client as it is built — each blob is copied into
+    the archive in 1 MB chunks and flushed to the response immediately, so peak
+    memory stays bounded (one chunk at a time) regardless of how many videos the
+    project has. The old implementation buffered the entire zip in a BytesIO,
+    which exhausted the 2 GB Cloud Run instance on video-heavy projects → 500.
+    """
     try:
         from flask import Response
 
@@ -6138,40 +6148,9 @@ def download_all_assets():
                     scene_latest[scene_key] = blob
             image_blobs = list(scene_latest.values())
 
-        total = len(image_blobs) + len(video_blobs) + len(audio_blobs)
-        print(f"[Download] Building zip for project {project_id}: "
+        print(f"[Download] Streaming zip for project {project_id}: "
               f"{len(image_blobs)} images, {len(video_blobs)} videos, "
               f"{len(audio_blobs)} audio files (mode={mode})")
-
-        # Build zip in memory but download blobs one at a time to reduce peak memory
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_STORED) as zf:  # STORED = no compression (faster, images already compressed)
-            for blob in image_blobs:
-                fname = blob.name.split('/')[-1]
-                try:
-                    data = blob.download_as_bytes()
-                    zf.writestr(f"images/{fname}", data)
-                except Exception as e:
-                    print(f"[Download] Failed to download {blob.name}: {e}")
-
-            for blob in video_blobs:
-                fname = blob.name.split('/')[-1]
-                try:
-                    data = blob.download_as_bytes()
-                    zf.writestr(f"videos/{fname}", data)
-                except Exception as e:
-                    print(f"[Download] Failed to download {blob.name}: {e}")
-
-            for blob in audio_blobs:
-                fname = blob.name.split('/')[-1]
-                try:
-                    data = blob.download_as_bytes()
-                    zf.writestr(f"audio/{fname}", data)
-                except Exception as e:
-                    print(f"[Download] Failed to download {blob.name}: {e}")
-
-        buffer.seek(0)
-        print(f"[Download] Zip ready: {buffer.getbuffer().nbytes / 1024 / 1024:.1f} MB")
 
         # Get project title for filename
         project_data = project_doc.to_dict()
@@ -6179,12 +6158,71 @@ def download_all_assets():
         safe_title = ''.join(c if c.isalnum() or c in ('-', '_', ' ') else '' for c in title)[:50].strip()
         zip_name = f"{safe_title}.zip" if safe_title else f"project_{project_id}.zip"
 
-        return send_file(
-            buffer,
-            mimetype='application/zip',
-            as_attachment=True,
-            download_name=zip_name,
-        )
+        # Non-seekable sink: zipfile detects the missing seek() and emits
+        # streaming-safe data descriptors instead of seeking back to patch
+        # headers. We drain its buffer after every write and yield to the client.
+        class _ChunkSink:
+            def __init__(self):
+                self._buf = bytearray()
+                self._pos = 0
+
+            def write(self, data):
+                self._buf.extend(data)
+                self._pos += len(data)
+                return len(data)
+
+            def tell(self):
+                return self._pos
+
+            def flush(self):
+                pass
+
+            def drain(self):
+                if self._buf:
+                    chunk = bytes(self._buf)
+                    self._buf.clear()
+                    return chunk
+                return b''
+
+        CHUNK = 1024 * 1024  # 1 MB
+
+        def generate():
+            sink = _ChunkSink()
+            # ZIP_STORED = no compression (media is already compressed; also keeps
+            # CPU low and avoids holding a compressor state per file).
+            with zipfile.ZipFile(sink, 'w', zipfile.ZIP_STORED) as zf:
+                groups = (('images', image_blobs), ('videos', video_blobs), ('audio', audio_blobs))
+                for folder, blobs in groups:
+                    for blob in blobs:
+                        fname = blob.name.split('/')[-1]
+                        arcname = f"{folder}/{fname}"
+                        try:
+                            with zf.open(arcname, 'w') as dest, blob.open('rb') as src:
+                                while True:
+                                    data = src.read(CHUNK)
+                                    if not data:
+                                        break
+                                    dest.write(data)
+                                    out = sink.drain()
+                                    if out:
+                                        yield out
+                            out = sink.drain()
+                            if out:
+                                yield out
+                        except Exception as e:
+                            print(f"[Download] Failed to stream {blob.name}: {e}")
+            # Central directory written on ZipFile close — flush the tail.
+            tail = sink.drain()
+            if tail:
+                yield tail
+
+        headers = {
+            'Content-Disposition': f'attachment; filename="{zip_name}"',
+            'Content-Type': 'application/zip',
+            # Disable proxy buffering so chunks reach the client as produced.
+            'X-Accel-Buffering': 'no',
+        }
+        return Response(generate(), headers=headers)
 
     except Exception as e:
         return safe_error_response(e)
