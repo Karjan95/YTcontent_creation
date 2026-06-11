@@ -10348,6 +10348,16 @@ RESOLUTION: ${visualsConfig.resolution}`;
 
                 await generateSceneImage(firstIncomplete.idx);
 
+                // Async engines (Kie) return while the scene is still 'polling' —
+                // the real image lands later via the fire-and-forget poller. Wait
+                // for the terminal status before the phase check below; otherwise
+                // it sees 'polling', falls into the else branch, and leaves the
+                // state machine stuck in 'idle' so every click only ever generates
+                // the next single preview image instead of advancing to batch.
+                if (firstIncomplete.scene.imageStatus === 'polling') {
+                    await _awaitSceneTerminal(firstIncomplete.idx, 'image');
+                }
+
                 if (firstIncomplete.scene.imageStatus === 'complete') {
                     const stillRemaining = visualsScenes.filter(s => s.imageStatus !== 'complete').length;
                     if (stillRemaining === 0) {
